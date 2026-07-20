@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base target="_top">
+
+  <style>
+
+    body{
+      font-family:Arial,sans-serif;
+      margin:20px;
+      font-size:14px;
+    }
+
+    h3{
+      margin-top:0;
+      margin-bottom:15px;
+    }
+
+    input[type=file]{
+      width:100%;
+      margin-bottom:20px;
+    }
+
+    .button-group{
+      text-align:right;
+    }
+
+    button{
+      padding:8px 16px;
+      margin-left:8px;
+      cursor:pointer;
+    }
+
+    #status{
+      margin-top:15px;
+      color:#666;
+      font-size:12px;
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+<h3>Select CSV File</h3>
+
+<input
+    id="csvFile"
+    type="file"
+    accept=".csv"
+>
+
+<div class="button-group">
+
+    <button onclick="google.script.host.close()">
+        Cancel
+    </button>
+
+    <button onclick="uploadFile()">
+        Upload
+    </button>
+
+</div>
+
+<div id="status"></div>
+
+<script>
+
+//
+// This value comes from Import.gs
+//
+const HTML_UPLOAD_DIALOG =
+    "00_UploadDialog";
+
+const IMPORT_TYPE = "<?= importType ?>";
+
+function uploadFile(){
+
+    const input =
+        document.getElementById("csvFile");
+
+    if(input.files.length===0){
+
+        document.getElementById("status").textContent =
+            "Please select a CSV file.";
+
+        return;
+
+    }
+
+    const file =
+        input.files[0];
+
+    document.getElementById("status").textContent =
+        "Reading file...";
+
+    const reader =
+        new FileReader();
+
+    reader.onload = function(e){
+
+        const csvText =
+            e.target.result;
+
+        document.getElementById("status").textContent =
+            "Uploading...";
+
+        google.script.run
+
+            .withSuccessHandler(function(){
+
+                google.script.host.close();
+
+            })
+
+            .withFailureHandler(function(error){
+
+                document.getElementById("status").textContent =
+                    error.message;
+
+            })
+
+            .importCsv(
+
+                IMPORT_TYPE,
+                csvText
+
+            );
+    };
+
+    reader.onerror = function(){
+
+        document.getElementById("status").textContent =
+            "Failed to read file.";
+
+    };
+
+    reader.readAsText(
+        file,
+        "UTF-8"
+    );
+
+}
+
+</script>
+
+</body>
+
+</html>
