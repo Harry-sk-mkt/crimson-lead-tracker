@@ -11,18 +11,46 @@
  * - Master 빌드
  *
  * Version
- * v3.0.0
+ * v3.1.0
  *
  * Change Log
- * v3.0.0 (2026-07-20)
- * - Removed transformRecords()/loadRecords() call to Master.
- * - Import now writes to Raw only (writeLeadRaw / writeMTARaw).
- * - Master Build is a separate manual step (Build menu).
- * - Invalid records (validateRecords._isValid === false) are
- *   logged and excluded from Raw write, never partially saved.
+ * v3.1.0 (2026-07-21)
+ * - Added validation summary (buildValidationSummary_ / formatValidationSummary_)
+ *   to completion alert.
+ * - Restored missing catch block / closing braces.
  * ==========================================================
  */
 
+/**
+ * ==========================================================
+ * Open Upload Dialog
+ * ==========================================================
+ *
+ * @param {string} importType  "LEADS" | "MTA"
+ */
+function showUploadDialog_(importType){
+
+  const template =
+    HtmlService.createTemplateFromFile(
+      "00_UploadDialog"
+    );
+
+  template.importType = importType;
+
+  const html =
+    template
+      .evaluate()
+      .setWidth(400)
+      .setHeight(220);
+
+  SpreadsheetApp
+    .getUi()
+    .showModalDialog(
+      html,
+      "Import " + importType
+    );
+
+}
 
 /**
  * Execute Import Pipeline
@@ -75,6 +103,12 @@ function importCsv(
       validateRecords(
         importType,
         records
+      );
+
+    const summary =
+      buildValidationSummary_(
+        importType,
+        validated
       );
 
     const validRecords =
@@ -174,11 +208,8 @@ function importCsv(
     SpreadsheetApp
       .getUi()
       .alert(
-        rawRecords.length +
-        " / " +
-        records.length +
-        " records written to Raw.\n\n" +
-        "Master를 갱신하려면 🏗️ Build 메뉴를 사용하세요."
+        formatValidationSummary_(summary) +
+        "\n\nMaster 🏗️Append를 실행해주세요."
       );
 
   }
@@ -200,37 +231,6 @@ function importCsv(
     throw error;
 
   }
-
-}
-
-/**
- * ==========================================================
- * Open Upload Dialog
- * ==========================================================
- *
- * @param {string} importType  "LEADS" | "MTA"
- */
-function showUploadDialog_(importType){
-
-  const template =
-    HtmlService.createTemplateFromFile(
-      "00_UploadDialog"
-    );
-
-  template.importType = importType;
-
-  const html =
-    template
-      .evaluate()
-      .setWidth(400)
-      .setHeight(220);
-
-  SpreadsheetApp
-    .getUi()
-    .showModalDialog(
-      html,
-      "Import " + importType
-    );
 
 }
 

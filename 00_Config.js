@@ -126,6 +126,26 @@ const CONFIG = {
     TIMEZONE: Session.getScriptTimeZone(),
     FORMAT: "yyyy-MM-dd"
 
+  },
+
+  /**
+   * Validation Summary Display Exclude
+   *
+   * Import 완료 alert에 표시하지 않을 필드 목록.
+   * (검증/서식 강제 로직 자체는 그대로 유지, 화면 표시만 제외)
+   */
+  VALIDATION_SUMMARY_EXCLUDE: {
+
+    FIELDS: [
+      "Company / Account"
+    ],
+
+    DATE_COLUMNS: [
+      "IC Booked Date",
+      "IC Completed Date (Pre-Conversion)",
+      "Opportunity Won Date"
+    ]
+
   }
 
 };

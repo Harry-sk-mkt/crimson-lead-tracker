@@ -7,14 +7,25 @@
  * Apply formatting to Leads_OPS
  *
  * Version
- * v2.0
+ * v3.0.0
+ *
+ * Change Log
+ * v3.0.0 (2026-07-21)
+ * - 하드코딩된 헤더/데이터 행 번호(1, 2)를 OPS.ROWS.HEADER / OPS.ROWS.DATA_START로 교체.
  * ==========================================================
  */
 
 function applyOPSStyle(sheet) {
 
-  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const lastRow = Math.max(
+    sheet.getLastRow(),
+    OPS.ROWS.DATA_START
+  );
+
   const lastCol = sheet.getLastColumn();
+
+  const dataRowCount =
+    lastRow - OPS.ROWS.DATA_START + 1;
 
   /*
   ==========================================================
@@ -22,7 +33,7 @@ function applyOPSStyle(sheet) {
   ==========================================================
   */
 
-  sheet.getRange(1, 1, 1, lastCol)
+  sheet.getRange(OPS.ROWS.HEADER, 1, 1, lastCol)
     .setBackground("#202124")
     .setFontColor("#FFFFFF")
     .setFontWeight("bold")
@@ -35,7 +46,7 @@ function applyOPSStyle(sheet) {
   ==========================================================
   */
 
-  sheet.getRange(2, 1, lastRow - 1, lastCol)
+  sheet.getRange(OPS.ROWS.DATA_START, 1, dataRowCount, lastCol)
     .setVerticalAlignment("middle")
     .setWrap(false);
 
@@ -45,7 +56,7 @@ function applyOPSStyle(sheet) {
   ==========================================================
   */
 
-  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const headers = sheet.getRange(OPS.ROWS.HEADER, 1, 1, lastCol).getValues()[0];
 
   const map = {};
 
@@ -69,7 +80,7 @@ function applyOPSStyle(sheet) {
     if(map[name]){
 
       sheet
-        .getRange(2,map[name],lastRow-1,1)
+        .getRange(OPS.ROWS.DATA_START, map[name], dataRowCount, 1)
         .setNumberFormat("yyyy-mm-dd");
 
     }
@@ -90,7 +101,7 @@ function applyOPSStyle(sheet) {
     if(map[name]){
 
       sheet
-        .getRange(2,map[name],lastRow-1,1)
+        .getRange(OPS.ROWS.DATA_START, map[name], dataRowCount, 1)
         .setNumberFormat("#,##0.00");
 
     }
@@ -112,7 +123,7 @@ function applyOPSStyle(sheet) {
     if(map[name]){
 
       sheet
-        .getRange(2,map[name],lastRow-1,1)
+        .getRange(OPS.ROWS.DATA_START, map[name], dataRowCount, 1)
         .insertCheckboxes();
 
     }

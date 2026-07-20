@@ -7,7 +7,13 @@
  * Orchestrate Leads_OPS Build Process
  *
  * Version
- * v1.0
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-07-21)
+ * - Removed leftover debug Logger.log(result / result.rows / ...) calls.
+ *   35,000+건 전체를 로그에 찍으려다 "Logging output too large" 발생 +
+ *   불필요한 실행 시간 증가(디버그 로그 자체가 병목)의 원인이었음.
  * ==========================================================
  */
 
@@ -35,17 +41,10 @@ function buildLeadsOPS() {
 
     const result = mergeOPS(master, ops);
 
-    Logger.log(result === null);
-    Logger.log(typeof result);
-    Logger.log(Object.keys(result));
     //======================================
     // Write
     //======================================
 
-    Logger.log(result);
-    Logger.log(result.rows);
-    Logger.log(Array.isArray(result.rows));
-    Logger.log(result.rows.length);
     writeOPS(result.rows);
 
     //======================================

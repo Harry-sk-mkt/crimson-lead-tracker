@@ -4,13 +4,19 @@
  * Validator
  *
  * Responsibility
- * Validate parsed records
+ * Validate parsed records + build validation summary for reporting.
  *
  * No Business Logic
  * No Transformation
  * No Loading
  *
- * Version v1.1
+ * Version v1.2.0
+ *
+ * Change Log
+ * v1.2.0 (2026-07-21)
+ * - Added buildValidationSummary_() : 필수 필드별 valid/missing 카운트,
+ *   Raw Date 컬럼 타입(string) 체크 결과 요약.
+ * - Added formatValidationSummary_() : 요약을 alert용 텍스트로 변환.
  * ==========================================================
  */
 
@@ -145,40 +151,197 @@ function validateRequiredFields_(
 
 /**
  * ==========================================================
- * TEST
+ * Build Validation Summary
+ *
+ * @param {string} importType
+ * @param {Object[]} validated   validateRecords()의 결과 (valid+invalid 전부)
+ * @return {Object}
  * ==========================================================
  */
+function buildValidationSummary_(
+    importType,
+    validated
+){
 
-function testValidator(){
+    const requiredFields =
+        CONFIG.REQUIRED_FIELDS[importType] || [];
 
-    const records = [
+    const dateColumns =
+        CONFIG.RAW_DATE_COLUMNS[importType] || [];
 
-        {
-            Name:"John",
-            Email:"john@test.com",
-            "Lead Source":"Referral"
-        },
+    const summary = {
 
-        {
-            Name:"",
-            Email:"",
-            "Lead Source":"Event"
+        total: validated.length,
+        valid: 0,
+        invalid: 0,
+        fields: {},
+        dateTypeCheck: {}
+
+    };
+
+    requiredFields.forEach(function(field){
+
+        summary.fields[field] = {
+            valid: 0,
+            missing: 0
+        };
+
+    });
+
+    dateColumns.forEach(function(column){
+
+        summary.dateTypeCheck[column] = {
+            textType: 0,
+            nonTextType: 0
+        };
+
+    });
+
+    validated.forEach(function(record){
+
+        if(record._isValid){
+            summary.valid++;
+        } else {
+            summary.invalid++;
         }
 
-    ];
+        requiredFields.forEach(function(field){
 
-    const validated =
-        validateRecords(
-            "LEADS",
-            records
+            const value = record[field];
+
+            const isEmpty =
+                value === null ||
+                value === undefined ||
+                String(value).trim() === "";
+
+            if(isEmpty){
+                summary.fields[field].missing++;
+            } else {
+                summary.fields[field].valid++;
+            }
+
+        });
+
+        dateColumns.forEach(function(column){
+
+            const value = record[column];
+
+            if(typeof value === "string"){
+                summary.dateTypeCheck[column].textType++;
+            } else {
+                summary.dateTypeCheck[column].nonTextType++;
+            }
+
+        });
+
+    });
+
+    return summary;
+
+}
+
+
+/**
+ * ==========================================================
+ * Format Validation Summary for Alert
+ *
+ * @param {Object} summary
+ * @return {string}
+ * ==========================================================
+ */
+/**
+ * ==========================================================
+ * Format Validation Summary for Alert
+ *
+ * @param {Object} summary
+ * @return {string}
+ * ==========================================================
+ */
+function formatValidationSummary_(summary){
+
+    const excludeFields =
+        CONFIG.VALIDATION_SUMMARY_EXCLUDE.FIELDS || [];
+
+    const excludeDateColumns =
+        CONFIG.VALIDATION_SUMMARY_EXCLUDE.DATE_COLUMNS || [];
+
+    const lines = [];
+
+    lines.push(
+
+        summary.valid +
+        " / " +
+        summary.total +
+        " 레코드 업데이트 완료"
+
+    );
+
+    if(summary.invalid > 0){
+
+        lines.push(
+            "⚠️ 실패(제외됨) : " +
+            summary.invalid +
+            "건"
         );
 
-    Logger.log(
-        JSON.stringify(
-            validated,
-            null,
-            2
-        )
-    );
+    }
+
+    lines.push("");
+    lines.push("[필수 필드 체크]");
+
+    for(const field in summary.fields){
+
+        if(excludeFields.indexOf(field) !== -1){
+            continue;
+        }
+
+        const stat = summary.fields[field];
+
+        lines.push(
+
+            field +
+            " : " +
+            stat.valid +
+            " valid" +
+            (stat.missing > 0
+                ? " / ⚠️ " + stat.missing + " missing"
+                : "")
+
+        );
+
+    }
+
+    const dateColumns =
+        Object.keys(summary.dateTypeCheck)
+            .filter(function(column){
+                return excludeDateColumns.indexOf(column) === -1;
+            });
+
+    if(dateColumns.length > 0){
+
+        lines.push("");
+        lines.push("[Date 컬럼 타입 체크 (Text 보존 여부)]");
+
+        dateColumns.forEach(function(column){
+
+            const stat = summary.dateTypeCheck[column];
+
+            lines.push(
+
+                column +
+                " : " +
+                stat.textType +
+                " text" +
+                (stat.nonTextType > 0
+                    ? " / ⚠️ " + stat.nonTextType + " non-text"
+                    : "")
+
+            );
+
+        });
+
+    }
+
+    return lines.join("\n");
 
 }

@@ -70,3 +70,30 @@
 - **적용 범위: 이 시점(2026-07-21) 이후 신규 작성/수정되는 함수부터.**
   이전에 작성된 기존 함수(`appendSheetRecords`, `buildValidationSummary_`, `sortSheetByDate` 등)에
   소급 적용하지 않음 — 필요 시 향후 해당 함수를 수정하는 시점에 테스트를 추가한다.
+
+  ## 2026-07-21 (계속) — OPS 중복 이메일 로직 확정 및 정리
+
+### mergeOPS() — 중복 이메일 처리 로직 확정
+- **결정**: 이메일별로 그룹핑 후 실제 `Create Date`를 비교하여 **가장 오래된(진짜 First Touch) 레코드만 유지**,
+  나머지는 duplicate로 분류. 기존엔 시트 순서(Master가 Create Date 내림차순 정렬되어 있어 사실상 "가장 최근"
+  레코드가 남는 구조)에 의존했던 버그를 바로잡음.
+- **Tie-break 규칙**: 같은 이메일에 완전히 동일한 Create Date가 여러 건 있는 경우, 배열 순서상 먼저 나온 것을
+  유지 (별도 tie-break 로직 추가하지 않기로 결정 — 실무적으로 문제없다고 판단).
+- **로그**: 제외된 duplicate 건은 `Logger.log`에 `Email / 제외된 Lead ID / Create Date / 남긴 Lead ID`로 기록
+  (QA 시트 대체용, `Leads_OPS_QA` 구현 전까지 유지).
+- **검증**: 단위 테스트(`testMergeOPS_EarliestWins`) PASS + 실제 데이터 35,529건 중 47건 duplicate 확인,
+  샘플 검증 결과 모두 가장 이른 날짜가 정확히 유지됨.
+- **보류 항목**: IC Request(SAL)의 `#touches`(터치 횟수) 지표는 별도 논의 필요 — 이번 dedup 로직과 무관하게
+  추후 별도 구현 시 재논의.
+
+### applyOPSStyle() 하드코딩 정리 완료
+- 헤더/데이터 행 번호(`1`, `2`) → `OPS.ROWS.HEADER`/`OPS.ROWS.DATA_START` 참조로 교체 완료.
+
+### 디버그 로그 제거
+- `buildLeadsOPS()`에 남아있던 `Logger.log(result)`, `Logger.log(result.rows)` 등 35,000+건 전체를
+  로그에 찍으려던 디버그 코드 제거. "Logging output too large" 및 불필요한 실행 시간 증가의 원인이었음.
+
+### clasp run-function — 보류
+- 터미널에서 Apps Script 함수를 직접 실행하는 방법(`clasp run-function`) 확인함. 별도 OAuth Client,
+  API Executable 배포, Cloud Project ID 연결 등 설정 부담이 커서 **당분간 도입 보류**.
+  Apps Script 편집기에서 함수 선택 후 직접 실행하는 기존 방식 유지.
