@@ -63,3 +63,10 @@
 - `Leads_OPS_QA` 구현 시점 (프로토타입 검증 후)
 - Engineering Constitution Article 8 다이어그램 텍스트 수정 (Loader → RawWriter/SheetWriter)
 - UX/언어 최적화 (구체 범위 미정 — alert 문구, 다이얼로그 UI 등 중 확인 필요)
+
+## 2026-07-21 (추가) — TDD 원칙 도입 시점 명시
+
+- `CLAUDE.md`에 TDD 원칙 추가 (새/수정 함수는 WHY 주석 + `testXXXX()` 테스트 함수 동반).
+- **적용 범위: 이 시점(2026-07-21) 이후 신규 작성/수정되는 함수부터.**
+  이전에 작성된 기존 함수(`appendSheetRecords`, `buildValidationSummary_`, `sortSheetByDate` 등)에
+  소급 적용하지 않음 — 필요 시 향후 해당 함수를 수정하는 시점에 테스트를 추가한다.
