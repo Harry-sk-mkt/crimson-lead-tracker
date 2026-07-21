@@ -11,13 +11,13 @@
  * - Master 빌드
  *
  * Version
- * v3.1.0
+ * v3.2.0
  *
  * Change Log
- * v3.1.0 (2026-07-21)
- * - Added validation summary (buildValidationSummary_ / formatValidationSummary_)
- *   to completion alert.
- * - Restored missing catch block / closing braces.
+ * v3.2.0 (2026-07-21)
+ * - Fixed duplicate switch(importType) block in Step 5 — Raw에 매번
+ *   두 번씩 append되던 버그 수정 (IC_FUNNEL 케이스 추가 시 기존 블록을
+ *   교체가 아니라 추가로 남겨둔 실수).
  * ==========================================================
  */
 
@@ -26,7 +26,7 @@
  * Open Upload Dialog
  * ==========================================================
  *
- * @param {string} importType  "LEADS" | "MTA"
+ * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
  */
 function showUploadDialog_(importType){
 
@@ -52,10 +52,11 @@ function showUploadDialog_(importType){
 
 }
 
+
 /**
  * Execute Import Pipeline
  *
- * @param {string} importType  "LEADS" | "MTA"
+ * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
  * @param {string} csvText
  */
 function importCsv(
@@ -189,6 +190,10 @@ function importCsv(
         writeMTARaw(rawRecords);
         break;
 
+      case "IC_FUNNEL":
+        writeICFunnelRaw(rawRecords);
+        break;
+
       default:
         throw new Error(
           "Unknown Import Type : " +
@@ -251,5 +256,12 @@ function importLeadReport(){
 function importMTAReport(){
 
   showUploadDialog_("MTA");
+
+}
+
+
+function importICFunnelReport(){
+
+  showUploadDialog_("IC_FUNNEL");
 
 }

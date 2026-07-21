@@ -97,3 +97,57 @@
 - 터미널에서 Apps Script 함수를 직접 실행하는 방법(`clasp run-function`) 확인함. 별도 OAuth Client,
   API Executable 배포, Cloud Project ID 연결 등 설정 부담이 커서 **당분간 도입 보류**.
   Apps Script 편집기에서 함수 선택 후 직접 실행하는 기존 방식 유지.
+
+  ## 2026-07-21 (계속) — IC Funnel Sync 최초 실행 검증 완료
+
+- `syncICFunnelToOPS()` 최초 실행: 3,139건 중 3,127건 정상 반영, 12건 "Not found in Leads_OPS".
+- 12건 원인 확인 완료 — 버그 아님:
+  - 10건: mergeOPS()의 중복 이메일 제외 로직으로 Leads_OPS에 의도적으로 없는 Lead ID
+  - 2건: Salesforce에 2026-07-20 새벽 생성된 최신 Lead — 아직 weekly export에 미포함,
+    다음 Leads Import 시 자동 반영 예정
+- `08_ICFunnelSync.gs`(구 24_) — getHeaderMap() 0-based index를 falsy 체크(`!leadIdCol`)로
+  잘못 판단하던 버그 수정 (Lead ID가 0번째 컬럼일 때 실패하던 문제).
+
+  ## 2026-07-21 (계속) — ACQ Report (Engine + Summary) 구현 완료
+
+### 설계 확정 사항
+- 시트: 기존 `ACQ_REP` 시트 재사용 (Report Area A4:N + Control Area A1:E1)
+- Start/End FY·Month를 별도 드롭다운 4개로 분리 (기존 "FY26 JUL" 통합 드롭다운의 스크롤 문제 해결),
+  FY 목록은 실제 데이터 기준 동적 계산
+- Generate Report는 E2 체크박스 + `onEdit` Simple Trigger 방식
+- Engine(월×세그먼트 조합)은 매번 선택된 Start~End FY 구간만 재생성 (전체 기간 아님, 성능 목적)
+- % 계산식: All P1% = All P1/All Leads, New Leads% = New Leads/All Leads, New P1% = New P1/New Leads
+
+### 성능 재설계 — ACQ Summary (Aggregate Table) 도입
+- 최초 구현(원본 Master/OPS 매번 전체 스캔)이 선택 기간을 좁혀도 여전히 느려서, 별도 `ACQ_Summary` 숨김 시트에
+  전체 (FY|Month|Segment) 조합별 지표를 미리 계산해두는 방식으로 재설계.
+- `refreshACQSummary_()`가 Append/Rebuild/Sync 5개 함수 완료 시 자동 호출되어 항상 최신 유지.
+- 결과: 리포트 조회가 수십 초 → 1초 이내로 개선.
+
+### SAL 데이터 소스 확정
+- 새 `SALs_Raw` 시트 안 만들고, 기존 MTA CSV export에 `Lead: Lead Record Type`(값: MQL/SAL) 컬럼만 추가 요청하는 것으로 단순화.
+- MTA 전체(81,907건) 재수출/재Import/Full Rebuild 완료, `Lead Record Type` 필드 반영 확인됨.
+
+### IC Funnel Sync 구축 및 검증
+- 새 `ICFunnel_Raw` 시트 + `syncICFunnelToOPS()` 구현 — 별도 Lead 리포트(IC Booked/Completed/Won Date 중
+  하나라도 해당 주에 걸리면 잡히는 필터, 2018~현재 히스토리 백필용 최초 추출)로 Leads_OPS의 Funnel 4개 필드만 역동기화.
+- `OPS.SF_COLUMNS`에서 IC Booked/Completed/Won/Revenue를 빼서 `OPS.SYNC_COLUMNS`로 재분류
+  (mergeOPS()가 더 이상 이 필드들을 Master의 stale 값으로 덮어쓰지 않도록).
+- 최초 실행: 3,139건 중 3,127건 반영, 12건 "Not found" — 10건은 mergeOPS 중복 제외 로직으로 의도적으로 없는 Lead,
+  2건은 아직 weekly export에 안 잡힌 최신 Lead(2026-07-20 생성)로 확인, 전부 정상.
+
+### Attribution 불일치 발견 및 보류
+- All Leads/All P1/SAL(MTA_Master 소스)은 Last Touch 기준 Segment, New Leads/New P1/IC Booked/Complete/Revenue
+  (Leads_OPS 소스)는 First Touch 기준 Segment로 서로 다름. 기존 설계 문서(business-segment-classification.md)와
+  일치하는 의도된 차이. SAL을 First Touch로 통일할지는 이번엔 보류 (추후 파이프라인/리포트 단계에서 논의 예정).
+
+### 디자인 (32_ACQReportStyles.js)
+- % 컬럼 소수점 1자리 %표기, Revenue 천단위 콤마, 전체 테두리, 짝수 행 배경색(#F3F3F3) 적용.
+
+### 트러블슈팅 히스토리 (자세한 내용은 docs/ACQReportImplementation.md 참고)
+- `endIndex` 세그먼트 블록 계산 누락, `targetRows` 변수 삭제 사고, Report Area 코드 중복(mtaAgg/opsAgg 구버전 잔존),
+  `computeMTAAggregates_`/`computeOPSAggregates_`의 null range 처리 누락, `CONFIG.ACQ.SUMMARY_SHEET` 로컬-서버
+  동기화 불일치로 인한 반복적인 신규 시트 생성 버그, `split_csv.js`가 실수로 Apps Script 프로젝트에 push되어
+  전체 프로젝트 파싱이 깨졌던 사고(`require is not defined`), Apps Script의 `_` 접미사 함수 Run 드롭다운 미노출 관례.
+- 교훈: **서버(Apps Script 편집기)에서 직접 코드를 수정하지 말 것 — 항상 로컬에서 수정 후 push.**
+  Node 전용 유틸리티 스크립트는 프로젝트 폴더 밖에 두거나 `.claspignore`로 제외할 것.

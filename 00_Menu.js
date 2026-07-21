@@ -35,6 +35,7 @@ function createImportMenu() {
     .createMenu("📥 Update")
     .addItem("Import Leads", "importLeadReport")
     .addItem("Import MTA", "importMTAReport")
+    .addItem("Import IC Funnel", "importICFunnelReport")
     .addToUi();
 
 }

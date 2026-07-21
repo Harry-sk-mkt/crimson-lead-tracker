@@ -82,6 +82,8 @@ function appendNewLeads(){
       String(allRaw.length)
     );
 
+  refreshACQSummary_();   
+
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);
 
@@ -129,6 +131,7 @@ function appendNewMTA(){
         .getProperty(propKey)
     ) || 0;
 
+  
   const allRaw =
     readMTARaw();
 
@@ -172,6 +175,8 @@ function appendNewMTA(){
       propKey,
       String(allRaw.length)
     );
+
+  refreshACQSummary_();
 
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);

@@ -51,3 +51,18 @@ function writeMTARaw(records){
   );
 
 }
+
+/**
+ * ==========================================================
+ * Write IC Funnel Raw (Append)
+ * ==========================================================
+ */
+function writeICFunnelRaw(records){
+
+  appendSheetRecords(
+    CONFIG.IC_FUNNEL.SHEET,
+    records,
+    CONFIG.RAW_DATE_COLUMNS.IC_FUNNEL
+  );
+
+}

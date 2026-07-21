@@ -185,9 +185,15 @@ function mergeOPS(master, ops) {
 
     });
 
-    if (existing) {
+        if (existing) {
 
       OPS.MANUAL_COLUMNS.forEach(col => {
+
+        row[col] = existing[col];
+
+      });
+
+      OPS.SYNC_COLUMNS.forEach(col => {
 
         row[col] = existing[col];
 
@@ -200,6 +206,12 @@ function mergeOPS(master, ops) {
     else {
 
       OPS.MANUAL_COLUMNS.forEach(col => {
+
+        row[col] = "";
+
+      });
+
+      OPS.SYNC_COLUMNS.forEach(col => {
 
         row[col] = "";
 

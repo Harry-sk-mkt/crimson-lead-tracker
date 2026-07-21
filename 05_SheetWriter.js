@@ -146,6 +146,8 @@ function writeSheetRecords(
       : "")
 
   );
+  
+  SpreadsheetApp.flush();  // ← 추가: 쓰기 완료를 강제로 확정, 다음 호출의 getLastRow()가 정확한 값을 읽도록 보장
 
 }
 
@@ -317,5 +319,7 @@ function appendSheetRecords(
       : "")
 
   );
+
+  SpreadsheetApp.flush();  // ← 추가: 쓰기 완료를 강제로 확정, 다음 호출의 getLastRow()가 정확한 값을 읽도록 보장
 
 }

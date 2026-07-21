@@ -80,6 +80,8 @@ function rebuildLeadsMaster(showAlert = true) {
     master: master.length
   };
 
+  refreshACQSummary_();
+
   if (showAlert) {
 
     SpreadsheetApp.getUi().alert(
@@ -152,6 +154,8 @@ function rebuildMTAMaster(showAlert = true) {
     raw: raw.length,
     master: master.length
   };
+
+  refreshACQSummary_();
 
   if (showAlert) {
 

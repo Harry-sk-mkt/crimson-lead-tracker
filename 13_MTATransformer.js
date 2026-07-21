@@ -209,8 +209,14 @@ function transformMTARecord(rawRecord){
       getMonthText(mtaCreatedDate),
 
     "Created Date Helper":
-      getMonthKey(mtaCreatedDate)
+      getMonthKey(mtaCreatedDate),
 
+    //------------------------------------------------------
+    // SAL
+    //------------------------------------------------------
+
+    "Lead Record Type":
+      rawRecord["Lead: Lead Record Type"] || ""
   };
 
 }

@@ -106,12 +106,15 @@ function parseMDY(text) {
 function parseDate(value, format) {
 
   //----------------------------------------------------------
-  // type logger
+  // 이미 Date 객체로 들어온 경우만 로그 (비정상 케이스 감지용 —
+  // Raw는 항상 텍스트여야 하므로, 이미 Date라면 확인이 필요함)
   //----------------------------------------------------------
-  Logger.log("VALUE = " + value);
-  Logger.log("TYPE = " + typeof value);
-  Logger.log("IS_DATE = " + (value instanceof Date));
-  
+  if (value instanceof Date) {
+    Logger.log(
+      "[parseDate] IS_DATE = true (이미 Date 객체) : VALUE = " + value
+    );
+  }
+
   if (
     value === null ||
     value === undefined ||
@@ -602,5 +605,156 @@ function testParseDMY_FromRawSheet(){
     }
 
   }
+
+}
+
+/**
+ * ==========================================================
+ * Get Fiscal Month Label
+ *
+ * WHY
+ * ACQ Report의 Engine/Report 영역은 "JUL", "AUG" 같은 3글자
+ * 대문자 월 약어로 Month를 표현한다 (기존 getMonthText()의
+ * "Jul 26" 포맷과는 다름). Fiscal Year 안에서 각 달력월은
+ * 정확히 한 번만 나타나므로, FY + 이 라벨 조합으로 유일하게
+ * 식별 가능하다.
+ *
+ * INPUT
+ * date : Date|null
+ *
+ * OUTPUT
+ * string  (예: "JUL", 실패 시 "")
+ *
+ * TEST
+ * getFiscalMonthLabel(new Date(2026,6,1)) === "JUL"
+ *
+ * EXPECTED
+ * 7월(getMonth()===6) → "JUL"
+ * ==========================================================
+ */
+function getFiscalMonthLabel(date){
+
+  if(!(date instanceof Date) || isNaN(date.getTime())){
+    return "";
+  }
+
+  const labels = [
+    "JAN","FEB","MAR","APR","MAY","JUN",
+    "JUL","AUG","SEP","OCT","NOV","DEC"
+  ];
+
+  return labels[date.getMonth()];
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getFiscalMonthLabel()
+ * ==========================================================
+ */
+function testGetFiscalMonthLabel(){
+
+  const cases = [
+    [new Date(2026, 6, 1), "JUL"],   // 7월
+    [new Date(2026, 7, 1), "AUG"],   // 8월
+    [new Date(2026, 0, 1), "JAN"],   // 1월
+    [null, ""]
+  ];
+
+  let passCount = 0;
+
+  cases.forEach(function(testCase){
+
+    const result = getFiscalMonthLabel(testCase[0]);
+    const expected = testCase[1];
+    const pass = result === expected;
+
+    if(pass) passCount++;
+
+    Logger.log(
+      (pass ? "✅ PASS" : "❌ FAIL") +
+      "  input=" + testCase[0] +
+      "  expected=" + expected +
+      "  actual=" + result
+    );
+
+  });
+
+  Logger.log(passCount + " / " + cases.length + " passed");
+
+}
+
+/**
+ * ==========================================================
+ * Get Calendar Date For Fiscal Month
+ *
+ * WHY
+ * Fiscal Year + 3글자 Month 라벨(예: FY26, "AUG")을 실제 달력
+ * Date 객체로 변환한다. 데이터 스캔 시 날짜 범위 필터링에 사용.
+ *
+ * Fiscal 규칙: AUG~DEC는 (FY-1)년, JAN~JUL은 FY년.
+ *
+ * INPUT
+ * fy : Number (예: 26)
+ * monthLabel : string (예: "AUG")
+ * day : Number (1 또는 그 달의 마지막 날)
+ *
+ * OUTPUT
+ * Date
+ *
+ * TEST
+ * getCalendarDateForFiscalMonth_(26, "AUG", 1) → 2025-08-01
+ * getCalendarDateForFiscalMonth_(26, "JUL", 1) → 2026-07-01
+ * ==========================================================
+ */
+function getCalendarDateForFiscalMonth_(fy, monthLabel, day){
+
+  const labels = [
+    "JAN","FEB","MAR","APR","MAY","JUN",
+    "JUL","AUG","SEP","OCT","NOV","DEC"
+  ];
+
+  const monthIndex = labels.indexOf(monthLabel);
+
+  if(monthIndex === -1){
+    throw new Error("Unknown month label : " + monthLabel);
+  }
+
+  // fy는 "20" + fy 형태의 2자리 숫자로 들어온다고 가정 (예: 26 → 2026)
+  const fullYear = 2000 + fy;
+
+  const calendarYear =
+    (monthIndex >= 7)   // AUG(7)~DEC(11)
+      ? fullYear - 1
+      : fullYear;
+
+  return new Date(calendarYear, monthIndex, day);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getCalendarDateForFiscalMonth_()
+ * ==========================================================
+ */
+function testGetCalendarDateForFiscalMonth(){
+
+  const case1 = getCalendarDateForFiscalMonth_(26, "AUG", 1);
+  const case2 = getCalendarDateForFiscalMonth_(26, "JUL", 1);
+
+  const pass1 =
+    case1.getFullYear() === 2025 &&
+    case1.getMonth() === 7 &&
+    case1.getDate() === 1;
+
+  const pass2 =
+    case2.getFullYear() === 2026 &&
+    case2.getMonth() === 6 &&
+    case2.getDate() === 1;
+
+  Logger.log("Case1 (FY26 AUG) : " + case1 + " (expected 2025-08-01) " + (pass1 ? "✅" : "❌"));
+  Logger.log("Case2 (FY26 JUL) : " + case2 + " (expected 2026-07-01) " + (pass2 ? "✅" : "❌"));
 
 }

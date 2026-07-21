@@ -1,0 +1,4 @@
+node_modules/**
+split_csv.js
+*.local.js
+.git/**

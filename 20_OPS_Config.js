@@ -57,38 +57,43 @@ const OPS = {
   SALESFORCE MANAGED COLUMNS
 
   Always overwritten from Leads_Master.
+  (2026-07-21: IC Booked/Completed/Won/Revenue 제거 —
+   이제 syncICFunnelToOPS()만 이 필드들을 관리함.
+   Master는 이 필드들의 신뢰할 수 있는 최신 소스가 아니게 됨.)
   ==========================================================
   */
   SF_COLUMNS : [
 
     "Lead ID",
-
     "Created FY",
     "Create Date",
-
     "Company / Account",
-
     "Email",
-
     "Phone",
-
     "School Name",
-
     "Lead Priority",
-
     "First Touch Detail",
-
-    "Business Segment",
-
-    "IC Booked Date",
-
-    "IC Completed Date",
-
-    "Opportunity Won Date",
-
-    "Revenue"
+    "Business Segment"
 
     ],
+
+
+  /*
+  ==========================================================
+  IC FUNNEL SYNC COLUMNS (2026-07-21 신규)
+
+  syncICFunnelToOPS()만 갱신. mergeOPS()는 이 필드들을
+  Master 값으로 덮어쓰지 않고, 기존 OPS 값을 보존한다.
+  ==========================================================
+  */
+  SYNC_COLUMNS : [
+
+    "IC Booked Date",
+    "IC Completed Date",
+    "Opportunity Won Date",
+    "Revenue"
+
+  ],
 
 
   /*
@@ -114,7 +119,6 @@ const OPS = {
     "Notes"
 
   ],
-
 
   /*
   ==========================================================
