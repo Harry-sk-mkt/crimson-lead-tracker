@@ -10,7 +10,7 @@
  * 10 Master Build
  *
  * Version
- * v5.0.0
+ * v5.1.0
  *
  * Change Log
  * v4.0.0 (2026-07-21)
@@ -25,6 +25,11 @@
  *   변경 (더 이상 "Lead의 최종 터치"가 아니라 "이 터치 자체의 캠페인"이므로).
  * - ⚠️ MTA_Raw 시트에 "MKT UTM Campaign" 헤더가 없으면 appendSheetRecords()가
  *   조용히 드롭함 — 전체 재추출/재구축 절차는 docs/Changelog.md 참고.
+ * v5.1.0 (2026-07-22)
+ * - getBusinessSegment() 호출 시 detail 인자가 하드코딩된 ""라서 BOFU가
+ *   구조적으로 절대 나올 수 없던 버그 수정 — "" → rawRecord["Lead Source Detail"]
+ *   (MTA_Raw 리포트에서 이 필드는 Lead 객체가 아닌 Multi Touch Attribution
+ *   객체 자체 필드로 확인됨 — 샘플 검증, "Lead:" prefix 없음).
  * ==========================================================
  */
 
@@ -133,7 +138,7 @@ function transformMTARecord(rawRecord){
   const businessSegment =
     getBusinessSegment(
       rawRecord["MKT UTM Campaign"],
-      "",
+      rawRecord["Lead Source Detail"],
       rawRecord["Lead Source"]
     );
 
@@ -263,5 +268,36 @@ function transformMTARecord(rawRecord){
       rawRecord["Lead: Lead Record Type"] || ""
 
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — transformMTARecord() BOFU Business Segment
+ *
+ * WHY
+ * getBusinessSegment() 호출 시 detail 인자가 하드코딩된 ""라서
+ * MTA_Master에서 BOFU가 구조적으로 절대 나올 수 없던 버그(v5.1.0에서
+ * "" → rawRecord["Lead Source Detail"]로 수정)의 회귀 방지.
+ * ==========================================================
+ */
+function testTransformMTARecord_BOFU(){
+
+  const rawRecord = {
+    "Lead: Lead ID": "L1",
+    "Lead: Email": "test@example.com",
+    "Multi Touch Attribution: Created Date": "1/6/2026",
+    "MKT UTM Campaign": "random-campaign-2026",
+    "Lead Source Detail": "BOFU-Consult",
+    "Lead Source": "Web"
+  };
+
+  const result = transformMTARecord(rawRecord);
+
+  const pass = result["Business Segment"] === "BOFU";
+
+  Logger.log("Business Segment : " + result["Business Segment"] + " (expected BOFU)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
