@@ -12,14 +12,21 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.0.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-07-22)
+ * - 40_NewP1Report.js에서 Week 축 제거됨에 따라 컬럼 배치가
+ *   14 → 13개로 줄어듦 (Week 컬럼 삭제). % 컬럼/Revenue 컬럼 인덱스,
+ *   헤더 Note 컬럼 번호 전부 한 칸씩 당김. 줄무늬 배경은 자연스럽게
+ *   FY+Month 블록 기준으로 복귀 (Week가 없으니 Weekly 구분 자체가 없음).
+ * v1.1.0 (2026-07-22)
+ * - 줄무늬 배경 기준을 FY+Month(월별) → FY+Month+Week(주별)로 변경.
  * v1.0.0 (2026-07-22)
  * - 최초 구현. 32_ACQReportStyles.js 관례 재사용, 단 FY+Month 블록
- *   크기가 가변(Week×Segment 조합이 실제 데이터 기준이라 고정폭 아님)
- *   이라 줄무늬 배경은 blockSize 나눗셈이 아니라 실제 FY/Month 값
- *   변화 지점으로 경계를 판단한다.
+ *   크기가 가변(Segment 조합이 실제 데이터 기준이라 고정폭 아님)이라
+ *   줄무늬 배경은 blockSize 나눗셈이 아니라 실제 FY/Month 값 변화
+ *   지점으로 경계를 판단한다.
  * ==========================================================
  */
 
@@ -33,7 +40,7 @@
  * rowCount : Number  (Report Area에 쓰인 데이터 행 수)
  *
  * SIDE EFFECT
- * NewP1_REP 시트의 헤더~데이터 영역(A4:N...) 셀 서식/테두리/배경 변경.
+ * NewP1_REP 시트의 헤더~데이터 영역(A4:M...) 셀 서식/테두리/배경 변경.
  * ==========================================================
  */
 function applyNewP1ReportStyles_(sheet, rowCount){
@@ -52,11 +59,11 @@ function applyNewP1ReportStyles_(sheet, rowCount){
       .setBackground(null);
 
     //----------------------------------------------------------
-    // % 컬럼: SAL%(7) / IC Booked%(9) / IC Complete%(11) / Won%(13)
-    // Revenue 컬럼: 14 — 천단위 콤마
+    // % 컬럼: SAL%(6) / IC Booked%(8) / IC Complete%(10) / Won%(12)
+    // Revenue 컬럼: 13 — 천단위 콤마
     //----------------------------------------------------------
 
-    const percentColumns = [7, 9, 11, 13];
+    const percentColumns = [6, 8, 10, 12];
 
     percentColumns.forEach(function(col){
 
@@ -65,7 +72,7 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
     });
 
-    sheet.getRange(startRow, 14, rowCount, 1)
+    sheet.getRange(startRow, 13, rowCount, 1)
       .setNumberFormat("#,##0");
 
     //----------------------------------------------------------
@@ -136,13 +143,13 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 function annotateNewP1ReportMetricNotes_(sheet, headerRow){
 
   const notes = {
-    1: "FY/Month/Week — 전부 Create Date(Lead 생성일) 기준 코호트. ACQ_REP의 IC Booked/IC Complete/Revenue(이벤트 기준)와 반대 개념이니 혼동 주의 (docs/ACQReportDesign.md, docs/NewP1ReportDesign.md 참고).",
-    5: "New P1 — Create Date가 이 코호트에 속하고 유효 Priority(Priority Override 우선, 없으면 Lead Priority)가 \"Priority 1\"인 Lead 수.",
-    6: "SAL — 코호트 중 Total IC Requests > 0 인 Lead 수 (MTA_Master 무관, Leads_OPS 자체 카운터 컬럼 기준).",
-    8: "IC Booked — 코호트 중 IC Booked Date가 채워진 Lead 수 (현재까지 누적, Booked된 달과 무관).",
-    10: "IC Complete — 코호트 중 IC Completed Date가 채워진 Lead 수 (현재까지 누적).",
-    12: "Won — 코호트 중 Revenue > 0 인 Lead 수 (현재까지 누적). Opportunity Won Date는 사용하지 않음(사용자 확정).",
-    14: "Revenue — 코호트의 Revenue 합 (현재까지 누적, Revenue Actual 아닌 SF 동기화 Revenue 컬럼 기준)."
+    1: "FY/Month — 전부 Create Date(Lead 생성일) 기준 코호트. ACQ_REP의 IC Booked/IC Complete/Revenue(이벤트 기준)와 반대 개념이니 혼동 주의 (docs/ACQReportDesign.md, docs/NewP1ReportDesign.md 참고).",
+    4: "New P1 — Create Date가 이 코호트에 속하고 유효 Priority(Priority Override 우선, 없으면 Lead Priority)가 \"Priority 1\"인 Lead 수.",
+    5: "SAL — 코호트 중 Total IC Requests > 0 인 Lead 수 (MTA_Master 무관, Leads_OPS 자체 카운터 컬럼 기준).",
+    7: "IC Booked — 코호트 중 IC Booked Date가 채워진 Lead 수 (현재까지 누적, Booked된 달과 무관).",
+    9: "IC Complete — 코호트 중 IC Completed Date가 채워진 Lead 수 (현재까지 누적).",
+    11: "Won — 코호트 중 Revenue > 0 인 Lead 수 (현재까지 누적). Opportunity Won Date는 사용하지 않음(사용자 확정).",
+    13: "Revenue — 코호트의 Revenue 합 (현재까지 누적, Revenue Actual 아닌 SF 동기화 Revenue 컬럼 기준)."
   };
 
   Object.keys(notes).forEach(function(col){

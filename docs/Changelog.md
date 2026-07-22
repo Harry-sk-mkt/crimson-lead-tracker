@@ -316,6 +316,19 @@
   전부 `testXXXX()` 회귀 테스트 동반 (TDD).
 - 리뷰 중 발견해 같이 처리한 항목: ACQ_REP New P1 로직 통일 (별도 §12.6 기록).
 
+## 13.5. NewP1_REP — Week 축 제거, 줄무늬 배경 Weekly 실험 후 원복
+- 사용자가 실제 화면 확인 후 `getWeek()`(8/1 기준 7일 단위 Fiscal Week)이 캘린더 주(월~일)와
+  무관함을 확인 — 매년 8/1 요일이 달라(FY26=금요일, FY27=토요일) Week 시작 요일이 매년 바뀜.
+  캘린더 주로 오인하기 쉬워 혼동 유발 → **Week 축을 리포트에서 완전히 제거**하기로 결정.
+- Row 구조를 FY > Month > Fiscal Week > Segment → **FY > Month > Segment**로 단순화
+  (ACQ_REP과 동일 계층). Report Area 14 → 13컬럼, Engine 11 → 10컬럼.
+  `computeNewP1SortIndex_()`에서 Week 슬롯 제거(ACQ의 `computeSortIndex_()`와 동일한 형태로 단순화).
+  `deriveNewP1Cohort_()`도 Week 계산 제거. `CONFIG.NEWP1.MAX_WEEKS`는 제거하지 않고 보존(향후 재도입 대비).
+- 이 변경 직전에는 "줄무늬 배경을 Monthly → Weekly 기준으로" 요청받아 `41_NewP1ReportStyles.js`
+  v1.1.0에 반영했었으나, Week 축 자체가 사라지면서 v1.2.0에서 자연스럽게 FY+Month 기준으로 복귀.
+- `docs/NewP1ReportDesign.md`는 원래 Week 포함 설계 텍스트를 삭제하지 않고 "원래 설계(배경 기록)"
+  섹션으로 보존, 위에 변경 사유를 명시하는 방식으로 갱신.
+
 ## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
 - 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
   점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.

@@ -19,22 +19,29 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-07-22)
+ * - Week(Fiscal Week) 축 제거 — 8/1 기준 7일 단위라 캘린더 주(월~일)와
+ *   무관하고 매년 시작 요일이 달라져 혼동을 유발한다는 사용자 피드백.
+ *   Row 구조를 FY > Month > Segment로 단순화(ACQ_REP과 동일 계층).
+ *   Engine/Report 헤더에서 Week 컬럼 제거, Sort Index 공식에서 Week
+ *   슬롯 제거, CONFIG.NEWP1.MAX_WEEKS는 더 이상 사용하지 않음(제거하지
+ *   않고 보존 — 향후 재도입 가능성 대비).
  * v1.0.0 (2026-07-22)
- * - 최초 구현 (docs/NewP1ReportDesign.md 설계 그대로).
+ * - 최초 구현 (docs/NewP1ReportDesign.md 설계 그대로, Week 포함 버전).
  * ==========================================================
  */
 
 
 /**
  * ==========================================================
- * Report Area Header (A:N, 14 columns)
+ * Report Area Header (A:M, 13 columns)
  * ==========================================================
  */
 const NEWP1_REPORT_HEADERS = [
-  "FY", "Month", "Week", "Segment",
+  "FY", "Month", "Segment",
   "New P1", "SAL", "SAL%",
   "IC Booked", "IC Booked%",
   "IC Complete", "IC Complete%",
@@ -45,28 +52,25 @@ const NEWP1_REPORT_HEADERS = [
 
 /**
  * ==========================================================
- * Engine Sheet Header (A:K, 11 columns)
+ * Engine Sheet Header (A:J, 10 columns)
  * ==========================================================
  */
 const NEWP1_ENGINE_HEADERS = [
-  "FY", "Month", "Week", "Segment", "Sort Index",
+  "FY", "Month", "Segment", "Sort Index",
   "New P1", "SAL", "IC Booked", "IC Complete", "Won", "Revenue"
 ];
 
 
 /**
  * ==========================================================
- * Derive NewP1 Cohort (FY / Month / Week from Create Date)
+ * Derive NewP1 Cohort (FY / Month from Create Date)
  *
  * WHY
- * Create Date 하나로부터 코호트 귀속에 필요한 FY/Month/Week을
- * 파생한다. Month(getFiscalMonthLabel)와 Week(getWeek)는 서로
- * 독립적으로 파생되므로, 같은 Week 번호가 서로 다른 두 Month 아래
- * 나뉘어 나타날 수 있다 (Fiscal Week은 월 경계와 무관 — 의도된 동작,
- * docs/NewP1ReportDesign.md §4 참고).
+ * Create Date 하나로부터 코호트 귀속에 필요한 FY/Month를 파생한다.
+ * (2026-07-22: Week 축 제거 — 위 Change Log 참고)
  *
  * @param {Date} createDate
- * @return {{fy:number, month:string, week:number}|null}
+ * @return {{fy:number, month:string}|null}
  * ==========================================================
  */
 function deriveNewP1Cohort_(createDate){
@@ -77,9 +81,8 @@ function deriveNewP1Cohort_(createDate){
 
   const fy = Number(getFiscalYear(createDate).replace("FY", ""));
   const month = getFiscalMonthLabel(createDate);
-  const week = Number(getWeek(createDate).replace("W", ""));
 
-  return { fy: fy, month: month, week: week };
+  return { fy: fy, month: month };
 
 }
 
@@ -96,12 +99,11 @@ function testDeriveNewP1Cohort(){
   const pass =
     result !== null &&
     result.fy === 27 &&
-    result.month === "AUG" &&
-    result.week === 1;
+    result.month === "AUG";
 
   Logger.log(
     "2026-08-01 => " + JSON.stringify(result) +
-    " (expected fy=27, month=AUG, week=1)"
+    " (expected fy=27, month=AUG)"
   );
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
@@ -119,20 +121,17 @@ function testDeriveNewP1Cohort(){
  * Compute NewP1 Sort Index
  *
  * WHY
- * FY → Month(Fiscal 순서) → Week → Segment(CONFIG.ACQ.SEGMENTS 순서)로
- * 유일한 정렬 순서를 결정한다. Week은 CONFIG.NEWP1.MAX_WEEKS(53)를
- * 고정폭 슬롯 수로 사용해 실제 존재하는 Week 개수와 무관하게
- * 안정적으로 정렬 가능하게 한다.
+ * FY → Month(Fiscal 순서) → Segment(CONFIG.ACQ.SEGMENTS 순서)로
+ * 유일한 정렬 순서를 결정한다.
  *
  * @param {number} fy
  * @param {string} month  Fiscal Month Label (예: "AUG")
- * @param {number} week   1~CONFIG.NEWP1.MAX_WEEKS
  * @param {string} segment
  * @param {number} minFY  전체 데이터 중 최소 FY (기준점)
  * @return {number}  -1이면 유효하지 않은 조합
  * ==========================================================
  */
-function computeNewP1SortIndex_(fy, month, week, segment, minFY){
+function computeNewP1SortIndex_(fy, month, segment, minFY){
 
   const monthIndex = CONFIG.ACQ.FISCAL_MONTH_ORDER.indexOf(month);
   const segmentIndex = CONFIG.ACQ.SEGMENTS.indexOf(segment);
@@ -144,14 +143,9 @@ function computeNewP1SortIndex_(fy, month, week, segment, minFY){
   if(fyOffset < 0) return -1;
 
   const segmentCount = CONFIG.ACQ.SEGMENTS.length;
-  const weekCount = CONFIG.NEWP1.MAX_WEEKS;
-  const weekSlot = week - 1;
-
-  if(weekSlot < 0 || weekSlot >= weekCount) return -1;
 
   return (
-    (fyOffset * 12 + monthIndex) * weekCount * segmentCount +
-    weekSlot * segmentCount +
+    (fyOffset * 12 + monthIndex) * segmentCount +
     segmentIndex
   );
 
@@ -166,25 +160,21 @@ function computeNewP1SortIndex_(fy, month, week, segment, minFY){
 function testComputeNewP1SortIndex(){
 
   const segmentCount = CONFIG.ACQ.SEGMENTS.length;
-  const weekCount = CONFIG.NEWP1.MAX_WEEKS;
 
-  const a = computeNewP1SortIndex_(26, "AUG", 1, CONFIG.ACQ.SEGMENTS[0], 26);
-  const b = computeNewP1SortIndex_(26, "AUG", 1, CONFIG.ACQ.SEGMENTS[1], 26);
-  const c = computeNewP1SortIndex_(26, "AUG", 2, CONFIG.ACQ.SEGMENTS[0], 26);
-  const d = computeNewP1SortIndex_(26, "SEP", 1, CONFIG.ACQ.SEGMENTS[0], 26);
-  const invalid = computeNewP1SortIndex_(26, "NOT_A_MONTH", 1, CONFIG.ACQ.SEGMENTS[0], 26);
+  const a = computeNewP1SortIndex_(26, "AUG", CONFIG.ACQ.SEGMENTS[0], 26);
+  const b = computeNewP1SortIndex_(26, "AUG", CONFIG.ACQ.SEGMENTS[1], 26);
+  const c = computeNewP1SortIndex_(26, "SEP", CONFIG.ACQ.SEGMENTS[0], 26);
+  const invalid = computeNewP1SortIndex_(26, "NOT_A_MONTH", CONFIG.ACQ.SEGMENTS[0], 26);
 
   const pass =
     a === 0 &&
     b === 1 &&
     c === segmentCount &&
-    d === weekCount * segmentCount &&
     invalid === -1;
 
   Logger.log("a=" + a + " (expected 0)");
   Logger.log("b=" + b + " (expected 1)");
   Logger.log("c=" + c + " (expected " + segmentCount + ")");
-  Logger.log("d=" + d + " (expected " + (weekCount * segmentCount) + ")");
   Logger.log("invalid=" + invalid + " (expected -1)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
@@ -197,11 +187,11 @@ function testComputeNewP1SortIndex(){
  *
  * WHY
  * Leads_OPS를 1회 스캔(Article 10: Read Once)해서 New P1 코호트별
- * (FY|Month|Week|Segment) 지표를 메모리에서 집계한다. New Leads/SAL/
+ * (FY|Month|Segment) 지표를 메모리에서 집계한다. New Leads/SAL/
  * IC Booked/IC Complete/Won/Revenue 전부 이 코호트 필터(유효 Priority
  * = "Priority 1") 안에서만 카운트된다 (docs/NewP1ReportDesign.md §3).
  *
- * @return {Array<Object>}  각 원소: {fy, month, week, segment, sortIndex,
+ * @return {Array<Object>}  각 원소: {fy, month, segment, sortIndex,
  *   newP1, sal, icBooked, icComplete, won, revenue}
  * ==========================================================
  */
@@ -228,14 +218,13 @@ function computeNewP1Aggregates_(){
     if(minFY === null || cohort.fy < minFY) minFY = cohort.fy;
 
     const segment = record["Business Segment"] || "Other";
-    const key = cohort.fy + "|" + cohort.month + "|" + cohort.week + "|" + segment;
+    const key = cohort.fy + "|" + cohort.month + "|" + segment;
 
     if(!groups[key]){
 
       groups[key] = {
         fy: cohort.fy,
         month: cohort.month,
-        week: cohort.week,
         segment: segment,
         newP1: 0,
         sal: 0,
@@ -280,9 +269,8 @@ function computeNewP1Aggregates_(){
     return {
       fy: g.fy,
       month: g.month,
-      week: g.week,
       segment: g.segment,
-      sortIndex: computeNewP1SortIndex_(g.fy, g.month, g.week, g.segment, minFY),
+      sortIndex: computeNewP1SortIndex_(g.fy, g.month, g.segment, minFY),
       newP1: g.newP1,
       sal: g.sal,
       icBooked: g.icBooked,
@@ -303,9 +291,9 @@ function computeNewP1Aggregates_(){
  * Refresh NewP1 Engine (전체 재계산 → NewP1_Engine 시트에 저장)
  *
  * WHY
- * appendNewLeads()/appendNewMTA()/rebuildLeadsMaster()/rebuildMTAMaster()/
- * runRefreshACQSummary() 완료 시 refreshACQSummary_()와 같은 지점에서
- * 함께 호출되어, NewP1_REP 조회가 원본 스캔 없이 항상 빠르게 응답하도록 한다.
+ * appendNewLeads()/appendNewMTA()/rebuildLeadsMaster()/rebuildMTAMaster()
+ * 완료 시 refreshACQSummary_()와 같은 지점에서 함께 호출되어, NewP1_REP
+ * 조회가 원본 스캔 없이 항상 빠르게 응답하도록 한다.
  * ==========================================================
  */
 function refreshNewP1Engine_(){
@@ -323,7 +311,6 @@ function refreshNewP1Engine_(){
     return [
       "FY" + String(row.fy).slice(-2),
       row.month,
-      "W" + String(row.week).padStart(2, "0"),
       row.segment,
       row.sortIndex,
       row.newP1,
@@ -419,15 +406,14 @@ function readNewP1EngineRows_(){
     rows.push({
       fy: Number(String(row[0]).replace("FY", "")),
       month: row[1],
-      week: row[2],
-      segment: row[3],
-      sortIndex: row[4],
-      newP1: row[5],
-      sal: row[6],
-      icBooked: row[7],
-      icComplete: row[8],
-      won: row[9],
-      revenue: row[10]
+      segment: row[2],
+      sortIndex: row[3],
+      newP1: row[4],
+      sal: row[5],
+      icBooked: row[6],
+      icComplete: row[7],
+      won: row[8],
+      revenue: row[9]
     });
 
   }
@@ -549,7 +535,8 @@ function setupNewP1Dropdowns_(sheet){
  * NewP1_REP 시트가 아직 없거나 Control/Report 헤더가 없는 최초 상태에서,
  * 시트 생성 + Control Area 헤더 + Report Area 헤더 + 드롭다운을 한 번에
  * 세팅한다. ACQ_REP과 달리 기존에 수동으로 만들어둔 헤더가 없으므로
- * 코드가 직접 헤더까지 작성한다.
+ * 코드가 직접 헤더까지 작성한다. 헤더 값만 다시 쓰므로 기존에 걸어둔
+ * 필터/freeze는 영향받지 않는다.
  * ==========================================================
  */
 function setupNewP1Report(){
@@ -583,9 +570,10 @@ function setupNewP1Report(){
  *
  * WHY
  * targetRows는 Sort Index 오름차순(오래된 달 → 최신 달) 정렬 상태인데,
- * 리포트에서는 최신 달이 위로 오는 게 보기 편하다. ACQ_REP과 달리 한
- * 달 안의 (Week × Segment) 행 개수가 가변이라 고정 blockSize로 나눌 수
- * 없으므로, 연속된 행의 (FY, Month) 값이 바뀌는 지점을 블록 경계로 삼는다.
+ * 리포트에서는 최신 달이 위로 오는 게 보기 편하다. Segment는 실제
+ * 데이터에 존재하는 것만 들어있어(전체 7개가 항상 채워지는 게 아님)
+ * 블록 크기가 가변이므로, 연속된 행의 (FY, Month) 값이 바뀌는 지점을
+ * 블록 경계로 삼는다 (ACQ_REP의 고정 blockSize 방식과 다름).
  *
  * @param {Array<Object>} targetRows  sortIndex 오름차순 정렬된 Engine 행들
  * @return {Array<Object>}
@@ -739,8 +727,7 @@ function generateNewP1Report_(){
   //----------------------------------------------------------
 
   const segmentCount = CONFIG.ACQ.SEGMENTS.length;
-  const weekCount = CONFIG.NEWP1.MAX_WEEKS;
-  const blockSize = weekCount * segmentCount;
+  const blockSize = segmentCount;
 
   const startMonthIndex = CONFIG.ACQ.FISCAL_MONTH_ORDER.indexOf(startMonth);
   const endMonthIndex = CONFIG.ACQ.FISCAL_MONTH_ORDER.indexOf(endMonth);
@@ -779,7 +766,6 @@ function generateNewP1Report_(){
     return [
       "FY" + String(row.fy).slice(-2),
       row.month,
-      row.week,
       row.segment,
       newP1,
       row.sal,
@@ -823,10 +809,9 @@ function generateNewP1Report_(){
  * Handle NewP1_REP Generate Checkbox Edit
  *
  * WHY
- * GAS는 onEdit Simple Trigger를 파일당 하나만 허용하지 않지만(전역
- * 함수명 중복 시 나중에 로드된 것이 덮어씀), ACQ_REP의 기존 onEdit()과
- * 충돌하지 않도록 30_ACQReport.js의 onEdit()이 시트 이름으로 분기해서
- * 이 함수를 호출한다 (직접 onEdit()을 여기서 재정의하지 않음).
+ * GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히
+ * 덮어쓰므로, onEdit() 자체는 30_ACQReport.js 하나에만 두고 시트
+ * 이름으로 분기해서 이 함수를 호출한다 (여기서 onEdit()을 재정의하지 않음).
  * ==========================================================
  */
 function handleNewP1ReportGenerateEdit_(e, sheet){
