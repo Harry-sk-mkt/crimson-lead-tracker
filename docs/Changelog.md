@@ -223,9 +223,54 @@
 - 자세한 내용: `docs/BusinessSegmentClassification.md` "필드 변경 이력", `docs/ACQReportDesign.md`
   "All Leads/SAL — Segment 한계 해결됨" 섹션.
 
-## 다음에 다룰 항목
-- MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차).
+## 다음에 다룰 항목 (2026-07-22 오후 기준 갱신 — 아래 섹션 참고)
+- ~~MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차)~~ — 완료 (아래 "MTA_Raw Lead ID 누락" 섹션).
 - `Total Touches`(MTA_Master 기준 터치 횟수) 컬럼 — Leads_OPS `Revenue Actual`과 `Notes` 사이(T/U열 사이)에 추가. 아직 미구현.
 - "Other" 세그먼트 중 Upsell 비중 조사 — `runInvestigateOtherSegmentComposition()`(`24_OPSQA.js`) 구현 완료,
   실행 결과 확인 대기.
 - MTA_Master 중복 append 의심(4번 항목) — 여전히 미해결, CLAUDE.md TODO 3번 참고.
+- BOFU fix 반영 MTA_Master 재구축 완료 확인 대기 (아래 참고).
+
+# Changelog — 2026-07-22 (계속, 오후)
+
+## 9. 로컬 개발 환경 재구축 (신규 머신)
+- 새 환경에 Git 미설치 상태 확인 (winget도 미설치) → Git for Windows 인스톨러 직접 다운로드해 무인 설치.
+- 기존 로컬 `crimson-lead-tracker` 폴더(스텁 상태, `.gs` 확장자, 문서 없음)를
+  `crimson-lead-tracker-backup-20260722`로 백업 후, GitHub(`Harry-sk-mkt/crimson-lead-tracker`) clone으로 교체.
+- `clasp` 재설치 + 로그인(`h.yun@crimsoneducation.org`) 재인증.
+- GitHub push 인증: 이 세션의 브릿지된 터미널은 상호작용이 비활성화되어 있어 Git Credential Manager의
+  브라우저 로그인을 못 띄움 → 사용자가 별도의 일반 터미널에서 직접 `git push` 실행해 해결.
+
+## 10. MTA_Raw 재추출 시 "Lead: Lead ID" 컬럼 누락 발견 + 재조치
+- 사용자가 새로 다운로드한 MTA raw CSV(`report1784693554195.csv`, 82,421행)에 `Lead: Lead ID` 컬럼
+  자체가 없음 발견. `CONFIG.REQUIRED_FIELDS.MTA`가 이 필드를 필수로 요구해서 전체 레코드가
+  invalid 처리 → `MTA_Raw`에 0건 기록 (에러 없이 "성공"으로 끝나 원인 파악에 로그 확인 필요했음).
+- 원인: Salesforce 리포트 재추출 시 필드 설정 누락으로 추정 (재현 조건 불명, 일회성 사용자 실수로 판단).
+- 조치: `Lead: Lead ID` 포함해서 재추출(`report1784695873625.csv`) → `google.script.run` 페이로드
+  크기 문제 방지를 위해 Node 스크립트(`split_csv.mjs`, 프로젝트 폴더 밖 scratchpad에 위치 —
+  gotcha #3 원칙 준수)로 CSV를 quote-aware하게 정확히 2등분(41,211 / 41,210행, 헤더 포함) →
+  `MTA_Raw`/`MTA_Master` 시트 전체 삭제 → `resetMTACounterOnly()` → 두 파일 업로드 → `appendNewMTA()`.
+- 결과: 82,421건 전체 매칭 확인, `MTA_Master` 재생성 완료.
+
+## 11. MTA BOFU Business Segment 버그 발견 + 수정
+- 사용자가 ACQ_REP에서 BOFU가 항상 0으로 나오는 것을 확인, 원인 조사.
+- `13_MTATransformer.js`의 `getBusinessSegment()` 호출에서 `detail` 인자가 하드코딩된 `""`였음
+  (10번 항목의 MTA 전체 재구축과 무관하게 이전부터 존재하던 별개 버그). BOFU 판정 조건은
+  `detail.includes("bofu")` 단독이라 campaign 기반 fallback이 없어 구조적으로 절대 나올 수 없었음.
+- Leads_Master 쪽(`12_LeadTransformer.js`)은 원래부터 정상적으로 detail을 넘기고 있어 영향 없음
+  (Leads/MTA 분류 로직은 원래도 소스 필드가 다르게 분리되어 있었음 — First Touch vs Per-Touch).
+- 사용자 확인: MTA 리포트의 `Lead Source Detail`은 `Lead:` prefix가 없어 Multi Touch Attribution
+  객체 자체 필드로 판단 (샘플 검증, 100% 확정은 아님).
+- 수정: `13_MTATransformer.js` v5.1.0, `""` → `rawRecord["Lead Source Detail"]`.
+  회귀 테스트 `testTransformMTARecord_BOFU()` 추가. `clasp push --force`(manifest 변경 확인 필요)로 배포,
+  git 커밋(`cb8fb85`) + GitHub push 완료.
+- 반영을 위해 `MTA_Raw`/`MTA_Master` 재삭제 → `resetMTACounterOnly()` → 재Import → `appendNewMTA()` 재실행 중.
+- 자세한 내용: `docs/BusinessSegmentClassification.md`, `docs/ACQReportDesign.md`.
+
+## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
+- 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
+  점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.
+  기존 원칙(`docs/OperationsLayer.md`: "향후 모든 리포트는 Leads_Master가 아닌 Leads_OPS를 읽어야 한다")과
+  일치 — 코드 변경 없음, 향후 구현 시 지킬 가드레일로 기록.
+- 참고로 `IC Booked Date` 등 `OPS.SYNC_COLUMNS`는 애초에 `Leads_Master`를 거치지 않고
+  `syncMTAFunnelToOPS_()`가 `MTA_Master`에서 직접 `Leads_OPS`로 쓰기 때문에 이 문제와 무관 (이미 안전).

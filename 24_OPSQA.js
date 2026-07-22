@@ -1228,3 +1228,72 @@ function runSampleDuplicateRawDates() {
   });
 
 }
+
+
+/**
+ * ==========================================================
+ * Count IC Booked / IC Complete — This Calendar Month
+ *
+ * WHY
+ * ACQ_REP의 "IC Booked"/"IC Complete"는 Create Date 기준 cohort
+ * 집계라(docs/ACQReportDesign.md), "이번 달에 IC Booked Date가 찍힌
+ * 건수"(이벤트 발생 월 기준)와는 다른 숫자다. 사용자가 실제값과
+ * 리포트값이 다르다고 한 것을 검증하기 위해 두 기준을 모두 계산해서
+ * 비교한다.
+ * ==========================================================
+ */
+function runCountICBookedThisMonth() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!sheet) {
+    throw new Error(OPS.SHEET.OPS + " sheet not found.");
+  }
+
+  const records = sheetToObjects(sheet);
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  function isThisMonth(date) {
+    return date instanceof Date && !isNaN(date.getTime()) &&
+      date.getFullYear() === year && date.getMonth() === month;
+  }
+
+  function isFilled(date) {
+    return date instanceof Date && !isNaN(date.getTime());
+  }
+
+  let cohortBooked = 0;
+  let cohortComplete = 0;
+  let eventBooked = 0;
+  let eventComplete = 0;
+
+  records.forEach(function (r) {
+
+    const createDate = r["Create Date"];
+    const bookedDate = r["IC Booked Date"];
+    const completeDate = r["IC Completed Date"];
+
+    if (isThisMonth(createDate) && isFilled(bookedDate)) cohortBooked++;
+    if (isThisMonth(createDate) && isFilled(completeDate)) cohortComplete++;
+
+    if (isThisMonth(bookedDate)) eventBooked++;
+    if (isThisMonth(completeDate)) eventComplete++;
+
+  });
+
+  Logger.log("======================================");
+  Logger.log("IC Booked / IC Complete — " + (month + 1) + "/" + year);
+  Logger.log("======================================");
+  Logger.log("[Cohort 기준 — ACQ_REP과 동일: Create Date가 이번 달 AND 해당 Date가 채워짐]");
+  Logger.log("IC Booked (cohort)   : " + cohortBooked);
+  Logger.log("IC Complete (cohort) : " + cohortComplete);
+  Logger.log("");
+  Logger.log("[이벤트 기준 — 해당 Date 자체가 이번 달 (Create Date 무관)]");
+  Logger.log("IC Booked (event)    : " + eventBooked);
+  Logger.log("IC Complete (event)  : " + eventComplete);
+
+}

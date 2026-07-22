@@ -4,15 +4,26 @@
  * ACQ Report
  *
  * Responsibility
- * Cohort 기반 Acquisition Report (Engine + Report 영역)
+ * Acquisition Report (Engine + Report 영역). New Leads/New P1/All Leads/
+ * All P1/SAL은 Cohort(Create Date) 또는 Touch(MTA Created Date) 기준,
+ * IC Booked/IC Complete/Revenue는 그 달의 실제 이벤트 발생 기준
+ * (v1.4.0부터 — 아래 Change Log 참고). Cohort 관점(획득 월 기준
+ * 다운스트림 퍼널)은 추후 NewP1_REP가 별도로 담당할 예정.
  *
  * Stage
  * 20 Reporting
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-07-22)
+ * - computeOPSAggregates_(): IC Booked/IC Complete/Revenue를 Create Date
+ *   코호트 → 각자의 이벤트 날짜(IC Booked Date/IC Completed Date/
+ *   Opportunity Won Date) 기준으로 변경. 코호트 관점은 NewP1_REP가
+ *   담당할 예정이라 ACQ_REP과 역할이 겹치는 걸 피하기 위함
+ *   (docs/ACQReportDesign.md 참고). New Leads/New P1은 Create Date
+ *   코호트 유지 (정의상 코호트=이벤트가 동일).
  * v1.3.0 (2026-07-21)
  * - Fixed: generateACQReport_() 안에 "Report Area 작성" 블록이
  *   (신규 summaryMap 버전 + 구버전 mtaAgg/opsAgg 버전) 중복 남아있던
@@ -518,6 +529,16 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
  * ==========================================================
  * Compute OPS Aggregates (New Leads / New P1 / IC Booked / IC Complete / Revenue)
  *
+ * WHY (2026-07-22 변경)
+ * IC Booked/IC Complete/Revenue를 "Create Date 코호트"(그 달에 생성된
+ * Lead 기준)로 묶으면, NewP1_REP(추후 구현될 New P1 Funnel 리포트)가
+ * 어차피 코호트 관점을 담당하게 되므로 ACQ_REP과 역할이 겹친다.
+ * ACQ_REP은 "그 달의 실제 퍼포먼스"(그 달에 실제로 발생한 이벤트)를
+ * 보여주는 게 목적이므로, 이 3개 지표는 각자 자기 이벤트 날짜
+ * (IC Booked Date / IC Completed Date / Opportunity Won Date)가
+ * 속한 달로 귀속하도록 변경. New Leads/New P1은 "새로 생성된 Lead 수"
+ * 자체가 정의상 Create Date 기준이라 그대로 유지 (코호트=이벤트가 동일).
+ *
  * @param {Date|null} rangeStart
  * @param {Date|null} rangeEndExclusive
  * ==========================================================
@@ -543,50 +564,83 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
 
   const headers = values[0];
 
-  const dateCol = headers.indexOf("Create Date");
+  const createDateCol = headers.indexOf("Create Date");
   const segmentCol = headers.indexOf("Business Segment");
   const priorityCol = headers.indexOf("Lead Priority");
   const icBookedCol = headers.indexOf("IC Booked Date");
   const icCompleteCol = headers.indexOf("IC Completed Date");
+  const wonDateCol = headers.indexOf("Opportunity Won Date");
   const revenueCol = headers.indexOf("Revenue");
 
   const hasRangeFilter = !!(rangeStart && rangeEndExclusive);
 
+  function inRange(date){
+    if(!hasRangeFilter) return true;
+    return date >= rangeStart && date < rangeEndExclusive;
+  }
+
+  function keyFor(date, segment){
+    const fy = Number(getFiscalYear(date).replace("FY", ""));
+    const month = getFiscalMonthLabel(date);
+    return fy + "|" + month + "|" + (segment || "Other");
+  }
+
   for(let i = 1; i < values.length; i++){
 
     const row = values[i];
-    const date = row[dateCol];
-
-    if(!(date instanceof Date) || isNaN(date.getTime())) continue;
-
-    if(hasRangeFilter){
-      if(date < rangeStart || date >= rangeEndExclusive) continue;
-    }
-
-    const fy = Number(getFiscalYear(date).replace("FY", ""));
-    const month = getFiscalMonthLabel(date);
     const segment = row[segmentCol] || "Other";
 
-    const key = fy + "|" + month + "|" + segment;
+    //------------------------------------------------------
+    // New Leads / New P1 — Create Date 코호트 (Lead 생성된 달)
+    //------------------------------------------------------
 
-    result.newLeads[key] = (result.newLeads[key] || 0) + 1;
+    const createDate = row[createDateCol];
 
-    if(String(row[priorityCol]).indexOf("1") !== -1){
-      result.newP1[key] = (result.newP1[key] || 0) + 1;
+    if(createDate instanceof Date && !isNaN(createDate.getTime()) && inRange(createDate)){
+
+      const key = keyFor(createDate, segment);
+
+      result.newLeads[key] = (result.newLeads[key] || 0) + 1;
+
+      if(String(row[priorityCol]).indexOf("1") !== -1){
+        result.newP1[key] = (result.newP1[key] || 0) + 1;
+      }
+
     }
 
+    //------------------------------------------------------
+    // IC Booked — IC Booked Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
     const icBookedVal = row[icBookedCol];
-    if(icBookedVal instanceof Date && !isNaN(icBookedVal.getTime())){
+
+    if(icBookedVal instanceof Date && !isNaN(icBookedVal.getTime()) && inRange(icBookedVal)){
+      const key = keyFor(icBookedVal, segment);
       result.icBooked[key] = (result.icBooked[key] || 0) + 1;
     }
 
+    //------------------------------------------------------
+    // IC Complete — IC Completed Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
     const icCompleteVal = row[icCompleteCol];
-    if(icCompleteVal instanceof Date && !isNaN(icCompleteVal.getTime())){
+
+    if(icCompleteVal instanceof Date && !isNaN(icCompleteVal.getTime()) && inRange(icCompleteVal)){
+      const key = keyFor(icCompleteVal, segment);
       result.icComplete[key] = (result.icComplete[key] || 0) + 1;
     }
 
-    const revenueVal = Number(row[revenueCol]) || 0;
-    result.revenue[key] = (result.revenue[key] || 0) + revenueVal;
+    //------------------------------------------------------
+    // Revenue — Opportunity Won Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
+    const wonDateVal = row[wonDateCol];
+
+    if(wonDateVal instanceof Date && !isNaN(wonDateVal.getTime()) && inRange(wonDateVal)){
+      const key = keyFor(wonDateVal, segment);
+      const revenueVal = Number(row[revenueCol]) || 0;
+      result.revenue[key] = (result.revenue[key] || 0) + revenueVal;
+    }
 
   }
 
