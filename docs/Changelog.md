@@ -267,6 +267,16 @@
 - 반영을 위해 `MTA_Raw`/`MTA_Master` 재삭제 → `resetMTACounterOnly()` → 재Import → `appendNewMTA()` 재실행 중.
 - 자세한 내용: `docs/BusinessSegmentClassification.md`, `docs/ACQReportDesign.md`.
 
+## 12.5. IC Booked/Complete Event 기준 검증 + 헤더 Note 추가
+- `24_OPSQA.js`에 `runDiagnoseICCompleteMismatch()`(Leads_OPS vs MTA_Master 재계산값 대조)와
+  `runBreakdownICCompleteByBookedMonth()`(이번 달 Complete 건을 Booked 월별로 분해) 진단 함수 추가,
+  일시적으로 `✅ QA` 메뉴에 걸어 실행 확인 후 메뉴에서 제거(진단 함수 자체는 파일에 보존).
+- 검증 결과: IC Booked(41)/IC Complete(43) 전부 정상 — sync 로직 버그 없음. Complete가 Booked보다
+  많은 건 5~6월에 Booked된 상담이 7월에 Complete된 백로그(재부킹 등) 때문으로 확인, 정상 동작.
+- `32_ACQReportStyles.js` v1.4.0: `annotateACQReportMetricNotes_()` 추가 — `ACQ_REP` 헤더 K/L/M/N
+  (SAL/IC Booked/IC Complete/Revenue) 셀에 날짜 기준을 Note로 남겨, 코호트/이벤트 기준 혼동 방지.
+  `applyACQReportStyles_()`가 매 리포트 생성마다 자동 호출하므로 항상 최신 유지.
+
 ## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
 - 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
   점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.
