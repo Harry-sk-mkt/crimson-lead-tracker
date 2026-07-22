@@ -161,7 +161,13 @@ function findFiscalYearRange_(){
 /**
  * ==========================================================
  * onEdit Simple Trigger
- * (변경 없음)
+ *
+ * WHY (2026-07-22 변경)
+ * NewP1_REP도 같은 방식(Generate 체크박스 + onEdit)을 쓰게 되면서,
+ * GAS는 파일마다 onEdit()을 따로 둬도 마지막에 로드된 정의가 나머지를
+ * 조용히 덮어쓰므로(전역 함수명 중복) onEdit() 자체는 이 파일 하나에만
+ * 두고 시트 이름으로 분기해서 각 리포트 전용 핸들러를 호출한다.
+ * ACQ_REP 쪽 동작(handleACQReportGenerateEdit_)은 기존 로직 그대로 이동.
  * ==========================================================
  */
 function onEdit(e){
@@ -169,8 +175,28 @@ function onEdit(e){
   if(!e || !e.range) return;
 
   const sheet = e.range.getSheet();
+  const sheetName = sheet.getName();
 
-  if(sheet.getName() !== CONFIG.ACQ.SHEET) return;
+  if(sheetName === CONFIG.ACQ.SHEET){
+    handleACQReportGenerateEdit_(e, sheet);
+    return;
+  }
+
+  if(sheetName === CONFIG.NEWP1.SHEET){
+    handleNewP1ReportGenerateEdit_(e, sheet);
+    return;
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Handle ACQ_REP Generate Checkbox Edit
+ * (2026-07-21 원래 onEdit() 본문 그대로 — 동작 변경 없음)
+ * ==========================================================
+ */
+function handleACQReportGenerateEdit_(e, sheet){
 
   const row = e.range.getRow();
   const col = e.range.getColumn();

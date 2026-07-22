@@ -99,6 +99,7 @@ function appendNewLeads(){
   buildLeadsOPS(true);
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);

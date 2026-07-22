@@ -323,6 +323,7 @@ function syncMTAFunnelToOPS_(){
   Logger.log("==============================================");
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
 }
 

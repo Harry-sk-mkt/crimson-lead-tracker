@@ -174,6 +174,37 @@ const CONFIG = {
   },
 
   /**
+   * NewP1 Report (New P1 Cohort Funnel Report)
+   *
+   * docs/NewP1ReportDesign.md 참고. Segment 목록/순서와 Fiscal Month
+   * 순서는 CONFIG.ACQ.SEGMENTS / CONFIG.ACQ.FISCAL_MONTH_ORDER를 그대로 재사용.
+   */
+  NEWP1: {
+
+    SHEET: "NewP1_REP",
+    ENGINE_SHEET: "NewP1_Engine",
+
+    ROWS: {
+      CONTROL_HEADER: 1,
+      CONTROL_VALUE: 2,
+      REPORT_HEADER: 4,
+      REPORT_DATA_START: 5
+    },
+
+    COLUMNS: {
+      START_FY: 1,      // A
+      START_MONTH: 2,   // B
+      END_FY: 3,        // C
+      END_MONTH: 4,     // D
+      GENERATE: 5       // E (checkbox)
+    },
+
+    // Fiscal Week 이론상 최댓값(W53) — Sort Index 계산의 고정폭 슬롯 수로 사용.
+    MAX_WEEKS: 53
+
+  },
+
+  /**
    * Validation Summary Display Exclude
    *
    * Import 완료 alert에 표시하지 않을 필드 목록.

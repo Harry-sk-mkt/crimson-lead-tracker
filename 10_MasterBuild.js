@@ -71,6 +71,7 @@ function rebuildLeadsMaster(showAlert = true) {
     );
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +
@@ -151,6 +152,7 @@ function rebuildMTAMaster(showAlert = true) {
     );
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +

@@ -290,6 +290,32 @@
   All P1(MTA_Master 기반)은 `Priority Override` 컬럼 자체가 없어 대상 아니고 기존 로직 유지.
 - NewP1_REP 구현은 다음 세션 대기 (`40_NewP1Report.js`/`41_NewP1ReportStyles.js`/`CONFIG.NEWP1` 신규 예정).
 
+## 13. NewP1_REP 구현 완료
+
+- `docs/NewP1ReportDesign.md` 설계 그대로 구현: `40_NewP1Report.js`(Engine + Aggregates + Report 생성),
+  `41_NewP1ReportStyles.js`(서식), `00_Config.js`의 `CONFIG.NEWP1` 신규.
+- **Cohort 정의**: `Leads_OPS` 단일 소스, Create Date 구간 + 유효 Priority(`Priority Override` 우선 →
+  `Lead Priority`, exact match `"Priority 1"`, `isEffectiveP1_()` 재사용).
+- **Engine**: `NewP1_Engine` 숨김 시트 하나에 Engine(조합/Sort Index)과 Summary(사전 집계)를 통합
+  (ACQ_REP은 이 둘이 분리돼 있으나, NewP1은 매번 전 기간을 사전 집계하므로 합쳐도 무방 — 설계 문서 §6).
+  `refreshNewP1Engine_()`을 `refreshACQSummary_()`가 호출되는 모든 지점(`appendNewLeads()`,
+  `syncMTAFunnelToOPS_()`, `rebuildLeadsMaster()`, `rebuildMTAMaster()`)에 나란히 추가.
+  `runRefreshACQSummary()`(수동 전용 래퍼)는 건드리지 않음 — `runRefreshNewP1Engine()`을 별도 제공.
+- **Row 구조**: FY > Month > Fiscal Week(`getWeek()` 재사용, 8/1=W01 시작) > Segment, flat(소계 없음).
+  Week가 Month 경계와 무관하게 파생되어 같은 Week 번호가 다른 두 Month 아래 나뉘어 나타날 수 있음
+  (의도된 동작). 이 때문에 ACQ_REP처럼 고정 blockSize로 월 블록을 나눌 수 없어, `reverseNewP1MonthBlocks_()`는
+  FY/Month 값이 실제로 바뀌는 지점을 경계로 판단하도록 별도 구현 (ACQ의 `reverseMonthBlocks_()`와 다른 방식).
+- **onEdit 통합**: GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히 덮어써서, `onEdit()`을
+  파일마다 따로 두면 안 됨. `30_ACQReport.js`의 기존 `onEdit()`을 시트 이름 분기 방식으로 리팩터링해서
+  `handleACQReportGenerateEdit_()`(기존 로직 그대로 이동)와 `handleNewP1ReportGenerateEdit_()`(신규)를
+  각각 호출하도록 변경 — ACQ_REP 동작 자체는 변경 없음.
+- **최초 시트 세팅**: ACQ_REP과 달리 사전에 수동으로 만들어둔 헤더가 없어서, `setupNewP1Report()`가
+  시트 생성 + Control Area 헤더(Start FY/Start Month/End FY/End Month/Generate Report) + Report Area
+  헤더(14개 컬럼) + 드롭다운까지 한 번에 세팅하도록 구현. 편집기에서 1회 수동 실행 필요.
+- 신규 pure 함수(`deriveNewP1Cohort_`, `computeNewP1SortIndex_`, `reverseNewP1MonthBlocks_`)는
+  전부 `testXXXX()` 회귀 테스트 동반 (TDD).
+- 리뷰 중 발견해 같이 처리한 항목: ACQ_REP New P1 로직 통일 (별도 §12.6 기록).
+
 ## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
 - 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
   점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.

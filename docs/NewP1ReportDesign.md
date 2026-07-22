@@ -1,7 +1,8 @@
 # NewP1_REP Design (New P1 Cohort Funnel Report)
 
-> Status: 설계 확정 (2026-07-22, 사용자 승인 대기)
-> 관련 문서: `docs/ACQReportDesign.md`, `docs/OperationsLayer.md`, `docs/Changelog.md` (2026-07-22 §5, §12)
+> Status: 구현 완료 (2026-07-22) — `40_NewP1Report.js`, `41_NewP1ReportStyles.js`, `CONFIG.NEWP1`(`00_Config.js`).
+> 최초 시트 세팅은 `setupNewP1Report()`를 편집기에서 1회 수동 실행 (NewP1_REP 시트 생성 + Control/Report 헤더 + 드롭다운).
+> 관련 문서: `docs/ACQReportDesign.md`, `docs/OperationsLayer.md`, `docs/Changelog.md` (2026-07-22 §5, §12, §13)
 
 ---
 
