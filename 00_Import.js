@@ -28,7 +28,7 @@
  *
  * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
  */
-function showUploadDialog_(importType){
+function showUploadDialog_(importType) {
 
   const template =
     HtmlService.createTemplateFromFile(
@@ -113,23 +113,23 @@ function importCsv(
       );
 
     const validRecords =
-      validated.filter(function(record){
+      validated.filter(function (record) {
         return record._isValid;
       });
 
     const invalidRecords =
-      validated.filter(function(record){
+      validated.filter(function (record) {
         return !record._isValid;
       });
 
-    if(invalidRecords.length > 0){
+    if (invalidRecords.length > 0) {
 
       Logger.log(
         "Invalid Records : " +
         invalidRecords.length
       );
 
-      invalidRecords.forEach(function(record){
+      invalidRecords.forEach(function (record) {
 
         Logger.log(
           "  Row " +
@@ -153,17 +153,17 @@ function importCsv(
     //----------------------------------------------------------
 
     const rawRecords =
-      validRecords.map(function(record){
+      validRecords.map(function (record) {
 
         const clean = {};
 
-        for(const key in record){
+        for (const key in record) {
 
-          if(
+          if (
             key === "_row" ||
             key === "_errors" ||
             key === "_isValid"
-          ){
+          ) {
             continue;
           }
 
@@ -210,12 +210,10 @@ function importCsv(
     Logger.log("Import (Raw) Completed Successfully");
     Logger.log("=================================");
 
-    SpreadsheetApp
-      .getUi()
-      .alert(
-        formatValidationSummary_(summary) +
-        "\n\nMaster 🏗️Append를 실행해주세요."
-      );
+    return (
+      formatValidationSummary_(summary) +
+      "\n\nMaster 🏗️Append를 실행해주세요."
+    );
 
   }
 
@@ -225,13 +223,6 @@ function importCsv(
     Logger.log("IMPORT FAILED");
     Logger.log(error.message);
     Logger.log(error.stack);
-
-    SpreadsheetApp
-      .getUi()
-      .alert(
-        "Import Failed\n\n" +
-        error.message
-      );
 
     throw error;
 
@@ -246,22 +237,15 @@ function importCsv(
  * ==========================================================
  */
 
-function importLeadReport(){
+function importLeadReport() {
 
   showUploadDialog_("LEADS");
 
 }
 
 
-function importMTAReport(){
+function importMTAReport() {
 
   showUploadDialog_("MTA");
-
-}
-
-
-function importICFunnelReport(){
-
-  showUploadDialog_("IC_FUNNEL");
 
 }

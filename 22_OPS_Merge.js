@@ -7,7 +7,7 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.0.0
+ * v3.1.0
  *
  * Change Log
  * v3.0.0 (2026-07-21)
@@ -16,6 +16,11 @@
  * - 이제 이메일별로 그룹핑 후 실제 Create Date를 비교하여 "가장 오래된(True First Touch)"
  *   레코드만 남기고, 나머지는 duplicate로 분류 (Logger 로그에 Email/Lead ID/Create Date 기록).
  * - QA 시트는 여전히 미구현 (의도적 보류) — Logger 로그로만 확인 가능.
+ * v3.1.0 (2026-07-22)
+ * - IC Request Tracking 추가 (applyICRequestTracking_()) — "IC Requested" 체크박스를
+ *   더 이상 단순 보존(MANUAL_COLUMNS)하지 않고, 매 merge마다 이전 값이 true였으면
+ *   "Total IC Requests"를 +1 하고 체크박스를 false로 리셋. 재신청 이력 보존 목적
+ *   (docs/OperationsLayer.md 참고).
  * ==========================================================
  */
 
@@ -199,6 +204,8 @@ function mergeOPS(master, ops) {
 
       });
 
+      applyICRequestTracking_(row, existing);
+
       summary.updated++;
 
     }
@@ -216,6 +223,8 @@ function mergeOPS(master, ops) {
         row[col] = "";
 
       });
+
+      applyICRequestTracking_(row, null);
 
       summary.new++;
 
@@ -240,6 +249,114 @@ function mergeOPS(master, ops) {
     qa: []      // TODO — 프로토타입 검증 후 구현 (의도적 보류)
 
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply IC Request Tracking (재신청 이력 보존)
+ *
+ * WHY
+ * "IC Requested" 체크박스 하나로는 같은 Lead가 여러 번 재신청해도
+ * 최근 값으로 덮어씌워져 이력이 안 남는다. 매 sync(merge) 시점에
+ * 이전 값이 true였으면 카운터를 +1하고 체크박스는 false로 리셋해서,
+ * "총 몇 번 신청했는지"는 보존하면서 "지금 막 신청한 건인지"는
+ * 매번 새로 판단할 수 있게 한다.
+ *
+ * 추가로, IC Booked Date가 있으면(=실제로 상담이 성사된 이력) 최소
+ * 1회는 신청이 있었을 수밖에 없으므로 카운트 하한을 1로 보정한다.
+ * 이 트래킹 도입 이전부터 이미 Booked였던 Lead들의 이력 백필과,
+ * 앞으로 체크박스 없이(예: 세일즈가 직접 예약) Booked되는 예외
+ * 케이스를 동시에 커버한다.
+ *
+ * INPUT
+ * row : Object  (merge 중인 새 row, in-place 수정 — 호출 시점에
+ *   OPS.SYNC_COLUMNS까지 이미 채워져 있어야 함, 즉 "IC Booked Date" 포함)
+ * existing : Object|null  (기존 OPS 레코드, 신규 Lead면 null)
+ *
+ * SIDE EFFECT
+ * row[OPS.IC_REQUEST.CHECKBOX], row[OPS.IC_REQUEST.COUNTER]를 채운다.
+ *
+ * TEST
+ * existing.IC Requested === true, Total IC Requests === 2
+ * → row.IC Requested === false, row.Total IC Requests === 3
+ * existing.IC Requested === false, Total IC Requests === 0, row["IC Booked Date"] = Date
+ * → row.Total IC Requests === 1 (하한 보정)
+ * ==========================================================
+ */
+function applyICRequestTracking_(row, existing) {
+
+  const checkboxCol = OPS.IC_REQUEST.CHECKBOX;
+  const counterCol = OPS.IC_REQUEST.COUNTER;
+
+  if (!existing) {
+
+    row[checkboxCol] = false;
+    row[counterCol] = 0;
+
+    return;
+
+  }
+
+  const wasRequested = existing[checkboxCol] === true;
+  const previousCount = Number(existing[counterCol]) || 0;
+
+  let newCount = previousCount + (wasRequested ? 1 : 0);
+
+  const icBookedDate = row["IC Booked Date"];
+  const hasBookedDate = icBookedDate instanceof Date && !isNaN(icBookedDate.getTime());
+
+  if (hasBookedDate && newCount < 1) {
+    newCount = 1;
+  }
+
+  row[checkboxCol] = false;
+  row[counterCol] = newCount;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyICRequestTracking_()
+ * ==========================================================
+ */
+function testApplyICRequestTracking() {
+
+  // Case 1: 기존에 체크되어 있었음 → 리셋 + 카운트 증가
+  const row1 = { "IC Booked Date": "" };
+  applyICRequestTracking_(row1, { "IC Requested": true, "Total IC Requests": 2 });
+
+  // Case 2: 기존에 체크 안 되어 있었음 → 카운트 유지
+  const row2 = { "IC Booked Date": "" };
+  applyICRequestTracking_(row2, { "IC Requested": false, "Total IC Requests": 2 });
+
+  // Case 3: 신규 Lead (existing 없음) → 전부 초기값
+  const row3 = {};
+  applyICRequestTracking_(row3, null);
+
+  // Case 4: 트래킹 도입 이전부터 Booked였던 Lead (카운트 0인데 Booked Date 있음) → 하한 1로 보정
+  const row4 = { "IC Booked Date": new Date(2026, 3, 1) };
+  applyICRequestTracking_(row4, { "IC Requested": false, "Total IC Requests": 0 });
+
+  // Case 5: 이미 카운트가 있는데 Booked Date도 있음 → 하한 보정으로 낮아지면 안 됨
+  const row5 = { "IC Booked Date": new Date(2026, 3, 1) };
+  applyICRequestTracking_(row5, { "IC Requested": false, "Total IC Requests": 3 });
+
+  const pass =
+    row1["IC Requested"] === false && row1["Total IC Requests"] === 3 &&
+    row2["IC Requested"] === false && row2["Total IC Requests"] === 2 &&
+    row3["IC Requested"] === false && row3["Total IC Requests"] === 0 &&
+    row4["IC Requested"] === false && row4["Total IC Requests"] === 1 &&
+    row5["IC Requested"] === false && row5["Total IC Requests"] === 3;
+
+  Logger.log("Case 1 (was checked): " + JSON.stringify(row1) + " (expected IC Requested=false, Total=3)");
+  Logger.log("Case 2 (was unchecked): " + JSON.stringify(row2) + " (expected IC Requested=false, Total=2)");
+  Logger.log("Case 3 (new lead): " + JSON.stringify(row3) + " (expected IC Requested=false, Total=0)");
+  Logger.log("Case 4 (pre-existing booked, count 0): " + JSON.stringify(row4) + " (expected IC Requested=false, Total=1)");
+  Logger.log("Case 5 (already booked, count 3): " + JSON.stringify(row5) + " (expected IC Requested=false, Total=3)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

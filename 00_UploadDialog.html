@@ -98,8 +98,6 @@ function uploadFile(){
     const file =
         input.files[0];
 
-    // 업로드 시작 — Upload 버튼만 비활성화 (중복 클릭 방지)
-    // Cancel은 살려둠 — 사용자가 빠져나갈 방법은 남겨야 함
     document.getElementById("uploadBtn").disabled = true;
 
     document.getElementById("status").textContent =
@@ -118,18 +116,20 @@ function uploadFile(){
 
         google.script.run
 
-            .withSuccessHandler(function(){
+            .withSuccessHandler(function(resultMessage){
 
+                window.alert(resultMessage);
                 google.script.host.close();
 
             })
 
             .withFailureHandler(function(error){
 
+                window.alert("Import Failed\n\n" + error.message);
+
                 document.getElementById("status").textContent =
                     error.message;
 
-                // 실패 시에만 Upload 버튼 다시 활성화 (재시도 가능하게)
                 document.getElementById("uploadBtn").disabled = false;
 
             })

@@ -19,6 +19,7 @@ function onOpen() {
 
   createImportMenu();
   createBuildMenu();
+  createQAMenu();
   // createReportMenu();  // Report Stage 미구현 — 항목 생기면 다시 활성화
 
 }
@@ -35,7 +36,6 @@ function createImportMenu() {
     .createMenu("📥 Update")
     .addItem("Import Leads", "importLeadReport")
     .addItem("Import MTA", "importMTAReport")
-    .addItem("Import IC Funnel", "importICFunnelReport")
     .addToUi();
 
 }
@@ -86,6 +86,23 @@ function menuAppendNewMTA(){
 
 }
 
+/**
+ * ==========================================================
+ * QA Menu
+ *
+ * WHY
+ * OPS, ACQ 등 여러 파이프라인의 QA를 한곳에 모아두는 메뉴.
+ * 앞으로 다른 리포트 QA도 이 메뉴에 추가.
+ * ==========================================================
+ */
+function createQAMenu() {
+
+  SpreadsheetApp.getUi()
+    .createMenu("✅ QA")
+    .addItem("Run Leads_OPS QA", "runOPSQAManual")
+    .addToUi();
+
+}
 
 /**
  * ==========================================================

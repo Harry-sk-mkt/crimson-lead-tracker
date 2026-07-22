@@ -244,7 +244,15 @@ function generateACQReport_(){
     return row.sortIndex >= startIndex && row.sortIndex <= endIndex;
   });
 
-  Logger.log("Report Rows : " + targetRows.length);
+  //----------------------------------------------------------
+  // 3.5. 월 블록 단위로 순서 뒤집기 (최신 달이 맨 위로)
+  //----------------------------------------------------------
+
+  const reversedTargetRows =
+    reverseMonthBlocks_(targetRows, CONFIG.ACQ.SEGMENTS.length);
+
+  Logger.log("Report Rows : " + reversedTargetRows.length);
+
 
   //----------------------------------------------------------
   // 4. ACQ Summary 조회 (스캔 없음 — 즉시 응답)
@@ -256,7 +264,7 @@ function generateACQReport_(){
   // 5. Report Area 작성
   //----------------------------------------------------------
 
-  const outputRows = targetRows.map(function(row){
+  const outputRows = reversedTargetRows.map(function(row){
 
     const key = row.fy + "|" + row.month + "|" + row.segment;
     const s = summaryMap[key] || {
@@ -583,5 +591,69 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
   }
 
   return result;
+
+}
+
+/**
+ * ==========================================================
+ * Reverse Month Blocks (세그먼트 순서는 유지, 월 순서만 최신이 먼저)
+ *
+ * WHY
+ * targetRows는 Sort Index 오름차순(오래된 달 → 최신 달)으로 정렬되어
+ * 있는데, 리포트에서는 최신 달이 맨 위로 오는 게 보기 편하다.
+ * 다만 각 달 안의 7개 세그먼트 순서(Seminar → ... → Other)는
+ * 그대로 유지해야 하므로, "월 블록" 단위로만 순서를 뒤집는다.
+ *
+ * INPUT
+ * targetRows : Object[]  (Sort Index 오름차순 정렬된 Engine 행들)
+ * blockSize : Number  (한 달에 해당하는 행 수 = 세그먼트 개수, 보통 7)
+ *
+ * OUTPUT
+ * Object[]  (월 블록만 뒤집힌 배열, 각 블록 내부 순서는 그대로)
+ *
+ * TEST
+ * 입력이 [Aug-A, Aug-B, Sep-A, Sep-B] (blockSize=2)일 때
+ * 출력은 [Sep-A, Sep-B, Aug-A, Aug-B] 이어야 함 (블록 내부 A→B 순서 유지)
+ * ==========================================================
+ */
+function reverseMonthBlocks_(targetRows, blockSize){
+
+  const blocks = [];
+
+  for(let i = 0; i < targetRows.length; i += blockSize){
+    blocks.push(targetRows.slice(i, i + blockSize));
+  }
+
+  blocks.reverse();
+
+  return blocks.reduce(function(acc, block){
+    return acc.concat(block);
+  }, []);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — reverseMonthBlocks_()
+ * ==========================================================
+ */
+function testReverseMonthBlocks(){
+
+  const input = [
+    { label: "Aug-A" }, { label: "Aug-B" },
+    { label: "Sep-A" }, { label: "Sep-B" }
+  ];
+
+  const result = reverseMonthBlocks_(input, 2);
+
+  const expectedOrder = ["Sep-A", "Sep-B", "Aug-A", "Aug-B"];
+  const actualOrder = result.map(function(r){ return r.label; });
+
+  const pass = JSON.stringify(actualOrder) === JSON.stringify(expectedOrder);
+
+  Logger.log("Expected : " + expectedOrder.join(", "));
+  Logger.log("Actual   : " + actualOrder.join(", "));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

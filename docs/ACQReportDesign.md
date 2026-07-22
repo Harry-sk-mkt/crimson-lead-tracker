@@ -23,12 +23,46 @@ Example: 2025-08-10 Lead Created → 2025-09-05 IC Booked → 2025-09-12 IC Comp
 
 | 지표 그룹 | 소스 | Segment 기준 |
 | --- | --- | --- |
-| All Leads, All P1, SAL | MTA_Master | **Last Touch** (Last MKT UTM Campaign 기준) |
+| All Leads, All P1, SAL | MTA_Master | **Per-Touch** (MKT UTM Campaign 기준, 2026-07-22 이전엔 Last Touch였음 — 아래 섹션 참고) |
 | New Leads, New P1, IC Booked, IC Complete, Revenue | Leads_OPS | **First Touch** (First MKT UTM Campaign 기준) |
 
 이는 `business-segment-classification.md`에 이미 정의된 원래 설계 차이(Leads_Master=First Touch, MTA_Master=Last Touch)를 그대로 반영한 결과다. **버그가 아니지만, 사용자가 "왜 지표마다 세그먼트 기준이 다르지?"라고 헷갈릴 수 있어 명시적으로 기록.**
 
 → **보류된 결정 (2026-07-21)**: SAL을 First Touch 기준으로 통일할지 여부는 이번엔 손대지 않기로 함 — "파이프라인/리포트 단계에서 맞추면 될 것 같다"는 방향으로 추후 별도 논의.
+
+## ✅ All Leads/SAL — Segment "터치 시점 채널" 한계 해결됨 (2026-07-22)
+
+**해결**: Salesforce MTA 리포트의 추출 필드를 `Last MKT UTM Campaign`(Lead 레벨) → `MKT UTM Campaign`
+(Multi Touch Attribution 객체 자체 필드)로 교체 — 아래는 그 이전 진단 기록.
+
+**남은 제약**: 이 fix는 필드 교체 이후 새로 append되는 터치부터 적용된다. 기존 MTA_Master 82,000+ row는
+전체 재추출(`MKT UTM Campaign` 포함) + `resetMTACounterOnly()` + 재Import + `rebuildMTAMaster()`
+전까지 아래에 기록된 구 값(부정확한 Lead 레벨 스냅샷)을 그대로 유지한다. 자세한 내용:
+`docs/BusinessSegmentClassification.md` "필드 변경 이력", `docs/Changelog.md` 2026-07-22.
+
+### (참고 기록) 원래 문제 진단
+
+`Last MKT UTM Campaign`은 Salesforce Lead 객체의 **현재 최종 상태 필드**다. 특정 터치의 그 시점 채널을
+보존하지 않고, 항상 "이 Lead가 지금 이 순간 기준 최종적으로 어디서 왔는지"만 반환한다.
+
+**검증 방법**: Lead `00Q7F00000VePrO`의 2020-10-19 / 2026-05-18 / 2026-06-22 / 2026-07-21 터치를
+Salesforce에서 각각 필터링해서 확인 — **전부 동일한(가장 최근) 캠페인**이 나옴. 터치 시점과 무관하게
+Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 확인 완료.
+
+**영향**:
+- `MTA_Master`는 터치 단위(1 Lead = N Row)인데, `Business Segment`는 Lead 레벨 필드라 같은 Lead의
+  모든 터치 row가 항상 동일한(현재 시점) Segment 값을 갖는다.
+- `computeMTAAggregates_()`(`30_ACQReport.js`)가 이 row를 그 row 자신의 `MTA Created Date`로 월
+  귀속시키기 때문에, "이번 달에 Segment X로 집계된 터치"가 실제로 그 달에 Segment X 채널이었다는
+  뜻이 아니다 — 단지 "그 Lead가 (현재 기준으로) 최종적으로 Segment X"라는 사실이, 그 Lead의 모든
+  과거 터치 row에 소급 적용된 것일 뿐이다.
+- Marketo 등 원천 마케팅 액티비티 로그에는 터치 시점 채널이 남아있을 수 있으나, 현재 우리 파이프라인이
+  가진 데이터로는 접근/복원 불가능.
+
+**(구) 결정 (2026-07-22 오전)**: 당시엔 Salesforce 데이터 모델 자체의 한계로 판단해 "리포트/코드는
+수정하지 않고 한계만 명시"하기로 했었음. → **같은 날 오후, 사용자가 Salesforce 리포트의 추출 필드를
+`MKT UTM Campaign`으로 교체하면 터치별 실제 값이 나온다는 것을 직접 확인** — 한계가 아니라 애초에
+잘못된 필드를 조회하고 있었던 것으로 정정. 위 "해결" 섹션 참고.
 
 ## Metric Definitions
 

@@ -7,7 +7,13 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.0
+ * v2.1
+ *
+ * Change Log
+ * v2.1 (2026-07-22)
+ * - "Last IC Requested Date"(MANUAL_COLUMNS), "Total IC Requests"(신규 IC_REQUEST.COUNTER) 추가.
+ * - "IC Requested"를 MANUAL_COLUMNS에서 제외 — mergeOPS()에서 sync마다 리셋+카운트 증가하는
+ *   특수 컬럼으로 전환 (재신청 이력 보존 목적, docs/OperationsLayer.md 참고).
  * ==========================================================
  */
 
@@ -112,13 +118,30 @@ const OPS = {
     "Priority Override",
     "Priority Checked",
 
-    "IC Requested",
+    "Last IC Requested Date",
 
     "Revenue Actual",
 
     "Notes"
 
   ],
+
+  /*
+  ==========================================================
+  IC REQUEST TRACKING (2026-07-22 추가)
+
+  "IC Requested"는 다른 MANUAL_COLUMNS와 달리 그대로 보존되지 않는다.
+  mergeOPS()에서 매 sync마다: 이전 값이 true였으면 "Total IC Requests"를
+  +1 하고 "IC Requested"는 false로 리셋한다. 재신청 이력(횟수)을
+  보존하기 위함 — 체크박스 하나로는 "몇 번 재신청했는지"가 안 남았음.
+  ==========================================================
+  */
+  IC_REQUEST : {
+
+    CHECKBOX : "IC Requested",
+    COUNTER : "Total IC Requests"
+
+  },
 
   /*
   ==========================================================
@@ -155,6 +178,10 @@ const OPS = {
     "FT Checked",
 
     "IC Requested",
+
+    "Last IC Requested Date",
+
+    "Total IC Requests",
 
     "IC Booked Date",
 

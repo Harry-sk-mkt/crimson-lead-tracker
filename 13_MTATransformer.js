@@ -10,12 +10,21 @@
  * 10 Master Build
  *
  * Version
- * v3.0.0
+ * v5.0.0
  *
  * Change Log
- * v3.0.0 (2026-07-20)
- * - Moved helper functions to TransformHelper.
- * - Transformer now only contains transformation logic.
+ * v4.0.0 (2026-07-21)
+ * - Added IC Booked Date / IC Completed Date / Opportunity Won Date /
+ *   Revenue / Currency fields — ICFunnel_Raw 파이프라인 대체.
+ *   MTA_Master 하나로 SAL 판별 + IC Funnel 동기화를 동시에 처리.
+ * v5.0.0 (2026-07-22)
+ * - Business Segment 소스를 "Lead: Last MKT UTM Campaign"(Lead 레벨 스냅샷,
+ *   터치 시점 정보 없음) → "MKT UTM Campaign"(Multi Touch Attribution 객체
+ *   자체 필드, 터치별 실제 값)로 변경. Salesforce 리포트 추출 필드 자체를
+ *   교체해서 확인됨. Master 컬럼명도 "Last MKT UTM Campaign" → "MKT UTM Campaign"로
+ *   변경 (더 이상 "Lead의 최종 터치"가 아니라 "이 터치 자체의 캠페인"이므로).
+ * - ⚠️ MTA_Raw 시트에 "MKT UTM Campaign" 헤더가 없으면 appendSheetRecords()가
+ *   조용히 드롭함 — 전체 재추출/재구축 절차는 docs/Changelog.md 참고.
  * ==========================================================
  */
 
@@ -114,11 +123,16 @@ function transformMTARecord(rawRecord){
 
   //----------------------------------------------------------
   // Business Segment
+  //
+  // 2026-07-22: "Lead: Last MKT UTM Campaign" → "MKT UTM Campaign"로 소스 변경.
+  // 전자는 Lead 객체의 현재 최종 상태 스냅샷(터치 시점 정보 없음, 모든 터치
+  // row에 동일한 값이 찍힘)이었고, 후자는 Multi Touch Attribution 객체 자체의
+  // 필드라 터치별로 실제 그 시점 캠페인이 찍힘 (Salesforce 리포트 필드 교체로 확인).
   //----------------------------------------------------------
 
   const businessSegment =
     getBusinessSegment(
-      rawRecord["Lead: Last MKT UTM Campaign"],
+      rawRecord["MKT UTM Campaign"],
       "",
       rawRecord["Lead Source"]
     );
@@ -172,8 +186,8 @@ function transformMTARecord(rawRecord){
     "First MKT UTM Campaign":
       rawRecord["Lead: First MKT UTM Campaign"] || "",
 
-    "Last MKT UTM Campaign":
-      rawRecord["Lead: Last MKT UTM Campaign"] || "",
+    "MKT UTM Campaign":
+      rawRecord["MKT UTM Campaign"] || "",
 
     //------------------------------------------------------
     // Attribution
@@ -191,6 +205,36 @@ function transformMTARecord(rawRecord){
 
     "Business Segment":
       businessSegment,
+
+    //------------------------------------------------------
+    // Funnel (2026-07-21 추가 — ICFunnel_Raw 파이프라인 대체)
+    //------------------------------------------------------
+
+    "IC Booked Date":
+      parseDate(
+        rawRecord["Lead: IC Booked Date"],
+        DATE_FORMAT
+      ),
+
+    "IC Completed Date":
+      parseDate(
+        rawRecord["Lead: IC Completed Date (Pre-Conversion)"],
+        DATE_FORMAT
+      ),
+
+    "Opportunity Won Date":
+      parseDate(
+        rawRecord["Lead: Opportunity Won Date"],
+        DATE_FORMAT
+      ),
+
+    "Revenue":
+      Number(
+        rawRecord["Lead: Won Opportunity's Amount (converted)"]
+      ) || 0,
+
+    "Currency":
+      rawRecord["Lead: Won Opportunity's Amount (converted) Currency"] || "",
 
     //------------------------------------------------------
     // Date Helpers
@@ -217,6 +261,7 @@ function transformMTARecord(rawRecord){
 
     "Lead Record Type":
       rawRecord["Lead: Lead Record Type"] || ""
+
   };
 
 }

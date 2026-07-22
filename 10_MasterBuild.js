@@ -70,9 +70,11 @@ function rebuildLeadsMaster(showAlert = true) {
       String(raw.length)
     );
 
+  refreshACQSummary_();
+
   Logger.log(
     CONFIG.LOG.PREFIX +
-    " Rebuild Leads Master (FULL) Completed"
+    " ACQ Summary refreshed."
   );
 
   const result = {
@@ -80,7 +82,10 @@ function rebuildLeadsMaster(showAlert = true) {
     master: master.length
   };
 
-  refreshACQSummary_();
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Rebuild Leads Master (FULL) Completed"
+  );
 
   if (showAlert) {
 
@@ -145,9 +150,11 @@ function rebuildMTAMaster(showAlert = true) {
       String(raw.length)
     );
 
+  refreshACQSummary_();
+
   Logger.log(
     CONFIG.LOG.PREFIX +
-    " Rebuild MTA Master (FULL) Completed"
+    " ACQ Summary refreshed."
   );
 
   const result = {
@@ -155,7 +162,10 @@ function rebuildMTAMaster(showAlert = true) {
     master: master.length
   };
 
-  refreshACQSummary_();
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Rebuild MTA Master (FULL) Completed"
+  );
 
   if (showAlert) {
 

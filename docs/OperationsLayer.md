@@ -41,6 +41,26 @@ Email은 마케팅 팀이 사용하는 운영 조회 키다. Salesforce의 lead 
 7. QA Report 생성 (⚠️ 미구현 — 아래 참고)
 ```
 
+## 자동 Sync 연결 (2026-07-22 추가)
+
+`buildLeadsOPS()`와 `syncMTAFunnelToOPS_()`는 원래 완전 수동 실행(메뉴 없음, 편집기에서만)이었는데,
+"IC Requested를 마케팅이 체크해도 다음 수동 sync 전까지 IC Booked Date가 안 보인다"는 실무 갭 때문에
+Append 함수에 자동 연결함 (`07_IncrementalMasterBuild.js`):
+
+- `appendNewLeads()` → Master append 직후 **`buildLeadsOPS(true)`**(QA 생략) 자동 호출.
+  신규 Lead가 지체 없이 Leads_OPS에 들어와야, 이후 그 Lead의 MTA 터치가 sync 대상이 될 수 있음.
+- `appendNewMTA()` → 기존 `refreshACQSummary_()` 호출을 **`syncMTAFunnelToOPS_()`**로 대체
+  (그 함수가 끝에서 이미 `refreshACQSummary_()`를 호출하므로 중복 계산 방지).
+
+**의존성 순서**: MTA sync는 그 Lead가 이미 Leads_OPS에 있어야 성공한다 (없으면 "Not found in
+Leads_OPS"로 조용히 skip). 하지만 `syncMTAFunnelToOPS_()`는 호출될 때마다 `MTA_Master` 전체를
+재계산하므로, 이번 주 순서가 뒤바뀌어도(MTA 담당자가 Leads 담당자보다 먼저 import) **다음 MTA
+sync 때 자동으로 따라잡힌다** (self-healing, 최대 1 사이클 지연). 두 담당자가 서로 다른 날 독립적으로
+작업해도 무방함 — 요일을 맞출 필요 없음.
+
+**QA 미실행 트레이드오프**: 자동 트리거 경로는 QA(~77s)를 생략한다. 정합성 전체 점검이 필요하면
+메뉴("✅ QA → Run Leads_OPS QA") 또는 `buildLeadsOPS()`(파라미터 없이)를 편집기에서 수동 실행.
+
 ## Duplicate Email Handling — ⚠️ 미해결
 
 **문서 원칙:**
@@ -87,13 +107,33 @@ Duplicate Email
 | Business Segment | Salesforce |
 | FT Override | Marketing |
 | FT Checked | Marketing |
-| IC Requested | Marketing |
+| IC Requested | Marketing (매 sync마다 리셋됨 — 아래 "IC Request Tracking" 참고) |
+| Last IC Requested Date | Marketing |
+| Total IC Requests | System (mergeOPS()가 자동 계산, 직접 편집 금지) |
 | IC Booked Date | Salesforce |
 | IC Completed Date | Salesforce |
 | Opportunity Won Date | Salesforce |
 | Revenue | Salesforce |
 | Revenue Actual | Marketing |
 | Notes | Marketing |
+
+## IC Request Tracking (2026-07-22 추가)
+
+**배경**: `IC Requested` 체크박스 하나로는 같은 Lead가 여러 번 상담을 재신청해도 이력이 안 남았음
+(재신청할 때마다 최근 값으로 덮어씌워짐). 재신청 횟수 자체가 그 Lead/캠페인의 관심도(또는 반대로
+습관적/무의미한 신청 여부)를 판단하는 유의미한 신호라 판단해 카운터를 추가.
+
+**동작 (`applyICRequestTracking_()`, `22_OPS_Merge.js`)**: `mergeOPS()`가 실행될 때마다(= 매 OPS
+sync마다, 지금은 `appendNewLeads()`에서 자동 트리거됨) 기존 OPS의 `IC Requested`가 `true`였으면:
+1. `Total IC Requests`를 +1
+2. `IC Requested`를 `false`로 리셋
+
+**실무 플로우**: 웨비나/세미나 후 상담 신청자 리스트(이메일 기준)를 받으면, `Leads_OPS`에서 해당
+Email을 찾아 `IC Requested` 체크 + `Last IC Requested Date`에 신청일 기록. 이후 다음 sync 때
+자동으로 카운트되고 체크박스는 리셋되어, 다음 재신청을 다시 체크할 수 있는 상태가 됨.
+
+**`Total IC Requests`는 직접 편집하지 않는다** — `mergeOPS()`가 계산하는 값이라 수동으로 고치면
+다음 sync 때 잘못된 기준으로 다시 계산됨.
 
 ## Design Principles
 1. **Header-Based Mapping** — 컬럼은 절대 index로 참조하지 않는다. ❌ `row[13]` / ✅ `columnMap["Revenue SF"]`

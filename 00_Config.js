@@ -33,33 +33,6 @@ const CONFIG = {
   },
 
   /**
-   * IC Funnel Sync Source
-   *
-   * 별도 Lead 리포트(IC Booked/Completed/Won Date 중 하나라도 이번 주에
-   * 해당하는 Lead, 주 단위 비중복 export)로부터 Leads_OPS의 Funnel 필드를 갱신.
-   *
-   * ⚠️ COLUMNS 값은 아직 실제 리포트 추출 전 추정치입니다.
-   * 리포트를 실제로 뽑아본 뒤, 다른 이름이면 이 부분만 수정하면 됩니다
-   * (코드 로직은 이 Config 값을 그대로 참조하므로 안 건드려도 됨).
-   */
-  IC_FUNNEL: {
-
-    SHEET: "ICFunnel_Raw",
-
-    COLUMNS: {
-
-      LEAD_ID: "Lead ID",  // ✅ 확인됨
-
-      IC_BOOKED_DATE: "IC Booked Date",                          // ⚠️ 추정치 — 확인 필요
-      IC_COMPLETED_DATE: "IC Completed Date (Pre-Conversion)",   // ⚠️ 추정치 — 확인 필요
-      OPPORTUNITY_WON_DATE: "Opportunity Won Date",              // ⚠️ 추정치 — 확인 필요
-      REVENUE: "Won Opportunity's Amount (converted)"            // ⚠️ 추정치 — 확인 필요
-
-    }
-
-  },
-
-  /**
      * Required Fields (Validation)
      *
      * 비어있으면 안 되는 컬럼 목록.
@@ -78,10 +51,6 @@ const CONFIG = {
         "Lead: Lead ID",
         "Lead: Email",
         "Multi Touch Attribution: Created Date"
-      ],
-
-      IC_FUNNEL: [
-      "Lead ID"
       ]
 
   },
@@ -103,13 +72,10 @@ const CONFIG = {
 
     MTA: [
       "Multi Touch Attribution: Created Date",
-      "Lead Created Date"
-    ],
-
-    IC_FUNNEL: [
-      "IC Booked Date",
-      "IC Completed Date (Pre-Conversion)",
-      "Opportunity Won Date"
+      "Lead Created Date",
+      "Lead: IC Booked Date",
+      "Lead: IC Completed Date (Pre-Conversion)",
+      "Lead: Opportunity Won Date"
     ]
 
   },
@@ -191,8 +157,8 @@ const CONFIG = {
     ENGINE_START_COL: 15,  // O열
 
     SEGMENTS: [
-      "Event Offline",
-      "Event Online",
+      "Seminar",
+      "Webinar",
       "BOFU",
       "Search",
       "Content",

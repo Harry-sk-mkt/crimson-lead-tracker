@@ -103,12 +103,21 @@ function parseMDY(text) {
  *        ISO
  * @return {Date|null}
  */
+
+/**
+ * ==========================================================
+ * Parse Date (범용 진입점)
+ *
+ * Change Log
+ * v1.3.0 (2026-07-21)
+ * - 시간이 포함된 값("19/2/2024, 5:21 pm")에서 콤마 이후 시간
+ *   부분을 잘라내고 날짜만 파싱하도록 전처리 추가.
+ *   (MTA CSV의 IC Booked/Completed/Won Date 필드에서 발견됨 —
+ *   기존엔 시간 부분 때문에 파싱 실패 → null 반환되고 있었음)
+ * ==========================================================
+ */
 function parseDate(value, format) {
 
-  //----------------------------------------------------------
-  // 이미 Date 객체로 들어온 경우만 로그 (비정상 케이스 감지용 —
-  // Raw는 항상 텍스트여야 하므로, 이미 Date라면 확인이 필요함)
-  //----------------------------------------------------------
   if (value instanceof Date) {
     Logger.log(
       "[parseDate] IS_DATE = true (이미 Date 객체) : VALUE = " + value
@@ -123,17 +132,19 @@ function parseDate(value, format) {
     return null;
   }
 
-  //----------------------------------------------------------
-  // Already Date
-  //----------------------------------------------------------
-
   if (value instanceof Date) {
     return isNaN(value.getTime())
     ? null
     : value;
   }
 
-  const text = String(value).trim();
+  //----------------------------------------------------------
+  // 콤마 이후 시간 부분 제거 (날짜만 사용)
+  // 예: "19/2/2024, 5:21 pm" → "19/2/2024"
+  //----------------------------------------------------------
+
+  const rawText = String(value).trim();
+  const text = rawText.split(",")[0].trim();
 
   switch (format) {
 
@@ -152,6 +163,31 @@ function parseDate(value, format) {
       );
 
   }
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — parseDate() 시간 포함 값 처리
+ * ==========================================================
+ */
+function testParseDateWithTime(){
+
+  const result = parseDate("19/2/2024, 5:21 pm", "DMY");
+
+  const pass =
+    result instanceof Date &&
+    result.getFullYear() === 2024 &&
+    result.getMonth() === 1 &&   // 2월 (0-indexed)
+    result.getDate() === 19;
+
+  Logger.log(
+    "Result : " + result +
+    " (expected 2024-02-19)"
+  );
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -379,6 +415,11 @@ function getMonthText(date) {
  *  -> Lead Source Detail
  *  -> Lead Source
  *
+ * Change Log
+ * 2026-07-22
+ * - "Event Offline" -> "Seminar", "Event Online" -> "Webinar"로 리네이밍
+ *   (실무에서 부르는 명칭과 통일. 분류 조건/우선순위는 변경 없음).
+ *
  * @param {string} campaign
  * @param {string} detail
  * @param {string} leadSource
@@ -403,18 +444,18 @@ function getBusinessSegment(
   }
 
   //----------------------------------------------------------
-  // Event Offline
+  // Seminar (구 "Event Offline")
   //----------------------------------------------------------
 
   if (
     campaign.includes("event-offline") ||
     detail.startsWith("ev-")
   ) {
-    return "Event Offline";
+    return "Seminar";
   }
 
   //----------------------------------------------------------
-  // Event Online
+  // Webinar (구 "Event Online")
   //----------------------------------------------------------
 
   if (
@@ -422,7 +463,7 @@ function getBusinessSegment(
     detail.startsWith("wb-") ||
     detail.includes("zoom webinar")
   ) {
-    return "Event Online";
+    return "Webinar";
   }
 
   //----------------------------------------------------------
@@ -473,6 +514,51 @@ function getBusinessSegment(
   return "Other";
 
 }
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() 리네이밍 검증
+ *
+ * WHY
+ * "Event Offline"/"Event Online" -> "Seminar"/"Webinar" 리네이밍 후에도
+ * 기존 분류 조건(campaign/detail 패턴)이 그대로 동작하는지 확인.
+ * ==========================================================
+ */
+function testGetBusinessSegmentRenamed(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+    ["spring-event-offline-2026", "", "", "Seminar"],
+    ["", "EV-Spring26", "", "Seminar"],
+    ["fall-event-online-2026", "", "", "Webinar"],
+    ["", "WB-Fall26", "", "Webinar"],
+    ["", "Zoom Webinar Series", "", "Webinar"],
+    ["", "BOFU-Consult", "", "BOFU"],
+    ["", "", "Referral", "Referral"],
+    ["random-campaign", "", "", "Other"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
 
 /**
  * ==========================================================

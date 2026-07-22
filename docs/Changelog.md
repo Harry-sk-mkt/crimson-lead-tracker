@@ -151,3 +151,81 @@
   전체 프로젝트 파싱이 깨졌던 사고(`require is not defined`), Apps Script의 `_` 접미사 함수 Run 드롭다운 미노출 관례.
 - 교훈: **서버(Apps Script 편집기)에서 직접 코드를 수정하지 말 것 — 항상 로컬에서 수정 후 push.**
   Node 전용 유틸리티 스크립트는 프로젝트 폴더 밖에 두거나 `.claspignore`로 제외할 것.
+
+# Changelog — 2026-07-22
+
+## 1. MTA Funnel Sync 재검증 (09_MTAFunnelSync.js)
+- `rebuildLeadsMaster()`/`rebuildMTAMaster()`/`buildLeadsOPS()`/QA 재실행 완료, `24_OPSQA.js`의 QA
+  Dashboard에서 `#Won`(OPS 3093 vs MTA 2875, +218) / `Total Revenue`(OPS가 +415만 많음) 역방향 불일치 발견.
+- 원인: 삭제된 구버전 `08_ICFunnelSync.js`(ICFunnel_Raw 기반) 시절 잔존 데이터로, 현재 `MTA_Master`에는
+  대응 레코드가 없는 219건 (전부 category A: MTA_Master에 Lead ID 자체가 없음, 파싱 버그 아님).
+  `syncMTAFunnelToOPS_()`는 값이 있을 때만 채워넣고 지우지 않으므로 안전하게 보존됨 — 버그 아님, 정상.
+
+## 2. Business Segment 리네이밍
+- `Event Offline` → `Seminar`, `Event Online` → `Webinar` (분류 조건 변경 없음, 표시 이름만 변경).
+- 변경 파일: `16_TransformHelper.js`(`getBusinessSegment()`), `00_Config.js`(`CONFIG.ACQ.SEGMENTS`),
+  `docs/BusinessSegmentClassification.md`, `30_ACQReport.js` 주석.
+- **주의**: Master 재생성(`rebuildLeadsMaster()`/`rebuildMTAMaster()`) 전까지는 기존 데이터에 구 이름이 남아있음.
+
+## 3. ACQ Report "All Leads" 월별 집계 근본 한계 발견
+- `Last MKT UTM Campaign`이 Salesforce Lead 객체의 **현재 최종 상태 필드**임을 실데이터로 확인
+  (Lead `00Q7F00000VePrO`의 2020~2026년 여러 터치를 Salesforce에서 각각 필터링해도 전부 동일한 최신 캠페인).
+  터치 시점의 채널 정보를 전혀 보존하지 않음.
+- 영향: `MTA_Master`는 터치 단위(1 Lead=N Row)인데 `Business Segment`는 Lead 레벨 필드라 한 Lead의
+  모든 터치 row가 항상 동일 Segment를 가짐 → 월별 Segment 집계가 "그 달의 실제 채널"을 의미하지 않음.
+- **결정**: 리포트/코드 수정 없음. 한계를 `docs/ACQReportDesign.md`에 명시하는 것으로 마무리
+  (Lead 단위 dedup 재설계도 검토했으나, Segment 자체가 터치 시점 정보를 못 담으므로 근본 해결 안 됨).
+
+## 4. MTA_Master 중복 append 의심 (미해결, TODO)
+- `findDuplicateTouchRows_()`(`24_OPSQA.js`)로 같은 Lead ID+같은 MTA Created Date 조합 3,401개 그룹,
+  extra row 4,139건 발견. MTA_Raw 원문 확인 결과 애초에 시간 정보가 없는 날짜 단위 데이터라, 같은 날
+  여러 정상 터치인지 실제 재export로 인한 중복 append인지 현재 필드로는 구분 불가.
+- CLAUDE.md "현재 알려진 미해결 항목" 3번으로 TODO 유지.
+
+## 5. Leads_OPS 짝수 행 배경색(Row Banding) 추가
+- `20_OPS_Styles.js`에 `computeRowBandingColors_()` 추가, 짝수 행에 `#F3F3F3` 배경 — 컬럼 많은 행을
+  옆으로 읽을 때 row 경계 구분 목적. 35,000+ 행이라 `setBackgrounds()` 배치 호출로 구현 (개별 호출 지양).
+
+## 6. Leads_OPS ↔ Master 자동 Sync 연결
+- `appendNewLeads()` → `buildLeadsOPS(true)`(QA 생략) 자동 호출 추가.
+- `appendNewMTA()` → `syncMTAFunnelToOPS_()` 자동 호출로 대체 (기존 `refreshACQSummary_()` 단독 호출 제거,
+  `syncMTAFunnelToOPS_()`가 내부에서 이미 호출하므로 중복 방지).
+- 배경: "IC Requested 체크 후 다음 수동 sync 전까지 IC Booked Date가 안 보인다"는 실무 갭 해소 목적.
+  MTA sync는 Lead가 이미 Leads_OPS에 있어야 하지만, 매번 전체 재계산이라 순서가 뒤바뀌어도 다음 사이클에
+  자동으로 따라잡힘 (self-healing) — 두 담당자가 다른 날 독립적으로 import해도 무방.
+- 자세한 내용: `docs/OperationsLayer.md` "자동 Sync 연결" 섹션.
+
+## 7. IC Request Tracking 구현 (재신청 이력 보존)
+- `20_OPS_Config.js`: `IC Requested` 옆에 `Last IC Requested Date`, `Total IC Requests` 컬럼 추가.
+  `IC Requested`는 `MANUAL_COLUMNS`에서 제외 — `OPS.IC_REQUEST`(CHECKBOX/COUNTER)로 특수 관리.
+- `22_OPS_Merge.js`: `applyICRequestTracking_()` 추가. 매 merge마다 기존 `IC Requested`가 true였으면
+  `Total IC Requests` +1 후 리셋. 추가로 `IC Booked Date`가 있는데 카운트가 0이면 1로 하한 보정
+  (트래킹 도입 이전 기존 Booked 이력 백필 + 체크박스 없이 booked되는 예외 케이스 커버).
+- `20_OPS_Styles.js`: `Last IC Requested Date` 날짜 서식(yyyy-mm-dd) 추가.
+- 자세한 내용: `docs/OperationsLayer.md` "IC Request Tracking" 섹션.
+
+## 8. MTA Business Segment 필드 근본 수정 — "Last MKT UTM Campaign" → "MKT UTM Campaign"
+- **배경**: 3번 항목에서 "Salesforce 데이터 모델 자체의 한계"로 결론 냈던 것을, 사용자가 같은 날 오후
+  Salesforce 리포트 추출 필드를 `Last MKT UTM Campaign`(Lead 객체 레벨) → `MKT UTM Campaign`
+  (Multi Touch Attribution 객체 자체 필드)로 교체해서 실제로 해결함. 후자는 터치별 실제 캠페인 값이 찍힘.
+- `13_MTATransformer.js` v5.0.0: `getBusinessSegment()` 입력 필드 교체, Master 컬럼명도
+  `Last MKT UTM Campaign` → `MKT UTM Campaign`로 개명 (더 이상 "Lead의 최종 터치"가 아니므로).
+- `24_OPSQA.js`의 진단 함수들(`runInvestigateSegmentMonthAnomaly`, `runSampleDuplicateRawDates`)도
+  새 필드명으로 업데이트.
+- ⚠️ **`appendSheetRecords()`(`05_SheetWriter.js`) 주의**: 기존 데이터 있는 시트에 append할 때 **시트에
+  이미 있는 헤더만 기준으로 컬럼 매칭**. `MTA_Raw` 헤더에 `MKT UTM Campaign`이 없으면 새 CSV의 이
+  컬럼이 조용히 드롭됨. 재추출 CSV를 새 헤더 포함해서 다시 쌓아야 함.
+- **결정**: 과거 82,000+ 터치까지 정확한 Segment로 바로잡기 위해 **전체 재추출 + 재구축** 진행하기로 함
+  (부분 적용— MTA_Raw 헤더만 추가하고 신규 터치부터만 적용 — 대신 선택).
+  절차: MTA 전체 리포트 재추출(`MKT UTM Campaign` 포함) → `MTA_Raw`/`MTA_Master` 시트 내용 수동 삭제 →
+  `99_ResetRawMaster.js`의 `resetMTACounterOnly()` 실행 → "Import MTA"로 전체 CSV 재업로드 →
+  `rebuildMTAMaster()` 실행 (`refreshACQSummary_()` 자동 포함) → `buildLeadsOPS()`로 OPS도 갱신.
+- 자세한 내용: `docs/BusinessSegmentClassification.md` "필드 변경 이력", `docs/ACQReportDesign.md`
+  "All Leads/SAL — Segment 한계 해결됨" 섹션.
+
+## 다음에 다룰 항목
+- MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차).
+- `Total Touches`(MTA_Master 기준 터치 횟수) 컬럼 — Leads_OPS `Revenue Actual`과 `Notes` 사이(T/U열 사이)에 추가. 아직 미구현.
+- "Other" 세그먼트 중 Upsell 비중 조사 — `runInvestigateOtherSegmentComposition()`(`24_OPSQA.js`) 구현 완료,
+  실행 결과 확인 대기.
+- MTA_Master 중복 append 의심(4번 항목) — 여전히 미해결, CLAUDE.md TODO 3번 참고.
