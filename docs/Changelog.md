@@ -223,13 +223,33 @@
 - 자세한 내용: `docs/BusinessSegmentClassification.md` "필드 변경 이력", `docs/ACQReportDesign.md`
   "All Leads/SAL — Segment 한계 해결됨" 섹션.
 
-## 다음에 다룰 항목 (2026-07-22 오후 기준 갱신 — 아래 섹션 참고)
-- ~~MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차)~~ — 완료 (아래 "MTA_Raw Lead ID 누락" 섹션).
+## 14. Events_REP 설계 착수 — Meta 데이터 소스 확인 대기 (미해결)
+
+- 다음 리포트로 **Events_REP** 논의 시작: Business Segment 중 **Webinar/Seminar만** 대상,
+  NewP1_REP과 달리 **All Leads부터** 퍼널을 그림 (P1 필터 없음), 여기에 마케팅 캠페인 성과를 연결해
+  프로그램 자체의 실질 퍼포먼스(ROI)를 보는 목적.
+- **소스 결정**: `MTA_Master` (사용자 선택) — "All Leads"가 이미 ACQ_REP에서 MTA_Master 기준
+  용어이고, 터치별 `MKT UTM Campaign`이 이미 존재. 퍼널 지표(IC Booked/Complete/Won/Revenue)는
+  `Leads_OPS`와 Lead ID로 join 필요 (`09_MTAFunnelSync.js`의 기존 매칭 로직 재사용 가능성 있음).
+- **막힌 지점**: "마케팅 캠페인"이 Salesforce `MKT UTM Campaign` 라벨이 아니라 **Meta 광고
+  플랫폼 자체의 퍼포먼스 데이터**(스펜드/도달/CTR 등으로 추정)를 붙여서 보고 싶다는 의미로 확인됨.
+  이는 현재 파이프라인에 전혀 없는 새 외부 데이터 소스라, 다음 세션에서 먼저 확인 필요:
+  1. Meta 광고 성과 데이터를 지금 어떻게 확보 중인지 (수동 CSV export? 기존 시트? 아직 없음?)
+  2. Meta 캠페인과 Salesforce `MKT UTM Campaign` 간 join key(이름/ID 일치 여부)
+  3. Meta 데이터의 시간 단위(일별/주별/캠페인 누적)
+  4. 새 Import 파이프라인(`Meta_Raw` 등) 신설 필요 여부
+- 코드 변경 없음 — 순수 논의만 진행, 사용자가 다른 대화창(claude.ai)에서 이어가기로 함.
+
+## 다음에 다룰 항목 (2026-07-22 최종 갱신)
+- ~~MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차)~~ — 완료.
+- ~~BOFU fix 반영 MTA_Master 재구축~~ — 완료 (82,421건 매칭 확인).
+- **Events_REP 설계 이어가기 (14번 항목)** — Meta 광고 성과 데이터 확보 방식부터 확인 필요. 다음 세션 최우선.
 - `Total Touches`(MTA_Master 기준 터치 횟수) 컬럼 — Leads_OPS `Revenue Actual`과 `Notes` 사이(T/U열 사이)에 추가. 아직 미구현.
 - "Other" 세그먼트 중 Upsell 비중 조사 — `runInvestigateOtherSegmentComposition()`(`24_OPSQA.js`) 구현 완료,
   실행 결과 확인 대기.
 - MTA_Master 중복 append 의심(4번 항목) — 여전히 미해결, CLAUDE.md TODO 3번 참고.
-- BOFU fix 반영 MTA_Master 재구축 완료 확인 대기 (아래 참고).
+- NewP1_REP: Segment가 실제 데이터 있는 조합만 sparse하게 표시됨(전체 7개 고정 표시 아님) —
+  사용자가 "지금 급하지 않다"고 확인, 필요 시 재검토.
 
 # Changelog — 2026-07-22 (계속, 오후)
 
