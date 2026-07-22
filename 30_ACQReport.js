@@ -14,9 +14,16 @@
  * 20 Reporting
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-07-22)
+ * - Added isEffectiveP1_(): New P1 판정을 NewP1_REP 설계와 통일 —
+ *   Priority Override 우선, "Priority 1" exact match (기존
+ *   `indexOf("1")` substring 비교 + Priority Override 미반영 수정).
+ *   computeOPSAggregates_()의 New P1 카운트에 적용. All P1(MTA_Master
+ *   기반)은 Priority Override 컬럼 자체가 없어 대상 아님 — 그대로 유지.
+ *   테스트: testIsEffectiveP1().
  * v1.4.0 (2026-07-22)
  * - computeOPSAggregates_(): IC Booked/IC Complete/Revenue를 Create Date
  *   코호트 → 각자의 이벤트 날짜(IC Booked Date/IC Completed Date/
@@ -527,6 +534,76 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
 
 /**
  * ==========================================================
+ * Is Effective P1
+ *
+ * WHY (2026-07-22 추가)
+ * New P1 판정을 NewP1_REP 설계(docs/NewP1ReportDesign.md)와 통일.
+ * 기존엔 `Priority Override`를 무시하고 `Lead Priority`에 `indexOf("1")`
+ * 로 느슨하게(substring) 비교했음 — "Priority 10"류 값이 있었다면
+ * 오탐 가능했고, 마케팅이 수동으로 걸어둔 Priority Override도 반영이
+ * 안 됐음. Priority Override가 있으면 그 값을 우선하고, "Priority 1"
+ * 정확히 일치하는 경우만 P1으로 판정하도록 변경.
+ *
+ * @param {string} leadPriority
+ * @param {string} priorityOverride
+ * @return {boolean}
+ *
+ * TEST
+ * isEffectiveP1_("Priority 1", "") === true
+ * isEffectiveP1_("Priority 2", "Priority 1") === true (Override 우선)
+ * isEffectiveP1_("Priority 1", "Priority 2") === false (Override가 덮어씀)
+ * isEffectiveP1_("Priority 10", "") === false (기존 substring 버그 재현 방지)
+ * ==========================================================
+ */
+function isEffectiveP1_(leadPriority, priorityOverride){
+
+  const override = String(priorityOverride || "").trim();
+  const effective = override !== "" ? override : String(leadPriority || "").trim();
+
+  return effective === "Priority 1";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEffectiveP1_()
+ * ==========================================================
+ */
+function testIsEffectiveP1(){
+
+  const cases = [
+    // [leadPriority, priorityOverride, expected]
+    ["Priority 1", "", true],
+    ["Priority 2", "Priority 1", true],
+    ["Priority 1", "Priority 2", false],
+    ["Priority 10", "", false],
+    ["", "", false]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = isEffectiveP1_(c[0], c[1]);
+    const ok = result === c[2];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "leadPriority=\"" + c[0] + "\" priorityOverride=\"" + c[1] + "\"" +
+      " => " + result + " (expected " + c[2] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute OPS Aggregates (New Leads / New P1 / IC Booked / IC Complete / Revenue)
  *
  * WHY (2026-07-22 변경)
@@ -567,6 +644,7 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
   const createDateCol = headers.indexOf("Create Date");
   const segmentCol = headers.indexOf("Business Segment");
   const priorityCol = headers.indexOf("Lead Priority");
+  const priorityOverrideCol = headers.indexOf("Priority Override");
   const icBookedCol = headers.indexOf("IC Booked Date");
   const icCompleteCol = headers.indexOf("IC Completed Date");
   const wonDateCol = headers.indexOf("Opportunity Won Date");
@@ -602,7 +680,7 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
 
       result.newLeads[key] = (result.newLeads[key] || 0) + 1;
 
-      if(String(row[priorityCol]).indexOf("1") !== -1){
+      if(isEffectiveP1_(row[priorityCol], row[priorityOverrideCol])){
         result.newP1[key] = (result.newP1[key] || 0) + 1;
       }
 

@@ -277,6 +277,19 @@
   (SAL/IC Booked/IC Complete/Revenue) 셀에 날짜 기준을 Note로 남겨, 코호트/이벤트 기준 혼동 방지.
   `applyACQReportStyles_()`가 매 리포트 생성마다 자동 호출하므로 항상 최신 유지.
 
+## 12.6. NewP1_REP 설계 확정 + ACQ_REP New P1 로직 통일
+- 사용자가 `docs/NewP1ReportDesign.md`에 NewP1_REP(New P1 Cohort Funnel Report) 설계를 직접 정리 —
+  소스는 `Leads_OPS` 단일, 코호트는 `Create Date` + 유효 Priority(`Priority Override` 우선 →
+  `Lead Priority`, exact match `"Priority 1"`), SAL 판정은 `Total IC Requests` > 0(MTA 무관),
+  Won 판정은 `Revenue` > 0, Row는 FY>Month>Fiscal Week>Segment flat 구조(소계 없음), Engine과
+  Summary를 `NewP1_Engine` 한 시트로 통합. 리뷰 결과 Article 번호 인용/실제 함수 동작 모두 정확함 확인.
+- 리뷰 중 발견: ACQ_REP의 New P1(`computeOPSAggregates_()`)이 `Priority Override`를 무시하고
+  `Lead Priority`에 `indexOf("1")`(substring)로 느슨하게 비교하고 있어, NewP1_REP 설계(exact match +
+  Override 우선)와 기준이 달랐음. 사용자 확인 후 **ACQ_REP의 New P1도 같은 기준으로 통일** —
+  `isEffectiveP1_()` 신규 추가(`30_ACQReport.js` v1.5.0), 테스트 `testIsEffectiveP1()` 포함.
+  All P1(MTA_Master 기반)은 `Priority Override` 컬럼 자체가 없어 대상 아니고 기존 로직 유지.
+- NewP1_REP 구현은 다음 세션 대기 (`40_NewP1Report.js`/`41_NewP1ReportStyles.js`/`CONFIG.NEWP1` 신규 예정).
+
 ## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
 - 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
   점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.
