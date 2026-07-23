@@ -1,3 +1,22 @@
+# Changelog — 2026-07-24 (문서 반영 누락 정정)
+
+## `Leads_OPS_QA` 시트 구현 완료 사실 뒤늦게 반영
+- `24_OPSQA.js`(`writeOPSQAResults_()`)에 Dashboard(Master vs Leads_OPS 지표 대조) + Issues 테이블을
+  `Leads_OPS_QA` 시트에 쓰는 로직이 이미 완전히 구현되어 있고, `buildLeadsOPS()` 실행 시 자동 호출
+  (`21_OPS_Build.js`)까지 연결되어 있음을 확인. 메뉴에도 "Run Leads_OPS QA" 수동 실행 항목 존재.
+- 실제로는 2026-07-22 커밋(`c0dec13`, `24_OPSQA.js` 최초 추가) 시점에 이미 구현 완료된 상태였으나,
+  env(로컬 개발 환경) 전환 과정에서 CLAUDE.md "현재 알려진 미해결 항목" 1번과 Changelog에 반영이
+  누락된 것으로 추정. CLAUDE.md 1번 항목을 완료 처리로 정정.
+
+## CLAUDE.md 2번 항목 정정 — IC Request(SAL) `#touches` 지표는 4번(재신청 카운터)과 동일 항목
+- 별개의 미해결 항목으로 잘못 분리 기재돼 있었음. 4번 항목(`applyICRequestTracking_()`,
+  `Total IC Requests`/`Last IC Requested Date`)이 곧 이 지표의 구현이었음을 확인, 완료 처리로 정정.
+
+## `OperationsLayer.md` 143~148행 정정 — `applyOPSStyle()` 하드코딩 "미해결" 표기 오류
+- 실제 코드(`20_OPS_Styles.js`)는 이미 `OPS.ROWS.HEADER`/`OPS.ROWS.DATA_START`로 전부 교체되어 있었음
+  (Changelog 2026-07-21 "applyOPSStyle() 하드코딩 정리 완료" 기록과 일치). `OperationsLayer.md`에만
+  구버전 상태로 남아있던 것을 정정.
+
 # Changelog — 2026-07-21
 
 이날 하루 동안 진행된 리팩토링 요약. 시간순 기록.
