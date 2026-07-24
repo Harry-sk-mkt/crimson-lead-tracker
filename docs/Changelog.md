@@ -176,6 +176,49 @@
   `runInvestigateContentProgramCount()`(프로그램 개수로 TYPE 필터 필요 여부 판단, BOFU 검증 방식과
   동일) → `buildSearchOPS()`/`buildContentOPS()` 순으로 실행해 실데이터 검증할 차례.
 
+## MTA_Master 필드명 회귀 발견 + 수정 (`13_MTATransformer.js` v5.2.0)
+- **발견 경위**: 위 Search 실데이터 검증 중 `Search_Engine`이 25개 프로그램(대부분 eBook 이름)만
+  잡히는 문제를 조사하다가, `MTA_Master`의 실제 라이브 헤더(사용자가 직접 시트에서 확인해 공유)가
+  `"Lead Source Detail"`인데, 현재 `13_MTATransformer.js`(git divergence 병합 시 origin 버전을
+  `checkout --theirs`로 통째로 채택한 파일)는 `"First Touch Detail"`을 출력하고 있음을 발견.
+- **원인**: 이전 세션에서 이미 `"First Touch Detail"` → `"Lead Source Detail"`로 rename했었고
+  Events/BOFU/Search/Content(50/60/70/80번대) 전부 이 이름을 기대하도록 구현됐는데, 나중에 origin
+  divergence 해소 과정에서 origin의 `13_MTATransformer.js`(rename 이전 버전, BOFU detail 인자 버그만
+  고친 버전)를 그대로 채택하면서 이 rename이 조용히 되돌아가 있었음 — 코드와 라이브 시트 헤더가
+  어긋난 상태. `rebuildMTAMaster()`를 그 이후로 재실행한 적이 없어 시트 헤더가 구버전 그대로라
+  지금까지는 문제가 드러나지 않았을 뿐, 다음 Full Rebuild 시 전체 트래커(Events/BOFU/Search/Content)의
+  MTA측 지표(SF Reg./SF P1s)가 조용히 0으로 깨질 뻔한 잠재 버그였음.
+- **수정**: 출력 필드명을 `"Lead Source Detail"`로 복원, 회귀 테스트
+  `testTransformMTARecord_OutputFieldName()` 추가.
+
+## Search 매칭 키 실데이터 재검증 → 최종 확정 (`70_Search_Config.js` v1.2.0, `71_Search_Engine.js` v1.2.0)
+- **문제**: MTA 필드명 수정 후에도 Search_Engine이 여전히 소수(25개) 프로그램만 찾음. 원인은
+  `isKoreanProgram_()`가 Marketo Program 이름 구조(`TYPE-YYYY-MM-COUNTRY-...`, 4번째 토큰이 국가)를
+  가정하는데, 실제 Search 리드는 대부분 Marketo Program(웹폼) 없이 직접 캡처되는 광고/상담 신청이라
+  이 구조를 따르지 않음(국가 토큰 위치가 다르거나 아예 없음, 예: `"MedView - Contact Form"`).
+- **1차 수정**: `MATCH_FIELD`를 Marketo Program 이름 필드(`Lead Source Detail`/`First Touch Detail`)에서
+  raw `MKT UTM Campaign`/`First MKT UTM Campaign`로 변경 → 260개 캠페인으로 개선(`KR_core_...`,
+  `US_core_...`, `ASIA_cgahq_...` 등 실제 광고 캠페인 슬러그 확인).
+- **국가 필터 최종 결정(사용자 확인)**: 실측 결과 국가 토큰이 `KOR`이 아니라 `KR_`/`US_`/`ASIA_` 등
+  언더스코어 앞 접두어 구조였고, 대소문자·중괄호(`{...}`) 차이로 같은 캠페인이 쪼개지는 데이터 품질
+  이슈도 발견됨. Revenue 있는 Search 리드가 총 25개뿐이라 자동 국가 필터/정규화보다 사용자가 A열
+  (hidden, MKT UTM Campaign 원본)을 보고 직접 Marketo Program 매핑 + 한국 딜 여부 + 중복 캠페인
+  정리를 수동으로 하는 것으로 최종 확정 — `isKoreanProgram_()` 호출 제거, 자동 정규화 없음.
+  `runInvestigateSearchProgramCount()`에 `"KOR"` 포함 여부 분포 출력을 참고용으로 추가.
+
+## 메뉴 라벨 변경 — "Update X" → "🔄 Sync X" (`00_Menu.js` v3.4.0)
+- "🗂️ OPS" 메뉴의 Events/BOFU/Search/Content 4개 항목 라벨을 통일된 "🔄 Sync X" 형태로 변경
+  (호출 함수는 그대로).
+
+## Deal Tracker 설계 논의 → 구현 보류, 레거시 방식 유지 (사용자 결정)
+- Leads_OPS와 별개로 Salesforce Lead Source 오류 정정용 워킹시트("Deal Tracker") 설계를 논의,
+  컬럼 정의까지 확정했으나 구현 직전 사용자가 "예전 방식으로 관리하겠다"며 보류 결정.
+- 논의 중 확인된 사실(향후 재논의 시 참고): `Leads_Raw`에 `Opportunity Name`/`Opportunity ID` 필드가
+  전혀 없음, `Opportunity Won Date`는 실제로는 "Opportunity로 전환된 날짜"이지 진짜 Close Date가
+  아님이 확인됨(진짜 Close Date 필드 자체가 export에 없음) — 두 사실 모두 이 워크북/리포트 구조상의
+  실제 제약이라 향후 유사 기능 설계 시에도 동일하게 적용됨.
+- 코드 변경 없음 (생성했던 `90_Deal_Config.js` 초안은 사용자 지시로 삭제, 커밋된 적 없음).
+
 # Changelog — 2026-07-21
 
 이날 하루 동안 진행된 리팩토링 요약. 시간순 기록.
