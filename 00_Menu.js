@@ -4,9 +4,17 @@
  * Custom Menu
  *
  * Version
- * v3.1.0
+ * v3.4.0
  *
  * Change Log
+ * v3.4.0 (2026-07-24)
+ * - "🗂️ OPS" 메뉴 항목 라벨을 "Update X" → "🔄 Sync X"로 변경 (Events/BOFU/
+ *   Search/Content 전부). 실제 호출 함수/래퍼는 그대로 유지.
+ * v3.3.0 (2026-07-24)
+ * - "🗂️ OPS" 메뉴에 "Update Search"(menuUpdateSearchOPS → buildSearchOPS())와
+ *   "Update Content"(menuUpdateContentOPS → buildContentOPS()) 추가.
+ * v3.2.0 (2026-07-24)
+ * - "🗂️ OPS" 메뉴에 "Update BOFU"(menuUpdateBOFUOPS → buildBOFUOPS()) 추가.
  * v3.1.0 (2026-07-24)
  * - "✅ QA" 메뉴(createQAMenu()) 제거, "🗂️ OPS" 메뉴로 대체 (createOPSMenu()).
  *   Leads_OPS QA는 buildLeadsOPS() 실행 시 자동 수행이라 메뉴 실익 낮음 —
@@ -109,7 +117,10 @@ function createOPSMenu() {
 
   SpreadsheetApp.getUi()
     .createMenu("🗂️ OPS")
-    .addItem("Update Events", "menuUpdateEventsOPS")
+    .addItem("🔄 Sync Events", "menuUpdateEventsOPS")
+    .addItem("🔄 Sync BOFU", "menuUpdateBOFUOPS")
+    .addItem("🔄 Sync Search", "menuUpdateSearchOPS")
+    .addItem("🔄 Sync Content", "menuUpdateContentOPS")
     .addToUi();
 
 }
@@ -129,6 +140,42 @@ function menuUpdateEventsOPS(){
   );
 
   buildEventsOPS();
+
+}
+
+
+function menuUpdateBOFUOPS(){
+
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Menu : Update BOFU"
+  );
+
+  buildBOFUOPS();
+
+}
+
+
+function menuUpdateSearchOPS(){
+
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Menu : Update Search"
+  );
+
+  buildSearchOPS();
+
+}
+
+
+function menuUpdateContentOPS(){
+
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Menu : Update Content"
+  );
+
+  buildContentOPS();
 
 }
 

@@ -10,9 +10,15 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.0.0
+ * v4.2.0
  *
  * Change Log
+ * v4.2.0 (2026-07-24)
+ * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 refreshSearchEngine_()/
+ *   refreshContentEngine_() 호출 추가 (refreshBOFUEngine_() 바로 옆).
+ * v4.1.0 (2026-07-24)
+ * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 refreshBOFUEngine_()
+ *   호출 추가 (refreshEventsEngine_() 바로 옆).
  * v4.0.0 (2026-07-21)
  * - buildLeadsMaster/buildMTAMaster → rebuildLeadsMaster/rebuildMTAMaster로 개명.
  * - buildAllMaster() 제거 (Leads/MTA 완전 분리 운영으로 전환).
@@ -74,6 +80,9 @@ function rebuildLeadsMaster(showAlert = true) {
   refreshNewP1Engine_();
 
   refreshEventsEngine_();
+  refreshBOFUEngine_();
+  refreshSearchEngine_();
+  refreshContentEngine_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +
@@ -157,6 +166,9 @@ function rebuildMTAMaster(showAlert = true) {
   refreshNewP1Engine_();
 
   refreshEventsEngine_();
+  refreshBOFUEngine_();
+  refreshSearchEngine_();
+  refreshContentEngine_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +

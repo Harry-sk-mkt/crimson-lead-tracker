@@ -18,7 +18,14 @@
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
  *
  * Version
- * v1.0.0
+ * v1.2.0
+ *
+ * Change Log
+ * v1.2.0 (2026-07-24)
+ * - refreshSearchEngine_()/refreshContentEngine_() 호출 추가 (refreshBOFUEngine_()
+ *   바로 옆).
+ * v1.1.0 (2026-07-24)
+ * - refreshBOFUEngine_() 호출 추가 (refreshEventsEngine_() 바로 옆).
  * ==========================================================
  */
 
@@ -326,6 +333,9 @@ function syncMTAFunnelToOPS_(){
   refreshNewP1Engine_();
 
   refreshEventsEngine_();
+  refreshBOFUEngine_();
+  refreshSearchEngine_();
+  refreshContentEngine_();
 
 }
 

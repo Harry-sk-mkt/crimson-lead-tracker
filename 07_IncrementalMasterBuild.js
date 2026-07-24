@@ -10,9 +10,16 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.1.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-24)
+ * - appendNewLeads()에 refreshSearchEngine_()/refreshContentEngine_() 호출 추가
+ *   (refreshBOFUEngine_() 바로 옆) — Search/Content Engine도 Master/OPS 변경 시
+ *   항상 최신 유지.
+ * v1.2.0 (2026-07-24)
+ * - appendNewLeads()에 refreshBOFUEngine_() 호출 추가 (refreshEventsEngine_()
+ *   바로 옆) — BOFU_Engine도 Master/OPS 변경 시 항상 최신 유지.
  * v1.1.0 (2026-07-22)
  * - appendNewLeads() : Master append 후 buildLeadsOPS(skipQA=true) 자동 호출 추가.
  *   신규 Lead가 Leads_OPS에 지체 없이 반영되어야 이후 MTA sync의 대상이 될 수 있음.
@@ -102,6 +109,9 @@ function appendNewLeads(){
   refreshNewP1Engine_();
 
   refreshEventsEngine_();
+  refreshBOFUEngine_();
+  refreshSearchEngine_();
+  refreshContentEngine_();
 
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);

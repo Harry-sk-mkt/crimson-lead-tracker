@@ -141,6 +141,41 @@
 - TDD 원칙에 따라 `testFindExactDuplicateTouchRows()` 단위 테스트 함께 추가 (기존 `findDuplicateTouchRows_()`
   로직과 별개로 유지 — 후자는 여전히 1차 스크리닝용 진단 유틸리티로 남겨둠).
 
+## BOFU_OPS/BOFU_Engine, Search_OPS/Search_Engine, Content_OPS/Content_Engine 트래커 구현 (Events 패턴 복제)
+- **배경**: Events_OPS 구현·실데이터 검증이 끝난 뒤, 동일한 "세그먼트별 ROI 트래커" 패턴을
+  BOFU(Meta 광고 성과) 세그먼트에도 적용(claude.ai 작성 설계 문서 기반, 설계 문서가 명시적으로
+  Claude Code+사용자 판단으로 미룬 항목들 — 매칭 필드 확인/최종 컬럼 순서·색상/보호 전략/CPNP1
+  포함 여부/SUBTOTAL 대상 — 을 이 세션에서 확정), 이어서 "동일한 구조로 Search랑 ebook도 만들자"는
+  직접 요청에 따라 Search(기존 Business Segment 값)와 "Ebook" 트래커를 연속 구현. Ebook은 사용자
+  확인 결과 별도 세분화 없이 기존 `"Content"` Business Segment 전체를 대상으로 하는 것으로 확정
+  (시트명 `Content_OPS`/`Content_Engine`).
+- **신규 파일 18개** (60/70/80번대, 각 6파일 — Config/Engine/Build/Merge/Write/Styles):
+  `60~65_BOFU_*.js`, `70~75_Search_*.js`, `80~85_Content_*.js`. 세 트랙커 모두 스키마·컬럼 순서·
+  숨김 컬럼(A:C)·헤더 색상 그룹(Marketo 보라/SF 하늘색/Meta 브랜드블루/Derived 회색) 완전히 동일 —
+  `SEGMENTS`/시트 이름/함수명 프리픽스만 다름.
+- **범용 헬퍼 재사용 원칙 준수**: `stripRegistrationFormSuffix_`/`isKoreanProgram_`/`isValidDate_`/
+  `divideGuard_`/`copyColumns_`/`columnIndexToLetter_`/`computeRowBandingColors_` 등은 Events 최초
+  구현 파일(50번대)/`20_OPS_Styles.js`에 있는 정의를 그대로 재사용, 트래커마다 재정의하지 않음 —
+  전역 네임스페이스 중복 선언으로 인한 전체 프로젝트 크래시 방지 (매 파일 배치 작성 후
+  `grep -hoE "^(function|const) [A-Za-z0-9_]+" *.js | sort | uniq -c | awk '$1>1'`로 검증).
+- **Events의 P1 판정 버그를 반복하지 않음**: Events(`51_Events_Engine.js`)는 느슨한 substring
+  매칭(`Lead Priority.indexOf("1") !== -1`, "Priority 10"도 오탐)을 그대로 쓰고 있음(NewP1_REP/
+  ACQ_REP에서 이미 발견·수정된 버그, Events 자체는 이번 스코프 밖이라 손대지 않음). BOFU/Search/
+  Content는 `isEffectiveBOFUP1_`/`isEffectiveSearchP1_`/`isEffectiveContentP1_`로 정확히
+  `=== "Priority 1"`만 인정 — `Priority Override`는 `Leads_OPS`에만 존재하고 `MTA_Master`/
+  `Leads_Master`엔 없어 exact match만 적용.
+- **Engine 자동 갱신 배선**: `refreshBOFUEngine_()`/`refreshSearchEngine_()`/`refreshContentEngine_()`를
+  `07_IncrementalMasterBuild.js`(`appendNewLeads()`), `09_MTAFunnelSync.js`(`syncMTAFunnelToOPS_()`),
+  `10_MasterBuild.js`(`rebuildLeadsMaster()`/`rebuildMTAMaster()`) 총 4개 호출부에 기존
+  `refreshACQSummary_(); refreshNewP1Engine_(); refreshEventsEngine_();` 체인 뒤에 추가.
+- **메뉴**: `00_Menu.js` v3.3.0 — "🗂️ OPS" 메뉴에 "Update Search"(`buildSearchOPS()`)/"Update
+  Content"(`buildContentOPS()`) 추가 (BOFU는 이전 커밋에서 이미 추가됨).
+- **검증**: 전체 `.js` 파일 `node --check` 통과, 중복 top-level 선언 없음 확인 후 `clasp push --force`로
+  55개 파일 전체 배포 완료. 사용자가 스크립트 편집기에서 각 트래커의 `testXXXX()` →
+  `runRefreshSearchEngine()`/`runRefreshContentEngine()` → `runInvestigateSearchProgramCount()`/
+  `runInvestigateContentProgramCount()`(프로그램 개수로 TYPE 필터 필요 여부 판단, BOFU 검증 방식과
+  동일) → `buildSearchOPS()`/`buildContentOPS()` 순으로 실행해 실데이터 검증할 차례.
+
 # Changelog — 2026-07-21
 
 이날 하루 동안 진행된 리팩토링 요약. 시간순 기록.
