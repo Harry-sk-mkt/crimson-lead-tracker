@@ -10,9 +10,14 @@
  * 20 Reporting
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-07-24)
+ * - onEdit()에 NewP1_REP 분기 복구 (CONFIG.NEWP1.SHEET →
+ *   handleNewP1ReportGenerateEdit_() 호출). 세션 중 실수로 삭제됐던
+ *   40_NewP1Report.js/CONFIG.NEWP1 복구 작업의 일부 — 이 분기가 없으면
+ *   NewP1_REP의 Generate 체크박스가 아무 동작도 안 함.
  * v1.3.0 (2026-07-21)
  * - Fixed: generateACQReport_() 안에 "Report Area 작성" 블록이
  *   (신규 summaryMap 버전 + 구버전 mtaAgg/opsAgg 버전) 중복 남아있던
@@ -143,7 +148,15 @@ function findFiscalYearRange_(){
 /**
  * ==========================================================
  * onEdit Simple Trigger
- * (변경 없음)
+ *
+ * WHY
+ * GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히
+ * 덮어쓰므로, onEdit() 자체는 이 파일 하나에만 두고 시트 이름으로
+ * 분기해서 각 리포트의 handle*Edit_()를 호출한다.
+ *
+ * 2026-07-24 복구: NewP1_REP 분기(handleNewP1ReportGenerateEdit_ 호출)가
+ * 세션 중 실수로 삭제되어 있던 걸 복구 — 40_NewP1Report.js 자체의
+ * 문서화된 의도("onEdit()은 여기 하나에만") 그대로 반영.
  * ==========================================================
  */
 function onEdit(e){
@@ -151,27 +164,40 @@ function onEdit(e){
   if(!e || !e.range) return;
 
   const sheet = e.range.getSheet();
+  const sheetName = sheet.getName();
 
-  if(sheet.getName() !== CONFIG.ACQ.SHEET) return;
+  if(sheetName === CONFIG.ACQ.SHEET){
 
-  const row = e.range.getRow();
-  const col = e.range.getColumn();
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
 
-  const isGenerateCell =
-    row === CONFIG.ACQ.ROWS.CONTROL_VALUE &&
-    col === CONFIG.ACQ.COLUMNS.GENERATE;
+    const isGenerateCell =
+      row === CONFIG.ACQ.ROWS.CONTROL_VALUE &&
+      col === CONFIG.ACQ.COLUMNS.GENERATE;
 
-  if(!isGenerateCell) return;
+    if(!isGenerateCell) return;
 
-  if(e.value !== "TRUE") return;
+    if(e.value !== "TRUE") return;
 
-  try {
+    try {
 
-    generateACQReport_();
+      generateACQReport_();
 
-  } finally {
+    } finally {
 
-    sheet.getRange(row, col).setValue(false);
+      sheet.getRange(row, col).setValue(false);
+
+    }
+
+    return;
+
+  }
+
+  if(sheetName === CONFIG.NEWP1.SHEET){
+
+    handleNewP1ReportGenerateEdit_(e, sheet);
+
+    return;
 
   }
 

@@ -1,5 +1,37 @@
 # Changelog — 2026-07-24 (Events_OPS/Events_Engine 구현)
 
+## NewP1 Report 복구 (40_NewP1Report.js / CONFIG.NEWP1 / onEdit 분기)
+
+**배경**: `40_NewP1Report.js`(New P1 Cohort Funnel Report)와 그 Styles 파일, `00_Config.js`의
+`CONFIG.NEWP1` 블록, `30_ACQReport.js`의 `onEdit()` NewP1 분기가 전부 Apps Script 서버에만
+존재하던 상태였음(로컬 git엔 한 번도 커밋된 적 없음 — "서버에서 직접 수정 금지" 원칙이 이번에도
+어겨진 사례). Events 작업 중 40번대 파일 번호가 겹친 걸 발견해 정리하는 과정에서 사용자가
+`40_Events_Config.js` 등 6개 구 파일을 삭제할 때 이 NewP1 파일들도 실수로 같이 삭제됨. 추가로
+이 세션에서 여러 번 실행한 `clasp push --force`가 `CONFIG.NEWP1`이 없는 로컬 `00_Config.js`로
+원격을 덮어써, 파일 삭제와 별개로 설정 블록 자체도 같이 사라짐(이 부분은 사용자 실수가 아니라
+이쪽 작업 방식의 문제).
+
+**복구 방법**: Apps Script 버전 기록에 삭제 이전 시점이 없어(당일 09:43 기록만 존재), 사용자가
+직전 세션에서 대화 중 붙여넣어 공유해준 파일 원문을 근거로 재구성. 실제 `NewP1_REP`/`NewP1_Engine`
+시트 자체는 삭제되지 않고 살아있어(코드 삭제가 시트 데이터를 지우진 않음), 사용자가 확인해준
+실제 레이아웃(1행 Control Header/2행 Control Value/4행 Report Header/5행 데이터 시작, 시트명
+"NewP1_REP"/"NewP1_Engine")을 근거로 `CONFIG.NEWP1`을 재구성 — `CONFIG.ACQ`와 완전히 동일한
+구조(코드가 `CONFIG.ACQ.SEGMENTS`/`FISCAL_MONTH_ORDER`를 그대로 재사용하는 것으로 확인됨).
+
+**복구 결과물**:
+- `00_Config.js` v1.1.0 — `CONFIG.NEWP1`(SHEET/ENGINE_SHEET/ROWS/COLUMNS) 추가.
+- `40_NewP1Report.js` v1.2.0 — 원본 로직 그대로 복원 + `isEffectiveP1_()` 신규 재구성(원본
+  정의를 못 찾아 Styles 파일 헤더 Note의 설명을 근거로 재구성, 문서에 상세 스펙 없음 — 사용자
+  확인 후 확정). 원본과 100% 동일하다는 보장은 없음(diff 대조 불가).
+- `41_NewP1ReportStyles.js`(파일명은 추정 — 원본 파일명 확인 불가, ACQReport/ACQReportStyles
+  관례를 따름. Apps Script는 전역 네임스페이스라 파일명이 달라도 동작엔 영향 없음) v1.3.0.
+- `30_ACQReport.js` v1.4.0 — `onEdit()`에 NewP1_REP 분기(`handleNewP1ReportGenerateEdit_` 호출)
+  복구. 이게 없으면 NewP1_REP의 Generate 체크박스가 아무 반응도 안 함.
+- **⚠️ MAX_WEEKS 값은 복구 불가** — 코드 자체가 "더 이상 안 씀"이라고 명시했던 값이라 기능엔
+  영향 없음.
+- 검증 필요(사용자 실행): 각 파일의 `testXXXX()`(`testIsEffectiveP1` 포함) → `runRefreshNewP1Engine()`
+  → `NewP1_REP`에서 Generate 체크박스 토글해 리포트 생성 정상 동작 확인.
+
 ## Events_OPS / Events_Engine 최초 구현
 - 설계: `docs/EventsReportDesign.md` (같은 날 세션에서 확정). Webinar/Seminar 프로그램별 ROI
   리포트 — 별도 xlsx(FTA/OPs/Ads perf)로 관리하던 실무를 이 워크북으로 이관하는 첫 구현.
