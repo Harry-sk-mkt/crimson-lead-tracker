@@ -100,6 +100,8 @@ function appendNewLeads(){
 
   refreshACQSummary_();
 
+  refreshEventsEngine_();
+
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);
 

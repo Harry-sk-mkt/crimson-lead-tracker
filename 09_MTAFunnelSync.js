@@ -324,6 +324,8 @@ function syncMTAFunnelToOPS_(){
 
   refreshACQSummary_();
 
+  refreshEventsEngine_();
+
 }
 
 

@@ -1,4 +1,77 @@
-# Changelog — 2026-07-24 (문서 반영 누락 정정)
+# Changelog — 2026-07-24 (Events_OPS/Events_Engine 구현)
+
+## Events_OPS / Events_Engine 최초 구현
+- 설계: `docs/EventsReportDesign.md` (같은 날 세션에서 확정). Webinar/Seminar 프로그램별 ROI
+  리포트 — 별도 xlsx(FTA/OPs/Ads perf)로 관리하던 실무를 이 워크북으로 이관하는 첫 구현.
+- 신규 파일 6개 (50번대 블록, Leads_OPS/ACQ_Summary 패턴을 그대로 본뜸):
+  `50_Events_Config.js`(EVENTS config) / `51_Events_Engine.js`(UTM Key별 SF 집계,
+  `refreshEventsEngine_()`) / `52_Events_Build.js`(오케스트레이션, `buildEventsOPS()`) /
+  `53_Events_Merge.js`(Manual 컬럼 보존 병합, `mergeEventsOPS_()`) /
+  `54_Events_Write.js`(시트 쓰기 + SUBTOTAL 행 수식) / `55_Events_Styles.js`(서식).
+- 4-시트(OPS/Engine/QA/REP) 설계에서 프로그램 수(~130~150개) 규모가 작다고 판단해
+  **Engine+OPS 2-시트로 축소** — Events_QA/Events_REP는 만들지 않음. 파생지표(Match
+  Rate/CPL/CPNP1/ROAS)는 REP 없이 OPS 빌드 시점에 값으로 계산 (ACQ_REP와 동일 패턴,
+  라이브 수식/시트보호는 도입하지 않음 — 매 빌드가 전체 재작성이라 보호 없이도 안전).
+- Sales funnel 지표(IC Request/Booked/Complete/Deals/Revenue)는 Leads_OPS에서 그대로 읽되
+  Leads_Master(1 Lead=1 Row, First Touch)의 Lead ID→UTM Key 맵으로 조인 — First Touch
+  Attribution 원칙 보장, MTA_Master(터치 레벨)는 All Registered/P1 All 집계에만 사용.
+- `refreshEventsEngine_()`를 `refreshACQSummary_()` 호출부 4곳에 나란히 배선: 
+  `07_IncrementalMasterBuild.js:101`(appendNewLeads), `09_MTAFunnelSync.js:325`
+  (syncMTAFunnelToOPS_), `10_MasterBuild.js:73/153`(rebuildLeadsMaster/rebuildMTAMaster).
+- `buildEventsOPS()`는 메뉴/자동 트리거 미연결 — 초기 롤아웃 기간엔 스크립트 편집기 수동
+  실행 전용(Rebuild류와 동일 관행). Engine 갱신만 자동.
+- **⚠️ 실행 전 확인 필요한 가정 (구현 계획서에 명시, `~/.claude/plans/synthetic-inventing-pnueli.md`)**:
+  IC Request = `Total IC Requests > 0`인 Lead 수로 정의, CPL=Spent/Leads(Meta),
+  CPNP1=Spent/NL P1, ROAS=Revenue/Spent, Match Rate=All Registered/Reg. — 전부 표준 관례로
+  추정한 것이라 실데이터/기대치와 다르면 조정 필요. `MKT UTM Campaign`의 `_US-50`류 국가 suffix
+  패턴도 실데이터 샘플 확인 전.
+- 검증 순서(사용자 실행 필요): 각 파일의 `testXXXX()` 함수들 → `51_Events_Engine.js`의
+  `runRefreshEventsEngine()` → `Events_Engine` 시트 육안 확인 → `52_Events_Build.js`의
+  `buildEventsOPS()` → `Events_OPS` 결과 확인.
+
+## Events_OPS / Events_Engine — 실데이터 검증 후 대폭 수정 (같은 날, 초기 구현 이후)
+
+**⚠️ 위 "최초 구현" 항목의 매칭 방식(UTM Key/`_US-50` 국가 suffix)은 실데이터로 실제 `runRefreshEventsEngine()`을
+돌려본 뒤 전면 폐기되고 아래 방식으로 교체됨.**
+
+- **매칭 필드 전환**: 실행 결과 `MKT UTM Campaign`(raw UTM) 기준 그룹 수가 2,167개(실제 프로그램
+  ~150~385개 대비 압도적으로 많음) — 하나의 프로그램에 채널(Meta/Google 등)별로 UTM이 수십 개
+  붙는 구조였음. 대신 MTA_Master의 `Lead Source Detail`/Leads_Master의 `First Touch Detail`
+  (raw 필드, **실제 Marketo Program 이름**을 담고 있음을 사용자가 확인)로 매칭 기준 변경 →
+  1,376개로 감소.
+- **국가 필터**: `_US-50`류 UTM 접미사 파싱은 실데이터와 안 맞아 폐기. 대신 Marketo Program
+  이름 자체가 `{TYPE}-{YYYY}-{MM}-{COUNTRY}-{FUNNEL}-{Division} {이벤트명}` 구조임을 확인,
+  COUNTRY(4번째 하이픈 토큰)가 `KOR`인 것만 대상(KR 외 국가는 다른 팀 캠페인). `isKoreanProgram_()`.
+- **TYPE 필터 추가**: `WF-`로 시작하는 프로그램(대부분 ebook/practice test/consult page 등
+  비-이벤트 콘텐츠)이 Business Segment=Webinar/Seminar로 잘못 섞여 들어오는 사례 다수 발견 →
+  `WB`(Webinar)/`EV`(Seminar)만 허용(`EVENTS.EVENT_TYPE_PREFIXES`, `isEligibleEventType_()`).
+  최종 Engine 결과: **385개** (연 50~60개 이벤트 × 5~7년 실측치와 부합).
+- **MTA_Master 컬럼명 정정**: "First Touch Detail" → "Lead Source Detail"로 리네임
+  (`13_MTATransformer.js` v5.1.0) — Leads_Master의 동명 컬럼(raw 필드는 다름, First Touch
+  스냅샷)과 헷갈렸음. `24_OPSQA.js`의 완전동일 중복 검출 로직도 함께 갱신.
+  부수적으로 `getBusinessSegment()` 호출 시 detail 파라미터에 빈 문자열이 하드코딩되어 있던
+  기존 버그도 함께 수정 (v5.2.0) — MTA_Master BOFU 분류가 지금까지 한 번도 작동 안 하고 있었음.
+  ⚠️ 둘 다 컬럼/분류값 변경이라 `rebuildMTAMaster()` 재실행 필요.
+- **등록 폼 접미사 중복 버그 수정**: Marketo Program 이름 뒤에 "(구분자) Registered for
+  Webinar/Seminar from X Form" 접미사가 폼 종류별로 다르게 붙어, 같은 이벤트가 여러 행으로
+  쪼개지는 버그 발견(사용자가 실 빌드 결과에서 확인). `stripRegistrationFormSuffix_()`를
+  표시용이 아니라 **매칭 키 추출 단계**(`aggregateMTATouchRecords_`/`aggregateLeadsRecords_`,
+  51_Events_Engine.js)에 직접 적용해 근본 해결.
+- **Event Date/EventType 자동 채움**: Marketo Program 이름에서 `{TYPE}-{YYYY}-{MM}` 파싱
+  (`parseProgramTypeAndDate_()`) — EventType은 WB→Webinar/EV→Seminar 매핑, Event Date는
+  1차로 월 1일 기본값. 이후 더 정확한 값을 위해 Events_Engine에 `UTM`/`Event Date` 컬럼 추가,
+  같은 프로그램의 터치들이 가리키는 raw `MKT UTM Campaign`의 일 단위 날짜 중 **최빈값**을
+  채택(`pickModeEventDate_()`) — Engine의 정확한 날짜가 있으면 그걸 우선, 없으면 월 1일로
+  fallback. 값이 이미 있는 행(Ops 수동 입력)은 덮어쓰지 않음. FY/Month는 Event Date로부터
+  자동 파생(기존 로직 재사용), 정렬도 Event Date 기준(기존 로직)이 그대로 FY/Month 순 역할.
+- **스키마/스타일 사용자 지정**: 컬럼명 대량 리네임(예: `All Registered`→`SF Reg.`, `Reg.`→
+  `Mkt Reg.`) 및 순서 재배치, A~D열(`Lead Source Detail`/`Match Rate`/`Target Market`/`Division`)
+  숨김 처리, 헤더를 소스 그룹별 배경색으로 구분(Marketo=보라 `#6b21a8`, SF=하늘색 `#0369a1`,
+  Meta=Meta 브랜드 블루 `#1877F2`, Derived=회색 `#434343`), 전체 셀 테두리 추가.
+- **메뉴 정리**: `00_Menu.js` v3.1.0 — "✅ QA" 메뉴 제거(Leads_OPS QA는 이미 `buildLeadsOPS()`
+  실행 시 자동 수행이라 메뉴 실익 낮음, `runOPSQAManual()` 자체는 그대로 존재해 편집기에서
+  직접 실행 가능), "🗂️ OPS" 메뉴 신설(`createOPSMenu()`) — "Update Events"(`buildEventsOPS()`)
+  추가. Search/BOFU/Ebook 등 향후 세그먼트 트래커도 구현되는 대로 이 메뉴에 추가 예정.
 
 ## `Leads_OPS_QA` 시트 구현 완료 사실 뒤늦게 반영
 - `24_OPSQA.js`(`writeOPSQAResults_()`)에 Dashboard(Master vs Leads_OPS 지표 대조) + Issues 테이블을
@@ -16,6 +89,25 @@
 - 실제 코드(`20_OPS_Styles.js`)는 이미 `OPS.ROWS.HEADER`/`OPS.ROWS.DATA_START`로 전부 교체되어 있었음
   (Changelog 2026-07-21 "applyOPSStyle() 하드코딩 정리 완료" 기록과 일치). `OperationsLayer.md`에만
   구버전 상태로 남아있던 것을 정정.
+
+## CLAUDE.md 3번 항목 해결 — MTA_Master "완전 동일 duplicate row" 검출 로직 구현 (`24_OPSQA.js` v1.1.0)
+- **배경**: 2026-07-22 `findDuplicateTouchRows_()`로 Lead ID+MTA Created Date 조합 기준 3,401개 그룹
+  발견했으나, 같은 날 서로 다른 캠페인으로 정상 다중 터치한 경우와 진짜 중복(Salesforce export 재전달
+  사고)을 구분할 기준이 없어 판단 기준 정의부터 필요한 상태로 보류돼 있었음.
+- **판단 기준 확정(사용자 결정)**: "완전 동일" = 터치 식별 필드(Lead ID / MTA Created Date /
+  MKT UTM Campaign / First Lead Source / First Touch Detail — 이후 2026-07-24 같은 날 컬럼명이
+  "Lead Source Detail"로 정정됨, 아래 Events_OPS 항목 참고) 5개가 전부 일치하는 경우. IC Booked/
+  Completed/Won Date, Revenue, Lead Priority, Sales Funnel Stage, Lead Record Type 등 Lead 레벨
+  스냅샷 필드(export 시점마다 값이 바뀔 수 있음)는 비교 대상에서 제외 — 서로 다른 시점에 재추출된
+  진짜 중복까지 놓치지 않기 위함. Created FY/Quarter/Week/Month 등 파생 필드는 MTA Created Date에서
+  자동 계산되므로 비교 의미 없어 제외.
+- **구현**: `findExactDuplicateTouchRows_()`(순수 검출 함수) + `checkExactDuplicateTouchRows_()`(OPS QA
+  체크로 등록, `runOPSQA_()`에 연결) 추가. 문제 있는 조합은 "Exact Duplicate Touch Row" 이슈로
+  `Leads_OPS_QA` 시트에 기록됨. `buildLeadsOPS()` 실행 시 자동 실행.
+- **자동 삭제는 하지 않음** — Master는 재생성 가능하지만 원인 파악 전 임의 삭제는 데이터 손실 위험이
+  있어, 이번 구현은 검출/보고까지만 수행. 실제 제거 여부는 QA 이슈 확인 후 별도 논의.
+- TDD 원칙에 따라 `testFindExactDuplicateTouchRows()` 단위 테스트 함께 추가 (기존 `findDuplicateTouchRows_()`
+  로직과 별개로 유지 — 후자는 여전히 1차 스크리닝용 진단 유틸리티로 남겨둠).
 
 # Changelog — 2026-07-21
 

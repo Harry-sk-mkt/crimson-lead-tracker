@@ -72,6 +72,8 @@ function rebuildLeadsMaster(showAlert = true) {
 
   refreshACQSummary_();
 
+  refreshEventsEngine_();
+
   Logger.log(
     CONFIG.LOG.PREFIX +
     " ACQ Summary refreshed."
@@ -151,6 +153,8 @@ function rebuildMTAMaster(showAlert = true) {
     );
 
   refreshACQSummary_();
+
+  refreshEventsEngine_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +

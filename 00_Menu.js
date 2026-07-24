@@ -4,9 +4,16 @@
  * Custom Menu
  *
  * Version
- * v3.0.0
+ * v3.1.0
  *
  * Change Log
+ * v3.1.0 (2026-07-24)
+ * - "✅ QA" 메뉴(createQAMenu()) 제거, "🗂️ OPS" 메뉴로 대체 (createOPSMenu()).
+ *   Leads_OPS QA는 buildLeadsOPS() 실행 시 자동 수행이라 메뉴 실익 낮음 —
+ *   메뉴 등록 래퍼만 제거, 실제 QA 로직(runOPSQAManual(), 24_OPSQA.js)은
+ *   그대로 있어 스크립트 편집기에서 직접 실행 가능. 새 OPS 메뉴엔 "Update
+ *   Events"(menuUpdateEventsOPS → buildEventsOPS()) 추가. Search/BOFU/Ebook
+ *   트래커는 구현되는 대로 이 메뉴에 추가 예정.
  * v3.0.0 (2026-07-21)
  * - Restored menuAppendNewLeads()/menuAppendNewMTA() wrapper functions
  *   (menu item onClick handlers — 누락되어 "Script function not found" 에러 발생).
@@ -19,7 +26,7 @@ function onOpen() {
 
   createImportMenu();
   createBuildMenu();
-  createQAMenu();
+  createOPSMenu();
   // createReportMenu();  // Report Stage 미구현 — 항목 생기면 다시 활성화
 
 }
@@ -88,19 +95,40 @@ function menuAppendNewMTA(){
 
 /**
  * ==========================================================
- * QA Menu
+ * OPS Menu (2026-07-24 — QA 메뉴 대체)
  *
  * WHY
- * OPS, ACQ 등 여러 파이프라인의 QA를 한곳에 모아두는 메뉴.
- * 앞으로 다른 리포트 QA도 이 메뉴에 추가.
+ * Leads_OPS QA는 buildLeadsOPS() 실행 시 자동으로 돌아가서 별도
+ * 메뉴 항목의 실익이 줄어듦. 대신 세그먼트별 OPS 트래커(Events,
+ * 추후 Search/BOFU/Ebook 등)의 수동 빌드 진입점을 모아두는 메뉴로
+ * 전환. Search/BOFU/Ebook은 아직 미구현이라 항목 자체를 추가하지
+ * 않음 — 구현되는 대로 이 메뉴에 addItem() 추가.
  * ==========================================================
  */
-function createQAMenu() {
+function createOPSMenu() {
 
   SpreadsheetApp.getUi()
-    .createMenu("✅ QA")
-    .addItem("Run Leads_OPS QA", "runOPSQAManual")
+    .createMenu("🗂️ OPS")
+    .addItem("Update Events", "menuUpdateEventsOPS")
     .addToUi();
+
+}
+
+
+/**
+ * ==========================================================
+ * Menu Wrappers (OPS)
+ * ==========================================================
+ */
+
+function menuUpdateEventsOPS(){
+
+  Logger.log(
+    CONFIG.LOG.PREFIX +
+    " Menu : Update Events"
+  );
+
+  buildEventsOPS();
 
 }
 

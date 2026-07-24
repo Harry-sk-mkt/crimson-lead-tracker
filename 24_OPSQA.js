@@ -14,7 +14,19 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.0.0
+ * v1.2.0
+ *
+ * Change Log
+ * v1.2.0 (2026-07-24)
+ * - findExactDuplicateTouchRows_()/checkExactDuplicateTouchRows_()의 MTA_Master
+ *   필드 참조를 "First Touch Detail" → "Lead Source Detail"로 갱신
+ *   (13_MTATransformer.js v5.1.0의 컬럼명 정정 반영, Events_OPS 설계 중 발견).
+ * v1.1.0 (2026-07-24)
+ * - checkExactDuplicateTouchRows_() / findExactDuplicateTouchRows_() 추가.
+ *   Lead ID + MTA Created Date + MKT UTM Campaign + First Lead Source +
+ *   First Touch Detail 5개 필드가 전부 같은 MTA_Master row를 "완전 동일
+ *   중복"으로 판단해 QA 이슈로 플래그 (CLAUDE.md 미해결 항목 3 해결).
+ *   자동 삭제는 하지 않음 — 검출/보고만 수행.
  * ==========================================================
  */
 
@@ -40,6 +52,7 @@ function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
   checkRowCount_(issues);
   checkMTAFunnelAndMatching_(issues);
   checkLeadIdUniqueness_(issues);
+  checkExactDuplicateTouchRows_(issues);
 
   if (preMergeOpsSnapshot && newlyWrittenRows) {
     checkSyncColumnsPreserved_(preMergeOpsSnapshot, newlyWrittenRows, issues);
@@ -444,6 +457,54 @@ function checkLeadIdUniqueness_(issues) {
         }
 
     });
+
+}
+
+
+/**
+ * ==========================================================
+ * Check 7 — Exact Duplicate Touch Row (완전 동일 중복 검출)
+ *
+ * WHY
+ * findDuplicateTouchRows_()가 잡는 "Lead ID + MTA Created Date만 같음"은
+ * 같은 날 서로 다른 캠페인으로 여러 번 정상 터치한 경우도 섞여있어
+ * 그대로 중복으로 취급할 수 없었음 (CLAUDE.md 미해결 항목 3, 2026-07-22 보류).
+ * 터치를 식별하는 핵심 필드(Lead ID / MTA Created Date / MKT UTM Campaign /
+ * First Lead Source / Lead Source Detail)까지 전부 같다면 서로 다른 정상
+ * 터치일 가능성은 극히 낮고 Salesforce export가 같은 touch row를 중복
+ * 전달했을 가능성이 높다고 보고 QA 이슈로 플래그한다 (자동 삭제는 하지
+ * 않음 — Master는 재생성 가능해도 원인 파악 전 임의 삭제는 데이터 손실
+ * 위험이 있어 보수적으로 접근).
+ * IC Booked/Completed/Won Date, Revenue, Lead Priority 등 Lead 레벨
+ * 스냅샷 필드는 export 시점마다 값이 바뀔 수 있어 비교 기준에서 제외
+ * (2026-07-24 사용자 확정).
+ * ==========================================================
+ */
+function checkExactDuplicateTouchRows_(issues) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mtaSheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+
+  if (!mtaSheet) return;
+
+  const mtaRecords = sheetToObjects(mtaSheet);
+  const duplicates = findExactDuplicateTouchRows_(mtaRecords);
+
+  duplicates.forEach(function (d) {
+
+    issues.push({
+      check: "Exact Duplicate Touch Row",
+      leadId: d.leadId,
+      email: d.email,
+      detail:
+        "MTA Created Date=" + d.mtaCreatedDate +
+        " / Campaign=\"" + d.campaign + "\"" +
+        " / Source=\"" + d.source + "\"" +
+        " / Detail=\"" + d.detail + "\"" +
+        " 조합이 " + d.count + "번 완전 동일하게 등장 (export 중복 의심)"
+    });
+
+  });
 
 }
 
@@ -1122,6 +1183,99 @@ function testFindDuplicateTouchRows() {
     result.length === 1 &&
     result[0].leadId === "L1" &&
     result[0].count === 3;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Find Exact Duplicate Touch Rows (완전 동일 중복 검출)
+ *
+ * WHY
+ * checkExactDuplicateTouchRows_() 참고 — Lead ID + MTA Created Date만으로는
+ * 정상 다중 터치와 진짜 중복을 구분할 수 없어, 터치 식별 필드
+ * (MKT UTM Campaign / First Lead Source / Lead Source Detail)까지 전부
+ * 같은 경우만 "완전 동일"로 판단하도록 기준을 좁힘 (2026-07-24 확정).
+ * ⚠️ MTA_Master 컬럼명이 "First Touch Detail" → "Lead Source Detail"로
+ * 정정됨(13_MTATransformer.js v5.1.0) — 이 함수도 함께 갱신.
+ *
+ * INPUT
+ * records : Object[]  (MTA_Master sheetToObjects() 결과)
+ *
+ * OUTPUT
+ * Object[]  [{ leadId, email, mtaCreatedDate, campaign, source, detail, count }, ...]  (count > 1인 것만)
+ *
+ * TEST
+ * 5개 필드 전부 같은 조합 2번 + 날짜만 같고 캠페인 다른 조합(정상 다중 터치) +
+ * 다른 Lead ID 입력 시 count=2인 그룹 1개만 반환
+ * ==========================================================
+ */
+function findExactDuplicateTouchRows_(records) {
+
+  const groups = {};
+
+  records.forEach(function (r) {
+
+    const leadId = String(r["Lead ID"] || "").trim();
+    const date = r["MTA Created Date"];
+
+    if (!leadId || !(date instanceof Date) || isNaN(date.getTime())) return;
+
+    const campaign = String(r["MKT UTM Campaign"] || "").trim();
+    const source = String(r["First Lead Source"] || "").trim();
+    const detail = String(r["Lead Source Detail"] || "").trim();
+
+    const key = [leadId, date.getTime(), campaign, source, detail].join("|");
+
+    if (!groups[key]) {
+      groups[key] = {
+        leadId: leadId,
+        email: r["Email"] || "",
+        mtaCreatedDate: date,
+        campaign: campaign,
+        source: source,
+        detail: detail,
+        count: 0
+      };
+    }
+
+    groups[key].count++;
+
+  });
+
+  return Object.keys(groups)
+    .map(function (key) { return groups[key]; })
+    .filter(function (g) { return g.count > 1; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateTouchRows_()
+ * ==========================================================
+ */
+function testFindExactDuplicateTouchRows() {
+
+  const date1 = new Date(2026, 0, 1);
+
+  const records = [
+    { "Lead ID": "L1", "MTA Created Date": date1, "MKT UTM Campaign": "Webinar_A", "First Lead Source": "Web", "Lead Source Detail": "Form", "Email": "a@test.com" },
+    { "Lead ID": "L1", "MTA Created Date": date1, "MKT UTM Campaign": "Webinar_A", "First Lead Source": "Web", "Lead Source Detail": "Form", "Email": "a@test.com" },
+    { "Lead ID": "L1", "MTA Created Date": date1, "MKT UTM Campaign": "Seminar_B", "First Lead Source": "Web", "Lead Source Detail": "Form", "Email": "a@test.com" },
+    { "Lead ID": "L2", "MTA Created Date": date1, "MKT UTM Campaign": "Webinar_A", "First Lead Source": "Web", "Lead Source Detail": "Form", "Email": "b@test.com" }
+  ];
+
+  const result = findExactDuplicateTouchRows_(records);
+
+  const pass =
+    result.length === 1 &&
+    result[0].leadId === "L1" &&
+    result[0].count === 2 &&
+    result[0].campaign === "Webinar_A";
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
