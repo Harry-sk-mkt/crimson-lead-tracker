@@ -46,6 +46,19 @@ Other
   MTA_Raw 재추출 + `resetMTACounterOnly()` + 재Import + `rebuildMTAMaster()` 전까지 구 값(부정확한
   Lead 레벨 스냅샷)을 유지한다.
 
+### ⚠️ MTA BOFU 판정 버그 — 수정 완료 (2026-07-22, v5.1.0)
+- **문제**: `13_MTATransformer.js`가 `getBusinessSegment(campaign, detail, leadSource)`를 호출할 때
+  `detail` 인자를 하드코딩된 `""`로 넘기고 있었음. BOFU 판정 조건은 `detail.includes("bofu")` 단독이라
+  (campaign 기반 fallback 없음), MTA_Master에서 BOFU가 구조적으로 절대 나올 수 없는 상태였음.
+- **수정**: `""` → `rawRecord["Lead Source Detail"]`. 이 필드는 Salesforce에서 `Lead:` prefix가
+  없어 Multi Touch Attribution 객체 자체 필드로 확인됨(샘플 검증, `MKT UTM Campaign`과 프로그램이
+  일치 — 100% 검증은 아님). Leads_Master 쪽(`12_LeadTransformer.js`)은 원래부터 `Lead Source Detail`을
+  정상적으로 넘기고 있어 이 버그의 영향을 받지 않았음.
+- 회귀 테스트: `testTransformMTARecord_BOFU()` (`13_MTATransformer.js`).
+- 기존 MTA_Master 데이터는 이 fix 적용 후 전체 재추출 없이도 `MTA_Raw`/`MTA_Master`를 비우고
+  `resetMTACounterOnly()` + 재Import + `appendNewMTA()`(카운터 0이라 Full Rebuild와 동일 효과)로
+  재분류 진행 중.
+
 ## 구현 위치
 `16_TransformHelper.js`의 `getBusinessSegment(campaign, detail, leadSource)` — Leads/MTA 양쪽에서 공용으로 호출됨.
 

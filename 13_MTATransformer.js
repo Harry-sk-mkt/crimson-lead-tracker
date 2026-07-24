@@ -10,23 +10,9 @@
  * 10 Master Build
  *
  * Version
- * v5.2.0
+ * v5.1.0
  *
  * Change Log
- * v5.2.0 (2026-07-24)
- * - getBusinessSegment() 호출 시 detail 파라미터에 하드코딩된 빈 문자열(`""`)
- *   대신 rawRecord["Lead Source Detail"]을 전달하도록 수정 (기존 버그 — 지금까지
- *   MTA_Master의 BOFU 분류가 "Lead Source Detail에 BOFU 포함" 조건을 한 번도
- *   평가하지 못했음, docs/BusinessSegmentClassification.md의 Priority 서술과
- *   불일치했던 부분. 위 v5.1.0 컬럼명 정정 작업 중 발견, 사용자 확인 후 수정).
- *   getBusinessSegment() 자체의 BOFU 테스트는 16_TransformHelper.js에 기존재.
- * v5.1.0 (2026-07-24)
- * - Master 컬럼명 "First Touch Detail" → "Lead Source Detail"로 정정 (Events_OPS
- *   설계 중 발견, 사용자 확인). Leads_Master의 "First Touch Detail"(raw 필드도
- *   동명, Lead 레벨 First Touch 스냅샷)과 이름이 겹쳐서 혼동을 유발했음 — MTA_Master의
- *   이 필드는 raw "Lead Source Detail"을 그대로 옮긴 터치 레벨 값이라 "First Touch"와
- *   무관함. docs/BusinessSegmentClassification.md는 이미 "Lead Source Detail"로
- *   서술되어 있었음(코드만 안 맞았음). ⚠️ 컬럼명 변경이라 rebuildMTAMaster() 필요.
  * v4.0.0 (2026-07-21)
  * - Added IC Booked Date / IC Completed Date / Opportunity Won Date /
  *   Revenue / Currency fields — ICFunnel_Raw 파이프라인 대체.
@@ -39,6 +25,11 @@
  *   변경 (더 이상 "Lead의 최종 터치"가 아니라 "이 터치 자체의 캠페인"이므로).
  * - ⚠️ MTA_Raw 시트에 "MKT UTM Campaign" 헤더가 없으면 appendSheetRecords()가
  *   조용히 드롭함 — 전체 재추출/재구축 절차는 docs/Changelog.md 참고.
+ * v5.1.0 (2026-07-22)
+ * - getBusinessSegment() 호출 시 detail 인자가 하드코딩된 ""라서 BOFU가
+ *   구조적으로 절대 나올 수 없던 버그 수정 — "" → rawRecord["Lead Source Detail"]
+ *   (MTA_Raw 리포트에서 이 필드는 Lead 객체가 아닌 Multi Touch Attribution
+ *   객체 자체 필드로 확인됨 — 샘플 검증, "Lead:" prefix 없음).
  * ==========================================================
  */
 
@@ -210,7 +201,7 @@ function transformMTARecord(rawRecord){
     "First Lead Source":
       rawRecord["Lead Source"] || "",
 
-    "Lead Source Detail":
+    "First Touch Detail":
       rawRecord["Lead Source Detail"] || "",
 
     //------------------------------------------------------
@@ -277,5 +268,36 @@ function transformMTARecord(rawRecord){
       rawRecord["Lead: Lead Record Type"] || ""
 
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — transformMTARecord() BOFU Business Segment
+ *
+ * WHY
+ * getBusinessSegment() 호출 시 detail 인자가 하드코딩된 ""라서
+ * MTA_Master에서 BOFU가 구조적으로 절대 나올 수 없던 버그(v5.1.0에서
+ * "" → rawRecord["Lead Source Detail"]로 수정)의 회귀 방지.
+ * ==========================================================
+ */
+function testTransformMTARecord_BOFU(){
+
+  const rawRecord = {
+    "Lead: Lead ID": "L1",
+    "Lead: Email": "test@example.com",
+    "Multi Touch Attribution: Created Date": "1/6/2026",
+    "MKT UTM Campaign": "random-campaign-2026",
+    "Lead Source Detail": "BOFU-Consult",
+    "Lead Source": "Web"
+  };
+
+  const result = transformMTARecord(rawRecord);
+
+  const pass = result["Business Segment"] === "BOFU";
+
+  Logger.log("Business Segment : " + result["Business Segment"] + " (expected BOFU)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

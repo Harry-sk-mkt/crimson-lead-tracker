@@ -4,20 +4,33 @@
  * ACQ Report
  *
  * Responsibility
- * Cohort 기반 Acquisition Report (Engine + Report 영역)
+ * Acquisition Report (Engine + Report 영역). New Leads/New P1/All Leads/
+ * All P1/SAL은 Cohort(Create Date) 또는 Touch(MTA Created Date) 기준,
+ * IC Booked/IC Complete/Revenue는 그 달의 실제 이벤트 발생 기준
+ * (v1.4.0부터 — 아래 Change Log 참고). Cohort 관점(획득 월 기준
+ * 다운스트림 퍼널)은 추후 NewP1_REP가 별도로 담당할 예정.
  *
  * Stage
  * 20 Reporting
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
- * v1.4.0 (2026-07-24)
- * - onEdit()에 NewP1_REP 분기 복구 (CONFIG.NEWP1.SHEET →
- *   handleNewP1ReportGenerateEdit_() 호출). 세션 중 실수로 삭제됐던
- *   40_NewP1Report.js/CONFIG.NEWP1 복구 작업의 일부 — 이 분기가 없으면
- *   NewP1_REP의 Generate 체크박스가 아무 동작도 안 함.
+ * v1.5.0 (2026-07-22)
+ * - Added isEffectiveP1_(): New P1 판정을 NewP1_REP 설계와 통일 —
+ *   Priority Override 우선, "Priority 1" exact match (기존
+ *   `indexOf("1")` substring 비교 + Priority Override 미반영 수정).
+ *   computeOPSAggregates_()의 New P1 카운트에 적용. All P1(MTA_Master
+ *   기반)은 Priority Override 컬럼 자체가 없어 대상 아님 — 그대로 유지.
+ *   테스트: testIsEffectiveP1().
+ * v1.4.0 (2026-07-22)
+ * - computeOPSAggregates_(): IC Booked/IC Complete/Revenue를 Create Date
+ *   코호트 → 각자의 이벤트 날짜(IC Booked Date/IC Completed Date/
+ *   Opportunity Won Date) 기준으로 변경. 코호트 관점은 NewP1_REP가
+ *   담당할 예정이라 ACQ_REP과 역할이 겹치는 걸 피하기 위함
+ *   (docs/ACQReportDesign.md 참고). New Leads/New P1은 Create Date
+ *   코호트 유지 (정의상 코호트=이벤트가 동일).
  * v1.3.0 (2026-07-21)
  * - Fixed: generateACQReport_() 안에 "Report Area 작성" 블록이
  *   (신규 summaryMap 버전 + 구버전 mtaAgg/opsAgg 버전) 중복 남아있던
@@ -149,14 +162,12 @@ function findFiscalYearRange_(){
  * ==========================================================
  * onEdit Simple Trigger
  *
- * WHY
- * GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히
- * 덮어쓰므로, onEdit() 자체는 이 파일 하나에만 두고 시트 이름으로
- * 분기해서 각 리포트의 handle*Edit_()를 호출한다.
- *
- * 2026-07-24 복구: NewP1_REP 분기(handleNewP1ReportGenerateEdit_ 호출)가
- * 세션 중 실수로 삭제되어 있던 걸 복구 — 40_NewP1Report.js 자체의
- * 문서화된 의도("onEdit()은 여기 하나에만") 그대로 반영.
+ * WHY (2026-07-22 변경)
+ * NewP1_REP도 같은 방식(Generate 체크박스 + onEdit)을 쓰게 되면서,
+ * GAS는 파일마다 onEdit()을 따로 둬도 마지막에 로드된 정의가 나머지를
+ * 조용히 덮어쓰므로(전역 함수명 중복) onEdit() 자체는 이 파일 하나에만
+ * 두고 시트 이름으로 분기해서 각 리포트 전용 핸들러를 호출한다.
+ * ACQ_REP 쪽 동작(handleACQReportGenerateEdit_)은 기존 로직 그대로 이동.
  * ==========================================================
  */
 function onEdit(e){
@@ -167,37 +178,44 @@ function onEdit(e){
   const sheetName = sheet.getName();
 
   if(sheetName === CONFIG.ACQ.SHEET){
-
-    const row = e.range.getRow();
-    const col = e.range.getColumn();
-
-    const isGenerateCell =
-      row === CONFIG.ACQ.ROWS.CONTROL_VALUE &&
-      col === CONFIG.ACQ.COLUMNS.GENERATE;
-
-    if(!isGenerateCell) return;
-
-    if(e.value !== "TRUE") return;
-
-    try {
-
-      generateACQReport_();
-
-    } finally {
-
-      sheet.getRange(row, col).setValue(false);
-
-    }
-
+    handleACQReportGenerateEdit_(e, sheet);
     return;
-
   }
 
   if(sheetName === CONFIG.NEWP1.SHEET){
-
     handleNewP1ReportGenerateEdit_(e, sheet);
-
     return;
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Handle ACQ_REP Generate Checkbox Edit
+ * (2026-07-21 원래 onEdit() 본문 그대로 — 동작 변경 없음)
+ * ==========================================================
+ */
+function handleACQReportGenerateEdit_(e, sheet){
+
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+
+  const isGenerateCell =
+    row === CONFIG.ACQ.ROWS.CONTROL_VALUE &&
+    col === CONFIG.ACQ.COLUMNS.GENERATE;
+
+  if(!isGenerateCell) return;
+
+  if(e.value !== "TRUE") return;
+
+  try {
+
+    generateACQReport_();
+
+  } finally {
+
+    sheet.getRange(row, col).setValue(false);
 
   }
 
@@ -542,7 +560,87 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
 
 /**
  * ==========================================================
+ * Is Effective P1
+ *
+ * WHY (2026-07-22 추가)
+ * New P1 판정을 NewP1_REP 설계(docs/NewP1ReportDesign.md)와 통일.
+ * 기존엔 `Priority Override`를 무시하고 `Lead Priority`에 `indexOf("1")`
+ * 로 느슨하게(substring) 비교했음 — "Priority 10"류 값이 있었다면
+ * 오탐 가능했고, 마케팅이 수동으로 걸어둔 Priority Override도 반영이
+ * 안 됐음. Priority Override가 있으면 그 값을 우선하고, "Priority 1"
+ * 정확히 일치하는 경우만 P1으로 판정하도록 변경.
+ *
+ * @param {string} leadPriority
+ * @param {string} priorityOverride
+ * @return {boolean}
+ *
+ * TEST
+ * isEffectiveP1_("Priority 1", "") === true
+ * isEffectiveP1_("Priority 2", "Priority 1") === true (Override 우선)
+ * isEffectiveP1_("Priority 1", "Priority 2") === false (Override가 덮어씀)
+ * isEffectiveP1_("Priority 10", "") === false (기존 substring 버그 재현 방지)
+ * ==========================================================
+ */
+function isEffectiveP1_(leadPriority, priorityOverride){
+
+  const override = String(priorityOverride || "").trim();
+  const effective = override !== "" ? override : String(leadPriority || "").trim();
+
+  return effective === "Priority 1";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEffectiveP1_()
+ * ==========================================================
+ */
+function testIsEffectiveP1(){
+
+  const cases = [
+    // [leadPriority, priorityOverride, expected]
+    ["Priority 1", "", true],
+    ["Priority 2", "Priority 1", true],
+    ["Priority 1", "Priority 2", false],
+    ["Priority 10", "", false],
+    ["", "", false]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = isEffectiveP1_(c[0], c[1]);
+    const ok = result === c[2];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "leadPriority=\"" + c[0] + "\" priorityOverride=\"" + c[1] + "\"" +
+      " => " + result + " (expected " + c[2] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute OPS Aggregates (New Leads / New P1 / IC Booked / IC Complete / Revenue)
+ *
+ * WHY (2026-07-22 변경)
+ * IC Booked/IC Complete/Revenue를 "Create Date 코호트"(그 달에 생성된
+ * Lead 기준)로 묶으면, NewP1_REP(추후 구현될 New P1 Funnel 리포트)가
+ * 어차피 코호트 관점을 담당하게 되므로 ACQ_REP과 역할이 겹친다.
+ * ACQ_REP은 "그 달의 실제 퍼포먼스"(그 달에 실제로 발생한 이벤트)를
+ * 보여주는 게 목적이므로, 이 3개 지표는 각자 자기 이벤트 날짜
+ * (IC Booked Date / IC Completed Date / Opportunity Won Date)가
+ * 속한 달로 귀속하도록 변경. New Leads/New P1은 "새로 생성된 Lead 수"
+ * 자체가 정의상 Create Date 기준이라 그대로 유지 (코호트=이벤트가 동일).
  *
  * @param {Date|null} rangeStart
  * @param {Date|null} rangeEndExclusive
@@ -569,50 +667,84 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
 
   const headers = values[0];
 
-  const dateCol = headers.indexOf("Create Date");
+  const createDateCol = headers.indexOf("Create Date");
   const segmentCol = headers.indexOf("Business Segment");
   const priorityCol = headers.indexOf("Lead Priority");
+  const priorityOverrideCol = headers.indexOf("Priority Override");
   const icBookedCol = headers.indexOf("IC Booked Date");
   const icCompleteCol = headers.indexOf("IC Completed Date");
+  const wonDateCol = headers.indexOf("Opportunity Won Date");
   const revenueCol = headers.indexOf("Revenue");
 
   const hasRangeFilter = !!(rangeStart && rangeEndExclusive);
 
+  function inRange(date){
+    if(!hasRangeFilter) return true;
+    return date >= rangeStart && date < rangeEndExclusive;
+  }
+
+  function keyFor(date, segment){
+    const fy = Number(getFiscalYear(date).replace("FY", ""));
+    const month = getFiscalMonthLabel(date);
+    return fy + "|" + month + "|" + (segment || "Other");
+  }
+
   for(let i = 1; i < values.length; i++){
 
     const row = values[i];
-    const date = row[dateCol];
-
-    if(!(date instanceof Date) || isNaN(date.getTime())) continue;
-
-    if(hasRangeFilter){
-      if(date < rangeStart || date >= rangeEndExclusive) continue;
-    }
-
-    const fy = Number(getFiscalYear(date).replace("FY", ""));
-    const month = getFiscalMonthLabel(date);
     const segment = row[segmentCol] || "Other";
 
-    const key = fy + "|" + month + "|" + segment;
+    //------------------------------------------------------
+    // New Leads / New P1 — Create Date 코호트 (Lead 생성된 달)
+    //------------------------------------------------------
 
-    result.newLeads[key] = (result.newLeads[key] || 0) + 1;
+    const createDate = row[createDateCol];
 
-    if(String(row[priorityCol]).indexOf("1") !== -1){
-      result.newP1[key] = (result.newP1[key] || 0) + 1;
+    if(createDate instanceof Date && !isNaN(createDate.getTime()) && inRange(createDate)){
+
+      const key = keyFor(createDate, segment);
+
+      result.newLeads[key] = (result.newLeads[key] || 0) + 1;
+
+      if(isEffectiveP1_(row[priorityCol], row[priorityOverrideCol])){
+        result.newP1[key] = (result.newP1[key] || 0) + 1;
+      }
+
     }
 
+    //------------------------------------------------------
+    // IC Booked — IC Booked Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
     const icBookedVal = row[icBookedCol];
-    if(icBookedVal instanceof Date && !isNaN(icBookedVal.getTime())){
+
+    if(icBookedVal instanceof Date && !isNaN(icBookedVal.getTime()) && inRange(icBookedVal)){
+      const key = keyFor(icBookedVal, segment);
       result.icBooked[key] = (result.icBooked[key] || 0) + 1;
     }
 
+    //------------------------------------------------------
+    // IC Complete — IC Completed Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
     const icCompleteVal = row[icCompleteCol];
-    if(icCompleteVal instanceof Date && !isNaN(icCompleteVal.getTime())){
+
+    if(icCompleteVal instanceof Date && !isNaN(icCompleteVal.getTime()) && inRange(icCompleteVal)){
+      const key = keyFor(icCompleteVal, segment);
       result.icComplete[key] = (result.icComplete[key] || 0) + 1;
     }
 
-    const revenueVal = Number(row[revenueCol]) || 0;
-    result.revenue[key] = (result.revenue[key] || 0) + revenueVal;
+    //------------------------------------------------------
+    // Revenue — Opportunity Won Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
+    const wonDateVal = row[wonDateCol];
+
+    if(wonDateVal instanceof Date && !isNaN(wonDateVal.getTime()) && inRange(wonDateVal)){
+      const key = keyFor(wonDateVal, segment);
+      const revenueVal = Number(row[revenueCol]) || 0;
+      result.revenue[key] = (result.revenue[key] || 0) + revenueVal;
+    }
 
   }
 

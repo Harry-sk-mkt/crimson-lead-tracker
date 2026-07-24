@@ -12,16 +12,9 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.3.0
+ * v1.2.0
  *
  * Change Log
- * v1.3.0 (2026-07-24)
- * - 2026-07-24 세션 중 이 파일이 Apps Script 서버에서 실수로 삭제되어
- *   복구. 원본 파일명이 정확히 무엇이었는지는 확인 불가(로컬 git에
- *   한 번도 없었던 서버 전용 파일) — "41_NewP1ReportStyles.js"는
- *   30_ACQReport.js/32_ACQReportStyles.js 관례를 따른 추정 파일명이며,
- *   실제 원본과 다를 수 있음(파일명 자체는 Apps Script 전역 네임스페이스
- *   특성상 함수 동작에 영향 없음). 로직은 대화 중 공유된 원본 내용 그대로.
  * v1.2.0 (2026-07-22)
  * - 40_NewP1Report.js에서 Week 축 제거됨에 따라 컬럼 배치가
  *   14 → 13개로 줄어듦 (Week 컬럼 삭제). % 컬럼/Revenue 컬럼 인덱스,

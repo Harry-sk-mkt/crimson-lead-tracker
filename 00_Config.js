@@ -7,14 +7,6 @@
  * Central configuration for the entire project.
  *
  * Business logic MUST NOT exist here.
- *
- * Version
- * v1.1.0
- *
- * Change Log
- * v1.1.0 (2026-07-24)
- * - CONFIG.NEWP1 블록 복구 (서버에서만 존재하다 실수로 삭제됨 — 자세한
- *   내용은 블록 자체의 주석 참고).
  * ==========================================================
  */
 
@@ -184,16 +176,8 @@ const CONFIG = {
   /**
    * NewP1 Report (New P1 Cohort Funnel Report)
    *
-   * 2026-07-24 복구: 원본 40_NewP1Report.js/스타일 파일 + 이 CONFIG.NEWP1
-   * 블록이 Apps Script 서버에서만 존재하다가(로컬 git에 없던 상태) 이번
-   * 세션 중 실수로 삭제됨. 실제 NewP1_REP/NewP1_Engine 시트는 살아있어
-   * 사용자가 확인해준 실제 레이아웃(1행 Control Header/4행 Report
-   * Header/5행 데이터 시작, CONFIG.ACQ와 동일한 구조)을 기준으로 재구성.
-   * CONTROL_VALUE(2행)/COLUMNS(A~E)는 CONFIG.ACQ와 동일한 패턴이라는
-   * 강한 정황(코드가 CONFIG.ACQ.SEGMENTS/FISCAL_MONTH_ORDER를 그대로
-   * 재사용)에 근거해 추정 — 실행 후 이상 있으면 확인 필요.
-   * ⚠️ 원본에 있었을 MAX_WEEKS 값은 복구 불가(코드 자체에서도 더 이상
-   * 안 쓰는 값이라고 명시돼 있었음) — 필요해지면 재정의.
+   * docs/NewP1ReportDesign.md 참고. Segment 목록/순서와 Fiscal Month
+   * 순서는 CONFIG.ACQ.SEGMENTS / CONFIG.ACQ.FISCAL_MONTH_ORDER를 그대로 재사용.
    */
   NEWP1: {
 
@@ -213,7 +197,10 @@ const CONFIG = {
       END_FY: 3,        // C
       END_MONTH: 4,     // D
       GENERATE: 5       // E (checkbox)
-    }
+    },
+
+    // Fiscal Week 이론상 최댓값(W53) — Sort Index 계산의 고정폭 슬롯 수로 사용.
+    MAX_WEEKS: 53
 
   },
 

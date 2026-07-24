@@ -19,18 +19,9 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.2.0
+ * v1.1.0
  *
  * Change Log
- * v1.2.0 (2026-07-24)
- * - 2026-07-24 세션 중 이 파일과 CONFIG.NEWP1이 Apps Script 서버에서
- *   실수로 삭제되어 복구. 로직은 사용자가 대화 중 공유해준 원본 내용
- *   그대로 복원 — 삭제 전 마지막 상태(v1.1.0)와 동일해야 하나, 원본
- *   파일 자체를 diff로 대조할 수 없었으므로 완전히 동일하다는 보장은
- *   없음(참고: docs/Changelog.md 2026-07-24 "NewP1 Report 복구" 항목).
- * - isEffectiveP1_() 추가 — computeNewP1Aggregates_()가 참조하는데 원본
- *   정의를 어디서도 찾을 수 없어, 41_NewP1ReportStyles.js 헤더 Note의
- *   설명을 근거로 재구성(문서에 상세 스펙 없어 사용자 확인 후 확정).
  * v1.1.0 (2026-07-22)
  * - Week(Fiscal Week) 축 제거 — 8/1 기준 7일 단위라 캘린더 주(월~일)와
  *   무관하고 매년 시작 요일이 달라져 혼동을 유발한다는 사용자 피드백.
@@ -185,63 +176,6 @@ function testComputeNewP1SortIndex(){
   Logger.log("b=" + b + " (expected 1)");
   Logger.log("c=" + c + " (expected " + segmentCount + ")");
   Logger.log("invalid=" + invalid + " (expected -1)");
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Is Effective P1
- *
- * WHY
- * 2026-07-24 복구: computeNewP1Aggregates_()가 참조하지만 원본 정의를
- * 찾을 수 없었던 함수 — 41_NewP1ReportStyles.js의 헤더 Note 설명
- * ("유효 Priority(Priority Override 우선, 없으면 Lead Priority)가
- * 'Priority 1'인 Lead 수")과 docs/OperationsLayer.md의 컬럼 소유권
- * 표(Priority Override=Marketing 관리)를 근거로 재구성 — 정확한 원본
- * 로직 문서가 없어 사용자 확인 후 이 정의로 확정.
- *
- * Priority Override에 값이 있으면(Marketing이 수동 판단) 그걸 우선
- * 사용하고, 없으면 Lead Priority(Salesforce 동기화 값)를 사용. 정확히
- * "Priority 1" 문자열과 일치할 때만 true.
- *
- * INPUT
- * leadPriority : string  (Leads_OPS의 "Lead Priority" 컬럼 값)
- * priorityOverride : string  (Leads_OPS의 "Priority Override" 컬럼 값)
- *
- * OUTPUT
- * boolean
- *
- * TEST
- * testIsEffectiveP1 참고
- * ==========================================================
- */
-function isEffectiveP1_(leadPriority, priorityOverride){
-
-  const effective =
-    String(priorityOverride || "").trim() ||
-    String(leadPriority || "").trim();
-
-  return effective === "Priority 1";
-
-}
-
-
-/**
- * ==========================================================
- * TEST — isEffectiveP1_()
- * ==========================================================
- */
-function testIsEffectiveP1(){
-
-  const pass =
-    isEffectiveP1_("Priority 1", "") === true &&
-    isEffectiveP1_("Priority 2", "Priority 1") === true &&
-    isEffectiveP1_("Priority 1", "Priority 3") === false &&
-    isEffectiveP1_("Priority 2", "") === false &&
-    isEffectiveP1_("", "") === false;
-
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

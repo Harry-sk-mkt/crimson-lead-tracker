@@ -99,6 +99,7 @@ function appendNewLeads(){
   buildLeadsOPS(true);
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   refreshEventsEngine_();
 

@@ -1,36 +1,36 @@
 # Changelog — 2026-07-24 (Events_OPS/Events_Engine 구현)
 
-## NewP1 Report 복구 (40_NewP1Report.js / CONFIG.NEWP1 / onEdit 분기)
+## NewP1 Report — 삭제 사고 → 재구성 → origin 실제 기록 발견으로 대체 (경위 기록)
 
-**배경**: `40_NewP1Report.js`(New P1 Cohort Funnel Report)와 그 Styles 파일, `00_Config.js`의
-`CONFIG.NEWP1` 블록, `30_ACQReport.js`의 `onEdit()` NewP1 분기가 전부 Apps Script 서버에만
-존재하던 상태였음(로컬 git엔 한 번도 커밋된 적 없음 — "서버에서 직접 수정 금지" 원칙이 이번에도
-어겨진 사례). Events 작업 중 40번대 파일 번호가 겹친 걸 발견해 정리하는 과정에서 사용자가
-`40_Events_Config.js` 등 6개 구 파일을 삭제할 때 이 NewP1 파일들도 실수로 같이 삭제됨. 추가로
-이 세션에서 여러 번 실행한 `clasp push --force`가 `CONFIG.NEWP1`이 없는 로컬 `00_Config.js`로
-원격을 덮어써, 파일 삭제와 별개로 설정 블록 자체도 같이 사라짐(이 부분은 사용자 실수가 아니라
-이쪽 작업 방식의 문제).
+**사고**: `40_NewP1Report.js`/Styles 파일/`00_Config.js`의 `CONFIG.NEWP1`/`30_ACQReport.js`의
+`onEdit()` NewP1 분기가 이 로컬 checkout에선 한 번도 커밋된 적 없는 상태였는데, Events 작업 중
+40번대 파일 번호가 겹친 걸 발견해 정리하다가(사용자가 6개 구 Events 파일을 지울 때 NewP1 파일도
+같이 삭제) 사라짐. 추가로 이 세션에서 여러 번 실행한 `clasp push --force`가 `CONFIG.NEWP1`이
+없는 로컬 `00_Config.js`로 원격을 덮어써, 설정 블록도 같이 사라짐(이 부분은 작업 방식의 문제).
 
-**복구 방법**: Apps Script 버전 기록에 삭제 이전 시점이 없어(당일 09:43 기록만 존재), 사용자가
-직전 세션에서 대화 중 붙여넣어 공유해준 파일 원문을 근거로 재구성. 실제 `NewP1_REP`/`NewP1_Engine`
-시트 자체는 삭제되지 않고 살아있어(코드 삭제가 시트 데이터를 지우진 않음), 사용자가 확인해준
-실제 레이아웃(1행 Control Header/2행 Control Value/4행 Report Header/5행 데이터 시작, 시트명
-"NewP1_REP"/"NewP1_Engine")을 근거로 `CONFIG.NEWP1`을 재구성 — `CONFIG.ACQ`와 완전히 동일한
-구조(코드가 `CONFIG.ACQ.SEGMENTS`/`FISCAL_MONTH_ORDER`를 그대로 재사용하는 것으로 확인됨).
+**1차 대응(재구성, 이후 폐기됨)**: Apps Script 버전 기록엔 삭제 이전 시점이 없어, 사용자가 대화
+중 공유해준 파일 원문 + 실제 `NewP1_REP` 시트 레이아웃을 근거로 `40_NewP1Report.js`/
+`41_NewP1ReportStyles.js`(추정 파일명)/`CONFIG.NEWP1`/`isEffectiveP1_()`를 재구성해 동작 확인까지
+했었음.
 
-**복구 결과물**:
-- `00_Config.js` v1.1.0 — `CONFIG.NEWP1`(SHEET/ENGINE_SHEET/ROWS/COLUMNS) 추가.
-- `40_NewP1Report.js` v1.2.0 — 원본 로직 그대로 복원 + `isEffectiveP1_()` 신규 재구성(원본
-  정의를 못 찾아 Styles 파일 헤더 Note의 설명을 근거로 재구성, 문서에 상세 스펙 없음 — 사용자
-  확인 후 확정). 원본과 100% 동일하다는 보장은 없음(diff 대조 불가).
-- `41_NewP1ReportStyles.js`(파일명은 추정 — 원본 파일명 확인 불가, ACQReport/ACQReportStyles
-  관례를 따름. Apps Script는 전역 네임스페이스라 파일명이 달라도 동작엔 영향 없음) v1.3.0.
-- `30_ACQReport.js` v1.4.0 — `onEdit()`에 NewP1_REP 분기(`handleNewP1ReportGenerateEdit_` 호출)
-  복구. 이게 없으면 NewP1_REP의 Generate 체크박스가 아무 반응도 안 함.
-- **⚠️ MAX_WEEKS 값은 복구 불가** — 코드 자체가 "더 이상 안 씀"이라고 명시했던 값이라 기능엔
-  영향 없음.
-- 검증 필요(사용자 실행): 각 파일의 `testXXXX()`(`testIsEffectiveP1` 포함) → `runRefreshNewP1Engine()`
-  → `NewP1_REP`에서 Generate 체크박스 토글해 리포트 생성 정상 동작 확인.
+**실제로는 이미 origin/main에 진짜 원본이 있었음**: `origin push`를 시도하다 로컬이 origin/main과
+7개 커밋 divergence 상태였다는 걸 발견 — "집에서 작업하던 걸 커밋 안 해서"로 추정했던 바로 그
+작업이 실제로는 이미 정상적으로 커밋/푸시되어 있었음(`9b1a86a` NewP1_REP 구현, `43890e9` Week축
+제거, `cb8fb85` MTA BOFU 버그 수정, `180b9ea`/`95396a8` ACQ_REP 이벤트 기준 개선,
+`4d4afce` New P1 로직 통일 등). 이 진짜 원본은 재구성판보다 훨씬 완전했음:
+- `isEffectiveP1_()`는 사실 `30_ACQReport.js`에 있었음(재구성판은 `40_NewP1Report.js`에 넣어서,
+  origin 버전을 그대로 받으면 중복 선언 충돌이 날 뻔함).
+- `13_MTATransformer.js`의 BOFU 분류 버그 수정은 origin 쪽이 회귀 테스트(`testTransformMTARecord_BOFU`)
+  까지 포함한 상위호환 버전이었음(수정 내용 자체는 동일 — `diff`로 확인).
+- `30_ACQReport.js`엔 ACQ_REP 자체의 개선사항(IC Booked/Complete/Revenue를 코호트가 아니라 실제
+  이벤트 날짜 기준으로 전환, `docs/ACQReportDesign.md` 참고)까지 포함돼 있었음 — 재구성판엔 없던 부분.
+
+**최종 결정(사용자 확인)**: `00_Config.js`/`13_MTATransformer.js`/`30_ACQReport.js`/
+`40_NewP1Report.js`/`41_NewP1ReportStyles.js`는 origin(진짜 원본) 버전을 그대로 채택, 재구성판은
+전부 폐기. `24_OPSQA.js`(IC Booked/Complete 불일치 진단 함수 3종 추가)와
+`07_IncrementalMasterBuild.js`/`09_MTAFunnelSync.js`/`10_MasterBuild.js`(`refreshNewP1Engine_()`
+호출 배선)는 이번 세션의 Events 관련 변경과 겹치지 않는 별도 영역이라 병합 시 양쪽 다 자동으로
+합쳐짐(충돌 없음).
 
 ## Events_OPS / Events_Engine 최초 구현
 - 설계: `docs/EventsReportDesign.md` (같은 날 세션에서 확정). Webinar/Seminar 프로그램별 ROI
@@ -366,9 +366,136 @@
 - 자세한 내용: `docs/BusinessSegmentClassification.md` "필드 변경 이력", `docs/ACQReportDesign.md`
   "All Leads/SAL — Segment 한계 해결됨" 섹션.
 
-## 다음에 다룰 항목
-- MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차).
+## 14. Events_REP 설계 착수 — Meta 데이터 소스 확인 대기 (미해결)
+
+- 다음 리포트로 **Events_REP** 논의 시작: Business Segment 중 **Webinar/Seminar만** 대상,
+  NewP1_REP과 달리 **All Leads부터** 퍼널을 그림 (P1 필터 없음), 여기에 마케팅 캠페인 성과를 연결해
+  프로그램 자체의 실질 퍼포먼스(ROI)를 보는 목적.
+- **소스 결정**: `MTA_Master` (사용자 선택) — "All Leads"가 이미 ACQ_REP에서 MTA_Master 기준
+  용어이고, 터치별 `MKT UTM Campaign`이 이미 존재. 퍼널 지표(IC Booked/Complete/Won/Revenue)는
+  `Leads_OPS`와 Lead ID로 join 필요 (`09_MTAFunnelSync.js`의 기존 매칭 로직 재사용 가능성 있음).
+- **막힌 지점**: "마케팅 캠페인"이 Salesforce `MKT UTM Campaign` 라벨이 아니라 **Meta 광고
+  플랫폼 자체의 퍼포먼스 데이터**(스펜드/도달/CTR 등으로 추정)를 붙여서 보고 싶다는 의미로 확인됨.
+  이는 현재 파이프라인에 전혀 없는 새 외부 데이터 소스라, 다음 세션에서 먼저 확인 필요:
+  1. Meta 광고 성과 데이터를 지금 어떻게 확보 중인지 (수동 CSV export? 기존 시트? 아직 없음?)
+  2. Meta 캠페인과 Salesforce `MKT UTM Campaign` 간 join key(이름/ID 일치 여부)
+  3. Meta 데이터의 시간 단위(일별/주별/캠페인 누적)
+  4. 새 Import 파이프라인(`Meta_Raw` 등) 신설 필요 여부
+- 코드 변경 없음 — 순수 논의만 진행, 사용자가 다른 대화창(claude.ai)에서 이어가기로 함.
+
+## 다음에 다룰 항목 (2026-07-22 최종 갱신)
+- ~~MTA 전체 재추출 + 재구축 실행 대기 (7번 항목 절차)~~ — 완료.
+- ~~BOFU fix 반영 MTA_Master 재구축~~ — 완료 (82,421건 매칭 확인).
+- **Events_REP 설계 이어가기 (14번 항목)** — Meta 광고 성과 데이터 확보 방식부터 확인 필요. 다음 세션 최우선.
 - `Total Touches`(MTA_Master 기준 터치 횟수) 컬럼 — Leads_OPS `Revenue Actual`과 `Notes` 사이(T/U열 사이)에 추가. 아직 미구현.
 - "Other" 세그먼트 중 Upsell 비중 조사 — `runInvestigateOtherSegmentComposition()`(`24_OPSQA.js`) 구현 완료,
   실행 결과 확인 대기.
 - MTA_Master 중복 append 의심(4번 항목) — 여전히 미해결, CLAUDE.md TODO 3번 참고.
+- NewP1_REP: Segment가 실제 데이터 있는 조합만 sparse하게 표시됨(전체 7개 고정 표시 아님) —
+  사용자가 "지금 급하지 않다"고 확인, 필요 시 재검토.
+
+# Changelog — 2026-07-22 (계속, 오후)
+
+## 9. 로컬 개발 환경 재구축 (신규 머신)
+- 새 환경에 Git 미설치 상태 확인 (winget도 미설치) → Git for Windows 인스톨러 직접 다운로드해 무인 설치.
+- 기존 로컬 `crimson-lead-tracker` 폴더(스텁 상태, `.gs` 확장자, 문서 없음)를
+  `crimson-lead-tracker-backup-20260722`로 백업 후, GitHub(`Harry-sk-mkt/crimson-lead-tracker`) clone으로 교체.
+- `clasp` 재설치 + 로그인(`h.yun@crimsoneducation.org`) 재인증.
+- GitHub push 인증: 이 세션의 브릿지된 터미널은 상호작용이 비활성화되어 있어 Git Credential Manager의
+  브라우저 로그인을 못 띄움 → 사용자가 별도의 일반 터미널에서 직접 `git push` 실행해 해결.
+
+## 10. MTA_Raw 재추출 시 "Lead: Lead ID" 컬럼 누락 발견 + 재조치
+- 사용자가 새로 다운로드한 MTA raw CSV(`report1784693554195.csv`, 82,421행)에 `Lead: Lead ID` 컬럼
+  자체가 없음 발견. `CONFIG.REQUIRED_FIELDS.MTA`가 이 필드를 필수로 요구해서 전체 레코드가
+  invalid 처리 → `MTA_Raw`에 0건 기록 (에러 없이 "성공"으로 끝나 원인 파악에 로그 확인 필요했음).
+- 원인: Salesforce 리포트 재추출 시 필드 설정 누락으로 추정 (재현 조건 불명, 일회성 사용자 실수로 판단).
+- 조치: `Lead: Lead ID` 포함해서 재추출(`report1784695873625.csv`) → `google.script.run` 페이로드
+  크기 문제 방지를 위해 Node 스크립트(`split_csv.mjs`, 프로젝트 폴더 밖 scratchpad에 위치 —
+  gotcha #3 원칙 준수)로 CSV를 quote-aware하게 정확히 2등분(41,211 / 41,210행, 헤더 포함) →
+  `MTA_Raw`/`MTA_Master` 시트 전체 삭제 → `resetMTACounterOnly()` → 두 파일 업로드 → `appendNewMTA()`.
+- 결과: 82,421건 전체 매칭 확인, `MTA_Master` 재생성 완료.
+
+## 11. MTA BOFU Business Segment 버그 발견 + 수정
+- 사용자가 ACQ_REP에서 BOFU가 항상 0으로 나오는 것을 확인, 원인 조사.
+- `13_MTATransformer.js`의 `getBusinessSegment()` 호출에서 `detail` 인자가 하드코딩된 `""`였음
+  (10번 항목의 MTA 전체 재구축과 무관하게 이전부터 존재하던 별개 버그). BOFU 판정 조건은
+  `detail.includes("bofu")` 단독이라 campaign 기반 fallback이 없어 구조적으로 절대 나올 수 없었음.
+- Leads_Master 쪽(`12_LeadTransformer.js`)은 원래부터 정상적으로 detail을 넘기고 있어 영향 없음
+  (Leads/MTA 분류 로직은 원래도 소스 필드가 다르게 분리되어 있었음 — First Touch vs Per-Touch).
+- 사용자 확인: MTA 리포트의 `Lead Source Detail`은 `Lead:` prefix가 없어 Multi Touch Attribution
+  객체 자체 필드로 판단 (샘플 검증, 100% 확정은 아님).
+- 수정: `13_MTATransformer.js` v5.1.0, `""` → `rawRecord["Lead Source Detail"]`.
+  회귀 테스트 `testTransformMTARecord_BOFU()` 추가. `clasp push --force`(manifest 변경 확인 필요)로 배포,
+  git 커밋(`cb8fb85`) + GitHub push 완료.
+- 반영을 위해 `MTA_Raw`/`MTA_Master` 재삭제 → `resetMTACounterOnly()` → 재Import → `appendNewMTA()` 재실행 중.
+- 자세한 내용: `docs/BusinessSegmentClassification.md`, `docs/ACQReportDesign.md`.
+
+## 12.5. IC Booked/Complete Event 기준 검증 + 헤더 Note 추가
+- `24_OPSQA.js`에 `runDiagnoseICCompleteMismatch()`(Leads_OPS vs MTA_Master 재계산값 대조)와
+  `runBreakdownICCompleteByBookedMonth()`(이번 달 Complete 건을 Booked 월별로 분해) 진단 함수 추가,
+  일시적으로 `✅ QA` 메뉴에 걸어 실행 확인 후 메뉴에서 제거(진단 함수 자체는 파일에 보존).
+- 검증 결과: IC Booked(41)/IC Complete(43) 전부 정상 — sync 로직 버그 없음. Complete가 Booked보다
+  많은 건 5~6월에 Booked된 상담이 7월에 Complete된 백로그(재부킹 등) 때문으로 확인, 정상 동작.
+- `32_ACQReportStyles.js` v1.4.0: `annotateACQReportMetricNotes_()` 추가 — `ACQ_REP` 헤더 K/L/M/N
+  (SAL/IC Booked/IC Complete/Revenue) 셀에 날짜 기준을 Note로 남겨, 코호트/이벤트 기준 혼동 방지.
+  `applyACQReportStyles_()`가 매 리포트 생성마다 자동 호출하므로 항상 최신 유지.
+
+## 12.6. NewP1_REP 설계 확정 + ACQ_REP New P1 로직 통일
+- 사용자가 `docs/NewP1ReportDesign.md`에 NewP1_REP(New P1 Cohort Funnel Report) 설계를 직접 정리 —
+  소스는 `Leads_OPS` 단일, 코호트는 `Create Date` + 유효 Priority(`Priority Override` 우선 →
+  `Lead Priority`, exact match `"Priority 1"`), SAL 판정은 `Total IC Requests` > 0(MTA 무관),
+  Won 판정은 `Revenue` > 0, Row는 FY>Month>Fiscal Week>Segment flat 구조(소계 없음), Engine과
+  Summary를 `NewP1_Engine` 한 시트로 통합. 리뷰 결과 Article 번호 인용/실제 함수 동작 모두 정확함 확인.
+- 리뷰 중 발견: ACQ_REP의 New P1(`computeOPSAggregates_()`)이 `Priority Override`를 무시하고
+  `Lead Priority`에 `indexOf("1")`(substring)로 느슨하게 비교하고 있어, NewP1_REP 설계(exact match +
+  Override 우선)와 기준이 달랐음. 사용자 확인 후 **ACQ_REP의 New P1도 같은 기준으로 통일** —
+  `isEffectiveP1_()` 신규 추가(`30_ACQReport.js` v1.5.0), 테스트 `testIsEffectiveP1()` 포함.
+  All P1(MTA_Master 기반)은 `Priority Override` 컬럼 자체가 없어 대상 아니고 기존 로직 유지.
+- NewP1_REP 구현은 다음 세션 대기 (`40_NewP1Report.js`/`41_NewP1ReportStyles.js`/`CONFIG.NEWP1` 신규 예정).
+
+## 13. NewP1_REP 구현 완료
+
+- `docs/NewP1ReportDesign.md` 설계 그대로 구현: `40_NewP1Report.js`(Engine + Aggregates + Report 생성),
+  `41_NewP1ReportStyles.js`(서식), `00_Config.js`의 `CONFIG.NEWP1` 신규.
+- **Cohort 정의**: `Leads_OPS` 단일 소스, Create Date 구간 + 유효 Priority(`Priority Override` 우선 →
+  `Lead Priority`, exact match `"Priority 1"`, `isEffectiveP1_()` 재사용).
+- **Engine**: `NewP1_Engine` 숨김 시트 하나에 Engine(조합/Sort Index)과 Summary(사전 집계)를 통합
+  (ACQ_REP은 이 둘이 분리돼 있으나, NewP1은 매번 전 기간을 사전 집계하므로 합쳐도 무방 — 설계 문서 §6).
+  `refreshNewP1Engine_()`을 `refreshACQSummary_()`가 호출되는 모든 지점(`appendNewLeads()`,
+  `syncMTAFunnelToOPS_()`, `rebuildLeadsMaster()`, `rebuildMTAMaster()`)에 나란히 추가.
+  `runRefreshACQSummary()`(수동 전용 래퍼)는 건드리지 않음 — `runRefreshNewP1Engine()`을 별도 제공.
+- **Row 구조**: FY > Month > Fiscal Week(`getWeek()` 재사용, 8/1=W01 시작) > Segment, flat(소계 없음).
+  Week가 Month 경계와 무관하게 파생되어 같은 Week 번호가 다른 두 Month 아래 나뉘어 나타날 수 있음
+  (의도된 동작). 이 때문에 ACQ_REP처럼 고정 blockSize로 월 블록을 나눌 수 없어, `reverseNewP1MonthBlocks_()`는
+  FY/Month 값이 실제로 바뀌는 지점을 경계로 판단하도록 별도 구현 (ACQ의 `reverseMonthBlocks_()`와 다른 방식).
+- **onEdit 통합**: GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히 덮어써서, `onEdit()`을
+  파일마다 따로 두면 안 됨. `30_ACQReport.js`의 기존 `onEdit()`을 시트 이름 분기 방식으로 리팩터링해서
+  `handleACQReportGenerateEdit_()`(기존 로직 그대로 이동)와 `handleNewP1ReportGenerateEdit_()`(신규)를
+  각각 호출하도록 변경 — ACQ_REP 동작 자체는 변경 없음.
+- **최초 시트 세팅**: ACQ_REP과 달리 사전에 수동으로 만들어둔 헤더가 없어서, `setupNewP1Report()`가
+  시트 생성 + Control Area 헤더(Start FY/Start Month/End FY/End Month/Generate Report) + Report Area
+  헤더(14개 컬럼) + 드롭다운까지 한 번에 세팅하도록 구현. 편집기에서 1회 수동 실행 필요.
+- 신규 pure 함수(`deriveNewP1Cohort_`, `computeNewP1SortIndex_`, `reverseNewP1MonthBlocks_`)는
+  전부 `testXXXX()` 회귀 테스트 동반 (TDD).
+- 리뷰 중 발견해 같이 처리한 항목: ACQ_REP New P1 로직 통일 (별도 §12.6 기록).
+
+## 13.5. NewP1_REP — Week 축 제거, 줄무늬 배경 Weekly 실험 후 원복
+- 사용자가 실제 화면 확인 후 `getWeek()`(8/1 기준 7일 단위 Fiscal Week)이 캘린더 주(월~일)와
+  무관함을 확인 — 매년 8/1 요일이 달라(FY26=금요일, FY27=토요일) Week 시작 요일이 매년 바뀜.
+  캘린더 주로 오인하기 쉬워 혼동 유발 → **Week 축을 리포트에서 완전히 제거**하기로 결정.
+- Row 구조를 FY > Month > Fiscal Week > Segment → **FY > Month > Segment**로 단순화
+  (ACQ_REP과 동일 계층). Report Area 14 → 13컬럼, Engine 11 → 10컬럼.
+  `computeNewP1SortIndex_()`에서 Week 슬롯 제거(ACQ의 `computeSortIndex_()`와 동일한 형태로 단순화).
+  `deriveNewP1Cohort_()`도 Week 계산 제거. `CONFIG.NEWP1.MAX_WEEKS`는 제거하지 않고 보존(향후 재도입 대비).
+- 이 변경 직전에는 "줄무늬 배경을 Monthly → Weekly 기준으로" 요청받아 `41_NewP1ReportStyles.js`
+  v1.1.0에 반영했었으나, Week 축 자체가 사라지면서 v1.2.0에서 자연스럽게 FY+Month 기준으로 복귀.
+- `docs/NewP1ReportDesign.md`는 원래 Week 포함 설계 텍스트를 삭제하지 않고 "원래 설계(배경 기록)"
+  섹션으로 보존, 위에 변경 사유를 명시하는 방식으로 갱신.
+
+## 12. 리포트 설계 가드레일 재확인 — 향후 NewP1_REP 등 확장 리포트 주의사항
+- 사용자가 향후 만들 New P1 Funnel 리포트(`NewP1_REP`, 미구현)가 `Leads_Master`를 직접 읽으면 안 된다는
+  점을 미리 확인. `Leads_Master`는 append-only라 갱신된 상태(Business Segment 재분류 등)를 반영 못 함.
+  기존 원칙(`docs/OperationsLayer.md`: "향후 모든 리포트는 Leads_Master가 아닌 Leads_OPS를 읽어야 한다")과
+  일치 — 코드 변경 없음, 향후 구현 시 지킬 가드레일로 기록.
+- 참고로 `IC Booked Date` 등 `OPS.SYNC_COLUMNS`는 애초에 `Leads_Master`를 거치지 않고
+  `syncMTAFunnelToOPS_()`가 `MTA_Master`에서 직접 `Leads_OPS`로 쓰기 때문에 이 문제와 무관 (이미 안전).

@@ -1382,3 +1382,265 @@ function runSampleDuplicateRawDates() {
   });
 
 }
+
+
+/**
+ * ==========================================================
+ * Count IC Booked / IC Complete — This Calendar Month
+ *
+ * WHY
+ * ACQ_REP의 "IC Booked"/"IC Complete"는 Create Date 기준 cohort
+ * 집계라(docs/ACQReportDesign.md), "이번 달에 IC Booked Date가 찍힌
+ * 건수"(이벤트 발생 월 기준)와는 다른 숫자다. 사용자가 실제값과
+ * 리포트값이 다르다고 한 것을 검증하기 위해 두 기준을 모두 계산해서
+ * 비교한다.
+ * ==========================================================
+ */
+function runCountICBookedThisMonth() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!sheet) {
+    throw new Error(OPS.SHEET.OPS + " sheet not found.");
+  }
+
+  const records = sheetToObjects(sheet);
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  function isThisMonth(date) {
+    return date instanceof Date && !isNaN(date.getTime()) &&
+      date.getFullYear() === year && date.getMonth() === month;
+  }
+
+  function isFilled(date) {
+    return date instanceof Date && !isNaN(date.getTime());
+  }
+
+  let cohortBooked = 0;
+  let cohortComplete = 0;
+  let eventBooked = 0;
+  let eventComplete = 0;
+
+  records.forEach(function (r) {
+
+    const createDate = r["Create Date"];
+    const bookedDate = r["IC Booked Date"];
+    const completeDate = r["IC Completed Date"];
+
+    if (isThisMonth(createDate) && isFilled(bookedDate)) cohortBooked++;
+    if (isThisMonth(createDate) && isFilled(completeDate)) cohortComplete++;
+
+    if (isThisMonth(bookedDate)) eventBooked++;
+    if (isThisMonth(completeDate)) eventComplete++;
+
+  });
+
+  Logger.log("======================================");
+  Logger.log("IC Booked / IC Complete — " + (month + 1) + "/" + year);
+  Logger.log("======================================");
+  Logger.log("[Cohort 기준 — ACQ_REP과 동일: Create Date가 이번 달 AND 해당 Date가 채워짐]");
+  Logger.log("IC Booked (cohort)   : " + cohortBooked);
+  Logger.log("IC Complete (cohort) : " + cohortComplete);
+  Logger.log("");
+  Logger.log("[이벤트 기준 — 해당 Date 자체가 이번 달 (Create Date 무관)]");
+  Logger.log("IC Booked (event)    : " + eventBooked);
+  Logger.log("IC Complete (event)  : " + eventComplete);
+
+}
+
+
+/**
+ * ==========================================================
+ * Diagnose IC Complete Mismatch — Leads_OPS vs MTA_Master
+ *
+ * WHY
+ * Leads_OPS의 "IC Completed Date가 이번 달인 건수"(43)가
+ * MTA_Master 기준 재계산값(26)보다 많음. syncMTAFunnelToOPS_()는
+ * 값이 없으면 기존 OPS 값을 보존하므로, 예전엔 있었지만 지금
+ * MTA_Master 재계산으로는 안 잡히는 Lead가 있다는 뜻. 원인 후보:
+ * computeMTAFunnelByLeadId_()가 "가장 오래된 터치" 행의 IC Completed
+ * Date만 보는데, 그 필드가 실제로는 다른 터치 행에만 채워져 있을 수
+ * 있음 (Lead 레벨 필드가 모든 터치 행에 동일하게 반복된다는 가정이
+ * 깨지는 경우).
+ * ==========================================================
+ */
+function runDiagnoseICCompleteMismatch() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+  const mtaSheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+
+  if (!opsSheet) throw new Error(OPS.SHEET.OPS + " sheet not found.");
+  if (!mtaSheet) throw new Error(CONFIG.SHEETS.MTA_MASTER + " sheet not found.");
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  function isThisMonth(date) {
+    return date instanceof Date && !isNaN(date.getTime()) &&
+      date.getFullYear() === year && date.getMonth() === month;
+  }
+
+  const opsRecords = sheetToObjects(opsSheet);
+  const mtaRecords = sheetToObjects(mtaSheet);
+
+  const funnelByLeadId = computeMTAFunnelByLeadId_(mtaRecords);
+
+  const touchesByLeadId = {};
+
+  mtaRecords.forEach(function (r) {
+    const leadId = String(r["Lead ID"] || "").trim();
+    if (!leadId) return;
+    if (!touchesByLeadId[leadId]) touchesByLeadId[leadId] = [];
+    touchesByLeadId[leadId].push(r);
+  });
+
+  const opsCompletedThisMonth = opsRecords.filter(function (r) {
+    return isThisMonth(r["IC Completed Date"]);
+  });
+
+  let earliestTouchHasValue = 0;
+  let someOtherTouchHasValue = 0;
+  let noTouchHasValue = 0;
+  let leadNotInMTA = 0;
+
+  const missingSamples = [];
+
+  opsCompletedThisMonth.forEach(function (r) {
+
+    const leadId = String(r["Lead ID"] || "").trim();
+    const funnel = funnelByLeadId[leadId];
+
+    if (!funnel) {
+      leadNotInMTA++;
+      return;
+    }
+
+    if (funnel.icCompletedDate instanceof Date && !isNaN(funnel.icCompletedDate.getTime())) {
+      earliestTouchHasValue++;
+      return;
+    }
+
+    const touches = touchesByLeadId[leadId] || [];
+
+    const anyHasValue = touches.some(function (t) {
+      return t["IC Completed Date"] instanceof Date && !isNaN(t["IC Completed Date"].getTime());
+    });
+
+    if (anyHasValue) {
+      someOtherTouchHasValue++;
+      if (missingSamples.length < 10) missingSamples.push(leadId);
+    } else {
+      noTouchHasValue++;
+    }
+
+  });
+
+  Logger.log("======================================");
+  Logger.log("IC Complete Mismatch Diagnosis — Leads_OPS vs MTA_Master");
+  Logger.log("======================================");
+  Logger.log("Leads_OPS: IC Completed Date가 이번 달인 건수 : " + opsCompletedThisMonth.length);
+  Logger.log("");
+  Logger.log("  Earliest-touch 행에 값 있음 (정상)                    : " + earliestTouchHasValue);
+  Logger.log("  다른 touch 행엔 값 있는데 earliest엔 없음 (버그 의심) : " + someOtherTouchHasValue);
+  Logger.log("  이 Lead의 어떤 touch 행에도 값 없음                   : " + noTouchHasValue);
+  Logger.log("  MTA_Master에 이 Lead ID 자체가 없음                   : " + leadNotInMTA);
+  Logger.log("");
+
+  if (missingSamples.length > 0) {
+    Logger.log("샘플 Lead ID (다른 touch엔 값 있는데 earliest touch엔 없는 케이스, 최대 10개):");
+    Logger.log(missingSamples.join(", "));
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Breakdown IC Complete (This Month) by IC Booked Month
+ *
+ * WHY
+ * IC Complete(이벤트 기준, 이번 달)가 IC Booked(이벤트 기준, 이번 달)보다
+ * 많게 나와서 이상하다는 의심이 있었음. Event 기준에서는 "이번 달 Complete"와
+ * "이번 달 Booked"가 서로 다른 Lead 집합일 수 있어(예: 지난달 Booked된 상담이
+ * 이번 달에 Complete) 수치상 불가능하진 않지만, 실제로 그런 백로그 패턴인지
+ * 확인 필요. 특히 IC Booked Date가 아예 비어있는데 IC Completed Date만 있는
+ * 경우는 진짜 데이터 이상(부킹 없이 완료는 불가능)이라 별도로 집계한다.
+ * ==========================================================
+ */
+function runBreakdownICCompleteByBookedMonth() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!opsSheet) throw new Error(OPS.SHEET.OPS + " sheet not found.");
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  function isThisMonth(date) {
+    return date instanceof Date && !isNaN(date.getTime()) &&
+      date.getFullYear() === year && date.getMonth() === month;
+  }
+
+  const records = sheetToObjects(opsSheet);
+
+  const completedThisMonth = records.filter(function (r) {
+    return isThisMonth(r["IC Completed Date"]);
+  });
+
+  const bookedSameMonth = [];
+  const bookedEarlierMonth = [];
+  const bookedMissing = [];
+
+  const monthKeyTally = {};
+
+  completedThisMonth.forEach(function (r) {
+
+    const bookedDate = r["IC Booked Date"];
+    const leadId = String(r["Lead ID"] || "").trim();
+
+    if (!(bookedDate instanceof Date) || isNaN(bookedDate.getTime())) {
+      bookedMissing.push(leadId);
+      return;
+    }
+
+    if (isThisMonth(bookedDate)) {
+      bookedSameMonth.push(leadId);
+    } else {
+      bookedEarlierMonth.push(leadId);
+    }
+
+    const key = bookedDate.getFullYear() + "-" + String(bookedDate.getMonth() + 1).padStart(2, "0");
+    monthKeyTally[key] = (monthKeyTally[key] || 0) + 1;
+
+  });
+
+  Logger.log("======================================");
+  Logger.log("IC Complete (This Month) — IC Booked Month Breakdown");
+  Logger.log("======================================");
+  Logger.log("IC Completed Date가 이번 달인 건수 : " + completedThisMonth.length);
+  Logger.log("");
+  Logger.log("  IC Booked Date도 이번 달 (정상, 빠른 처리)      : " + bookedSameMonth.length);
+  Logger.log("  IC Booked Date가 이전 달 (정상, 백로그 처리)    : " + bookedEarlierMonth.length);
+  Logger.log("  IC Booked Date가 비어있음 (⚠️ 데이터 이상 의심) : " + bookedMissing.length);
+  Logger.log("");
+  Logger.log("-- IC Booked Date 월별 분포 --");
+
+  Object.keys(monthKeyTally).sort().forEach(function (key) {
+    Logger.log("  " + key + " : " + monthKeyTally[key]);
+  });
+
+  if (bookedMissing.length > 0) {
+    Logger.log("");
+    Logger.log("⚠️ IC Booked Date 없이 IC Completed Date만 있는 Lead ID:");
+    Logger.log(bookedMissing.join(", "));
+  }
+
+}

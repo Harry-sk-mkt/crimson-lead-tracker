@@ -71,6 +71,7 @@ function rebuildLeadsMaster(showAlert = true) {
     );
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   refreshEventsEngine_();
 
@@ -153,6 +154,7 @@ function rebuildMTAMaster(showAlert = true) {
     );
 
   refreshACQSummary_();
+  refreshNewP1Engine_();
 
   refreshEventsEngine_();
 
