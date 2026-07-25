@@ -129,6 +129,19 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
   `computeOPSAggregates_()`(Leads_OPS, IC Booked/Complete와 동일하게 리드당 1건, 이벤트 날짜
   기준)로 이동(`30_ACQReport.js`). 기존 MTA_Master 기반 SAL 로직/`Lead Record Type` 사용은 제거.
 
+## ⚠️ SAL에 Lead Status 제외 조건 추가 필요 — 데이터 대기 (2026-07-25, 미해결)
+- 위 "Sales Accepted Date" 전환 이후에도, `Lead Status`(Salesforce 표준 필드 — `Sales Funnel Stage`와
+  다른 별개 필드. 픽리스트 순서: Nurturing → New (Not Contacted) → Attempting Contact → Contacted →
+  Disqualified → IC Booked → Qualified)가 `"Nurturing"`인 리드도 Sales Accepted Date가 찍혀있어
+  SAL로 잘못 카운트되는 케이스 발견(Search 세그먼트 SAL 8건이 전부 IC Booked인 게 이상해서 개별
+  확인하다 발견).
+- **확정된 제외 조건**: `Lead Status === "Nurturing"`만 제외. New/Attempting Contact/Contacted/
+  Disqualified/IC Booked/Qualified는 전부 SAL로 그대로 카운트(사용자 확인).
+- **막힘**: `Lead: Lead Status` 필드가 아직 MTA export에 없음 — Salesforce 리포트에 추가 + 재export
+  전까지 구현 불가. 도착 시 `13_MTATransformer.js` 매핑(리드 레벨 스냅샷이라 대표값 로직 필요 가능)
+  → `computeOPSAggregates_()`(`30_ACQReport.js`) SAL 조건에 `leadStatus !== "Nurturing"` 추가.
+  자세한 내용: `CLAUDE.md` 미해결 항목 10번.
+
 ## 💡 Opportunity Won Date 대체 후보 발견 — Lead: Sales Funnel Stage = "Won Deal" (2026-07-25, 발견만 기록·구현 보류)
 - CLAUDE.md "현재 알려진 미해결 항목" 5번(Opp Won Date는 진짜 Close Date가 아님)과 관련된 발견.
   `Lead: Sales Funnel Stage`가 `"Won Deal"`인 리드는 전부 Revenue 값이 존재하는 것으로 확인됨
