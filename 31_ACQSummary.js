@@ -13,7 +13,14 @@
  * - rebuildLeadsMaster(), rebuildMTAMaster()
  *
  * Version
- * v1.0.0
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-07-25)
+ * - SAL 데이터 소스를 mtaAgg(MTA_Master, Lead Record Type 기준 — 과집계
+ *   문제 있었음)에서 opsAgg(Leads_OPS, Sales Accepted Date 이벤트 기준)로
+ *   전환. 30_ACQReport.js computeMTAAggregates_()/computeOPSAggregates_()
+ *   참고.
  * ==========================================================
  */
 
@@ -45,8 +52,8 @@ function refreshACQSummary_(){
 
   const allKeys = {};
 
-  [mtaAgg.allLeads, mtaAgg.allP1, mtaAgg.sal,
-   opsAgg.newLeads, opsAgg.newP1, opsAgg.icBooked, opsAgg.icComplete, opsAgg.revenue]
+  [mtaAgg.allLeads, mtaAgg.allP1,
+   opsAgg.newLeads, opsAgg.newP1, opsAgg.sal, opsAgg.icBooked, opsAgg.icComplete, opsAgg.revenue]
     .forEach(function(map){
       Object.keys(map).forEach(function(key){
         allKeys[key] = true;
@@ -68,7 +75,7 @@ function refreshACQSummary_(){
       mtaAgg.allP1[key] || 0,
       opsAgg.newLeads[key] || 0,
       opsAgg.newP1[key] || 0,
-      mtaAgg.sal[key] || 0,
+      opsAgg.sal[key] || 0,
       opsAgg.icBooked[key] || 0,
       opsAgg.icComplete[key] || 0,
       opsAgg.revenue[key] || 0

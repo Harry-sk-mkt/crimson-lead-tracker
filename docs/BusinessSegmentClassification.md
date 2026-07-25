@@ -4,7 +4,7 @@
 Business Segment는 Marketing 2.0 전반에서 사용되는 표준 마케팅 채널 분류다.
 Leads_Master와 MTA_Master가 같은 세그먼트 이름을 쓰지만, **분류 로직은 리포팅 목적에 따라 다르다.**
 
-## 확정 세그먼트 (7개)
+## 확정 세그먼트 (8개)
 ```
 Seminar   (구 "Event Offline", 2026-07-22 리네이밍)
 Webinar   (구 "Event Online", 2026-07-22 리네이밍)
@@ -13,6 +13,7 @@ Search
 Content
 Referral
 Other
+N/A       (2026-07-25 추가 — 아래 참고)
 ```
 
 ## Leads_Master — First Touch Attribution
@@ -20,13 +21,23 @@ Other
 
 | Segment | Classification |
 | --- | --- |
-| Seminar | First MKT UTM Campaign에 `event-offline` 포함 OR First Touch Detail이 `EV-`로 시작 |
-| Webinar | `event-online` 포함 OR `WB-`로 시작 OR Zoom Webinar |
-| BOFU | First Touch Detail에 `BOFU` 포함 |
-| Search | Paid Search, Organic Search, Contact Campaign(`_contact`), Contact/Consult 페이지 |
-| Content | Lead Campaign(`_lead`), ebook, planner, guide, prospectus, booklet, curriculum guide, parent ebook |
+| Seminar | Campaign/Detail에 `event-offline`/`offline-seminar`/`expo`/`summit`(2026-07-25 추가) 포함 OR Detail에 `ev-`/`live event`/`seminar`/`세미나`(2026-07-25 추가, `ev-`는 위치 무관 포함 체크로 완화) 포함 |
+| Webinar | Campaign/Detail에 `event-online`/`online-webinar`/`book a consult`(2026-07-25 추가) 포함 OR Detail에 `wb-`(위치 무관 완화)/`webinar`/`open day`(2026-07-25 추가) 포함 |
+| BOFU | Detail에 `BOFU` 포함 OR Campaign/Detail에 `ptc`(Push To Consult, 2026-07-25 추가) 포함 OR Detail에 `consultation request`/`consult page`(2026-07-25 추가) 포함 |
+| Search | Paid Search, Organic Search, Contact Campaign(`_contact`/`contact`/`consult` — 순수 "consult"는 Webinar/BOFU의 구체적 문구에 해당 안 되는 경우의 fallback), Detail에 `contact`(2026-07-25 추가) 포함, Lead Source에 `search`(2026-07-25 추가) 포함 |
+| Content | Campaign/Detail에 `ebook`/`planner`/`guide`/`prospectus`/`booklet`/`curriculum`/`parent ebook`/`infographic`(2026-07-25 추가) 포함(`_lead`는 campaign 전용), Detail에 `on-demand`/`ondemand`(2026-07-25 추가) 포함 |
 | Referral | Lead Source = Referral |
-| Other | 그 외 전부 |
+| N/A | MKT UTM Campaign/Lead Source Detail/Lead Source Category/Lead Source **4개가 전부 빈 값**인 경우(2026-07-25 추가) — 어트리뷰션 데이터 자체가 없는 경우를 "Other"와 구분하기 위함 |
+| Other | 위 4개 필드 중 하나라도 값이 있지만 어떤 룰에도 안 맞는 경우 (일부는 캠페인 집행/네이밍 실수로 보이는 개별 예외 — `25_TempQA_BusinessSegment.js`에서 "Other 잘 분류"로 별도 표시) |
+
+**N/A 판정 위치**: 다른 모든 룰(Referral 포함) 체크 이후, 맨 마지막(Other 직전)에 위치. Referral은
+`Lead Source` 값만으로 판정되는데 그 값이 비어있으면 N/A 조건(Lead Source도 빈 값)과 겹치지 않으므로
+우선순위 충돌 없음.
+
+**"Consult" 계열 우선순위 확정(2026-07-25)**: 같은 "consult" 단어를 포함해도 문구에 따라 세그먼트가
+다름 — `book a consult`(Webinar) > `consultation request`/`consult page`(BOFU) > 순수 `consult`
+(Search, 기존 룰 유지). 코드 순서(Seminar > Webinar > BOFU > Search)상 더 구체적인 문구가 먼저
+체크되므로 충돌 없음.
 
 ## MTA_Master — Per-Touch Attribution (2026-07-22 수정)
 **Priority:** MKT UTM Campaign → Lead Source Detail → Lead Source → Other
@@ -58,6 +69,112 @@ Other
 - 기존 MTA_Master 데이터는 이 fix 적용 후 전체 재추출 없이도 `MTA_Raw`/`MTA_Master`를 비우고
   `resetMTACounterOnly()` + 재Import + `appendNewMTA()`(카운터 0이라 Full Rebuild와 동일 효과)로
   재분류 진행 중.
+
+### ⚠️ Search 판정에 Lead Source 조건 추가 (2026-07-25)
+- **문제**: `temp_QA` 시트(`25_TempQA_BusinessSegment.js`)로 Leads_OPS Business Segment 수동 QA 중,
+  First Lead Source에 `Search`가 포함되는데도 Business Segment가 `Other`로 떨어지는 리드 2,264건 확인.
+  기존 `getBusinessSegment()`는 Search 판정 시 campaign/detail만 보고 leadSource는 Referral 판정에만
+  사용해서, "Lead Source 자체가 Search 계열"인 케이스를 놓치고 있었음.
+- **수정**: Search 판정 조건에 `leadSource.includes("search")`(대소문자 무관)를 OR로 추가. 기존
+  Search 조건과 동일 우선순위 — Seminar/Webinar/BOFU보다는 후순위, Content보다는 선순위 유지.
+  따라서 현재 Content로 분류된 리드 중 Lead Source에 `search`가 포함된 건 이 변경으로 Search로
+  바뀔 수 있음(부수효과, 사용자 확인 후 진행).
+- **적용 범위**: `getBusinessSegment()`가 Leads_Master/MTA_Master 공용 함수라 양쪽 다 영향받음.
+  기존 Master row는 `rebuildLeadsMaster()`/`rebuildMTAMaster()` 재실행 전까지 구 분류값 유지, 이후
+  `buildLeadsOPS()` 재실행으로 Leads_OPS까지 반영해야 함.
+
+### ⚠️ Seminar/Webinar 캠페인명 패턴 추가 + Search에 Detail Contact 조건 추가 (2026-07-25, 계속)
+- **문제 1 (Seminar/Webinar)**: `temp_QA`로 Search Lead Source fix를 검토하던 중, 실제로는 Seminar여야
+  할 리드(Lead ID `00QRC000008NmXB`, campaign=`KR_core_2024-02-27_josephine-and-gabe-seoul-offline-seminar`)가
+  `event-offline` 리터럴 불일치로 걸러지지 않고 있었음이 확인됨. "core" 캠페인 네이밍 규칙이 예전
+  "event-offline"/"event-online" 태그와 다른 슬러그(`-offline-seminar`/`-online-webinar`)를 쓰는 것으로
+  확인.
+- **수정 1**: Seminar/Webinar 판정에 각각 `campaign.includes("offline-seminar")` /
+  `campaign.includes("online-webinar")`를 OR로 추가. Seminar/Webinar는 코드 순서상 Search/Content보다
+  먼저 체크되므로, 이 fix로 해당 리드들은 Search 판정 이전에 Seminar/Webinar로 먼저 잡힘.
+- **문제 2 (Search)**: First Touch Detail이 "Contact Us Form" 류(예: `Crimson Education Contact Us
+  form`)인데 Other로 떨어지는 43건 확인 — 기존 Search 판정은 `campaign.includes("contact")`만 체크하고
+  detail은 체크하지 않았음.
+- **수정 2**: Search 판정에 `detail.includes("contact")`를 OR로 추가.
+- 두 fix 모두 사용자가 `temp_QA` 시트를 수동 검토하며 발견, 확인 후 적용.
+
+### ⚠️ Webinar Detail 조건 완화 — "zoom webinar" 정확 문구 → "webinar" 포함 (2026-07-25, 계속 3차)
+- **문제**: First Touch Detail이 `Created via Zoom API Integration via webinar attendance report`처럼
+  "zoom"과 "webinar"가 붙어있지 않은 변형인데, 기존 조건이 `detail.includes("zoom webinar")`(정확한
+  연속 문구)만 체크해서 Other로 떨어짐.
+- **수정**: `detail.includes("webinar")`로 완화(zoom 여부 무관). "webinar" 단어 자체가 강한 신호라
+  오탐 위험은 낮다고 판단(사용자 확인).
+
+### ⚠️ Seminar에 Expo 패턴 추가 (2026-07-25, 계속 4차)
+- **문제**: `campaign="KR_core_2026-03-01_expo_early1_event-lam-budget-smart160"`,
+  `detail="WF-2026-03-KOR-MOFU-Core Expo Naver DA"`처럼 캠페인명에 "event"만 있고
+  "event-offline"/"offline-seminar" 패턴이 없는 Expo 캠페인이 Other로 떨어짐. Expo는 오프라인
+  행사로 Seminar와 동일 취급(사용자 확인).
+- **수정**: Seminar 판정에 campaign/detail 양쪽에 `includes("expo")` 추가.
+
+### ⚠️ Content가 campaign만 체크하는 단일 필드 의존 문제 해결 (2026-07-25, 계속 5차)
+- **문제**: Content 판정이 campaign만 보고 detail은 전혀 체크하지 않아서,
+  `detail="WF-2021-09-KOR-MOFU-Core Hyperlocalized ECL eBook"`처럼 campaign엔 신호가 없고
+  detail에만 "eBook"이 있는 케이스가 Other로 떨어짐(사용자 확인).
+- **수정**: `_lead`(캠페인 슬러그 전용 태그) 제외 나머지 6개 콘텐츠 키워드(ebook/planner/guide/
+  prospectus/booklet/curriculum/parent ebook)를 detail에도 동일하게 미러링.
+
+### ⚠️ temp_QA 2차 리프레시 발견분 일괄 반영 (2026-07-25, 계속 6차)
+- **Seminar**: `summit`(예: "KR APAC US UK Summit (Jun 06)"), `live event`(예: "Registered for
+  Live Event: Mar 30 FAO Conference"), `seminar`/`세미나` 일반 단어 자체(예: "Martin Walsh
+  Seminar", 한국어 세미나 초청 문구) 추가. `EV-` 접두사 체크(`startsWith`)를 위치 무관
+  `includes("ev-")`로 완화 — "Registered for EV-2024-04-..." 처럼 접두사가 아닌 위치에 오는
+  케이스 대응.
+- **Webinar**: `book a consult`(예: "2021-07-KOR-Book a consult page" — 대다수가 웨비나 케이스로
+  확인, 소수 예외는 수동 관리 예정), `open day`(예: "Filled out form: CGA APAC Open Day") 추가.
+  `WB-` 접두사 체크도 동일하게 위치 무관 `includes("wb-")`로 완화.
+- **BOFU**: `ptc`(Push To Consult, 예: campaign에 `yale-ptc-parents_content-...`),
+  `consultation request`/`consult page`(예: "KR Consult Page", "...| Consultation Request")
+  추가.
+  - **"Consult" 계열 우선순위 확정**: `book a consult`(Webinar) > `consultation request`/
+    `consult page`(BOFU) > 순수 `consult`(Search, 기존 유지) — 코드 순서(Seminar > Webinar >
+    BOFU > Search)상 더 구체적인 문구가 먼저 체크되어 충돌 없음(사용자 확인).
+- **Content**: `infographic`(예: "...Hyperlocalized Korean Army Infographic"), `on-demand`/
+  `ondemand`(예: "...15Mins On-Demand", "On-demand & Slide Package") 추가.
+- **일반화 불가능한 나머지 Other**: `comp`/`checklist`/`Mini Digital SAT`/`TOFU` 포함 케이스는
+  `getBusinessSegment()`를 건드리지 않고 `25_TempQA_BusinessSegment.js`에서 "Other 잘 분류"로
+  표시만.
+
+### ⚠️ BUSINESS_SEGMENT_EXCEPTIONS 하드코딩 도입 (2026-07-25, 계속 7차)
+- **문제**: 공통 키워드 없는 순수 오타성 Content 예외(예: "US vs UK Top University Comparisons")
+  8건은 패턴 룰로 일반화 불가능(Marketo 캠페인/폼 명명 실수로 추정, 사용자 확인).
+- **수정**: `getBusinessSegment()` 최상단에 `BUSINESS_SEGMENT_EXCEPTIONS` 정확한 문자열 매칭
+  맵을 추가해 모든 일반 룰보다 먼저 체크(campaign/detail 둘 다 대조). 근본 수정은 아래
+  "Marketo 네이밍 정정 필요 목록"을 Marketo에서 정정하는 것 — 이 하드코딩은 그 전까지의
+  임시 우회.
+
+### ⚠️ N/A 세그먼트 추가 — 4개 어트리뷰션 필드 전부 공백 케이스 구분 (2026-07-25, 계속 8차)
+- **문제**: "Other"가 두 가지 서로 다른 상황을 섞어서 표현하고 있었음 — (1) 어트리뷰션 데이터
+  자체가 아예 없는 경우(캠페인/터치디테일/카테고리/리드소스 전부 공백), (2) 데이터는 있지만
+  기존 룰 어디에도 안 맞는 경우. QA 리뷰 중 이 둘을 구분해야 한다는 필요성 확인(사용자 확인).
+- **수정**: `getBusinessSegment()`에 4번째 파라미터 `category`(Leads: First Lead Source
+  Category / MTA: Lead Source Category, 신규 export 필드) 추가. MKT UTM Campaign/Lead Source
+  Detail/Lead Source Category/Lead Source 4개가 전부 공백이면 "N/A" 반환, 그 외엔 기존과 동일.
+  위치는 맨 마지막(Other 직전) — Referral 등 다른 룰과 충돌 없음(Referral은 Lead Source 값이
+  있어야 매치되므로 애초에 N/A 조건과 겹치지 않음). `12_LeadTransformer.js`/`13_MTATransformer.js`
+  호출부 갱신, MTA_Master에 `Lead Source Category` 컬럼 신규 추가. 테스트:
+  `testGetBusinessSegmentNA()`.
+
+## Marketo 네이밍 정정 필요 목록 (2026-07-25)
+아래는 `BUSINESS_SEGMENT_EXCEPTIONS`로 임시 우회 중인 캠페인/폼 이름. Marketo에서 이름 자체를
+정정(예: 프로그램명에 콘텐츠 유형 키워드 포함)하면 코드 하드코딩 없이도 일반 룰로 분류 가능해짐.
+
+| 캠페인/폼 이름 (First MKT UTM Campaign 또는 First Touch Detail) | 현재 임시 분류 | 비고 |
+| --- | --- | --- |
+| WF-2023-01-KOR-MOFU-Core US University Admissions for International School Students | Content | ebook인데 이름에 콘텐츠 유형 키워드 없음 |
+| WF-2022-11-KOR-MOFU-Core US vs UK Top University Comparisons | Content | 〃 |
+| WF-2023-06-KOR-MOFU-Core Breaking Down the Ivy League 2023 Update | Content | 〃 |
+| WF-2022-02-KOR-MOFU-CGA School Comparison | Content | 공통 키워드 없는 개별 예외 |
+| GC-2021-03 KR Why CGA Campaign | Content | 〃 |
+| WF-2023-09-KOR-MOFU-Core How to Ace Your Academics for US Universities (relaunching) | Content | 〃 |
+| WF-2025-12-UK-TOFU-Core 2 Year Roadmap to the Ivy League | Content | 〃 |
+| WF-2026-04-USA-MOFU-Postgrad The 6-Month Recruitment Prep Workbook | Content | 〃 |
+| 2021-07-KOR-Book a consult page | Webinar | 이름은 "consult"지만 실제로는 대부분 웨비나 프로그램. 일부 예외는 수동 관리 필요(사용자 확인, 예외 목록 미확정) |
 
 ## 구현 위치
 `16_TransformHelper.js`의 `getBusinessSegment(campaign, detail, leadSource)` — Leads/MTA 양쪽에서 공용으로 호출됨.

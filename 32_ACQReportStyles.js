@@ -12,9 +12,12 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-07-25)
+ * - SAL 헤더 Note 갱신 — 데이터 소스가 MTA_Master(Lead Record Type)에서
+ *   Leads_OPS(Sales Accepted Date)로 전환됨 반영.
  * v1.4.0 (2026-07-22)
  * - Added: annotateACQReportMetricNotes_() — SAL/IC Booked/IC Complete/
  *   Revenue 헤더 셀에 날짜 기준(Note)을 남겨서, 코호트 vs 이벤트 기준
@@ -161,7 +164,7 @@ function applyACQReportStyles_(sheet, rowCount){
 function annotateACQReportMetricNotes_(sheet, headerRow){
 
   const notes = {
-    11: "SAL — MTA Created Date(터치 발생월) 기준. Lead Record Type = \"SAL\"인 터치 건수.",
+    11: "SAL — Sales Accepted Date 기준(그 달에 실제로 SAL 전환된 건, Leads_OPS 기준, 리드당 1건). Create Date(Lead 생성월)와 무관 (2026-07-25, Lead Record Type 스냅샷 과집계 문제로 이벤트 날짜 기준 전환).",
     12: "IC Booked — IC Booked Date 기준(그 달에 실제로 Booking된 건). Create Date(Lead 생성월)와 무관 (2026-07-22, 코호트 → 이벤트 기준 전환).",
     13: "IC Complete — IC Completed Date 기준(그 달에 실제로 Complete된 건). Booked된 달과 다를 수 있음 (예: 이전 달 Booked, 이번 달 Complete — 정상적인 백로그).",
     14: "Revenue — Opportunity Won Date 기준(그 달에 Won된 건의 Revenue 합). Create Date(Lead 생성월)와 무관 (2026-07-22, 코호트 → 이벤트 기준 전환)."

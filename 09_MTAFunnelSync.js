@@ -18,9 +18,23 @@
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
  *
  * Version
- * v1.2.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-07-25)
+ * - "Sales Accepted Date" 필드 추가(13_MTATransformer.js에서 매핑) — SAL을
+ *   Lead Record Type(터치마다 반복되는 스냅샷, 과집계 문제 있음) 대신 이
+ *   이벤트 날짜 필드로 판별하기 위함(30_ACQReport.js 참고). Sync 대상에
+ *   추가해 Leads_OPS로 반영.
+ * v1.3.0 (2026-07-25)
+ * - computeMTAFunnelByLeadId_()가 Lead ID별 대표 터치를 "가장 오래된
+ *   터치"(earliest) → "가장 최근 터치"(latest, MTA Created Date 최댓값)
+ *   기준으로 변경. IC Booked/Completed/Won/Revenue는 파이프라인 진행에
+ *   따라 갱신되는 Lead 레벨 스냅샷이라 최신 값이 실제 현재 상태에 가까움
+ *   (mergeOPS()의 "earliest wins"는 중복 리드 식별 목적이라 별개 —
+ *   여기 적용했던 게 잘못이었음, 사용자 확인). ACQ_REP 테스트 중
+ *   IC Booked/Complete/Revenue 수치가 실제보다 낮게 나오는 현상 조사
+ *   과정에서 발견.
  * v1.2.0 (2026-07-24)
  * - refreshSearchEngine_()/refreshContentEngine_() 호출 추가 (refreshBOFUEngine_()
  *   바로 옆).
@@ -36,19 +50,28 @@
  *
  * WHY
  * MTA_Master는 터치 단위라 같은 Lead ID가 여러 행에 걸쳐 나온다.
- * IC Booked/Completed/Won/Revenue는 Lead 레벨 사실이라 보통
- * 모든 터치 행에 동일한 값이 반복되지만, 데이터 이상으로 값이
- * 다를 경우 mergeOPS()와 동일한 원칙(가장 오래된 터치 채택)을 적용한다.
+ * IC Booked/Completed/Won/Revenue는 Lead 레벨 스냅샷(그 터치 row가
+ * export된 시점의 Salesforce 상태)이라, 파이프라인이 진행될수록
+ * (IC Booked → Completed → Won) 값이 갱신된다 — 즉 "모든 터치 행에
+ * 동일한 값이 반복된다"는 가정이 실제로는 성립하지 않는다.
+ *
+ * 2026-07-25 정정: 기존엔 mergeOPS()의 "earliest wins"(중복 리드
+ * 식별용) 원칙을 여기에도 그대로 적용해 가장 오래된 터치 값을
+ * 채택했으나, 이는 목적이 다른 두 로직을 잘못 동일시한 것이었음
+ * (mergeOPS()는 "어느 Lead ID가 원본인지" 식별용, 여기는 "현재 Funnel
+ * 상태가 뭔지" 조회용). ACQ_REP의 IC Booked/Complete/Won/Revenue는
+ * "가장 최신 상태"를 봐야 하므로, 가장 최근 터치(MTA Created Date
+ * 최댓값) 값을 채택하도록 변경 (사용자 확인).
  *
  * INPUT
  * mtaRecords : Object[]  (MTA_Master 전체 레코드)
  *
  * OUTPUT
- * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate, revenue } }
+ * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate, revenue, salesAcceptedDate } }
  *
  * TEST
  * 같은 Lead ID 2개 터치, IC Booked Date가 서로 다르면
- * → 더 이른 MTA Created Date를 가진 터치의 값이 채택되어야 함
+ * → 더 최근 MTA Created Date를 가진 터치의 값이 채택되어야 함
  * ==========================================================
  */
 function computeMTAFunnelByLeadId_(mtaRecords){
@@ -76,30 +99,30 @@ function computeMTAFunnelByLeadId_(mtaRecords){
     const rows = groups[leadId];
 
     //----------------------------------------------------------
-    // 가장 오래된 터치(MTA Created Date 최솟값) 찾기
+    // 가장 최근 터치(MTA Created Date 최댓값) 찾기
     //----------------------------------------------------------
 
-    let earliestRow = rows[0];
+    let latestRow = rows[0];
 
     rows.forEach(function(row){
 
       const candidateDate = row["MTA Created Date"];
-      const earliestDate = earliestRow["MTA Created Date"];
+      const latestDate = latestRow["MTA Created Date"];
 
       const candidateValid =
         candidateDate instanceof Date && !isNaN(candidateDate.getTime());
-      const earliestValid =
-        earliestDate instanceof Date && !isNaN(earliestDate.getTime());
+      const latestValid =
+        latestDate instanceof Date && !isNaN(latestDate.getTime());
 
-      if(candidateValid && earliestValid && candidateDate.getTime() < earliestDate.getTime()){
-        earliestRow = row;
+      if(candidateValid && latestValid && candidateDate.getTime() > latestDate.getTime()){
+        latestRow = row;
       }
 
     });
 
     //----------------------------------------------------------
     // 불일치 검증 — 같은 Lead의 터치 행끼리 IC Booked Date가
-    // 다르면 경고만 로그로 남기고, earliestRow 값을 그대로 채택
+    // 다르면 경고만 로그로 남기고, latestRow 값을 그대로 채택
     //----------------------------------------------------------
 
     if(rows.length > 1){
@@ -117,7 +140,7 @@ function computeMTAFunnelByLeadId_(mtaRecords){
           "[MTAFunnelSync] ⚠️ Lead ID " + leadId +
           " — 터치 행마다 IC Booked Date가 다름 (" +
           uniqueBookedDates.length + "개 서로 다른 값). " +
-          "가장 오래된 터치 값 채택."
+          "가장 최근 터치 값 채택."
         );
 
       }
@@ -125,10 +148,11 @@ function computeMTAFunnelByLeadId_(mtaRecords){
     }
 
     result[leadId] = {
-      icBookedDate: earliestRow["IC Booked Date"],
-      icCompletedDate: earliestRow["IC Completed Date"],
-      wonDate: earliestRow["Opportunity Won Date"],
-      revenue: earliestRow["Revenue"]
+      icBookedDate: latestRow["IC Booked Date"],
+      icCompletedDate: latestRow["IC Completed Date"],
+      wonDate: latestRow["Opportunity Won Date"],
+      revenue: latestRow["Revenue"],
+      salesAcceptedDate: latestRow["Sales Accepted Date"]
     };
 
   });
@@ -148,21 +172,25 @@ function testComputeMTAFunnelByLeadId(){
   const records = [
 
     {
+      // 더 이른 터치 — 아직 IC Complete 안 된 시점의 스냅샷
       "Lead ID": "L1",
-      "MTA Created Date": new Date(2026, 5, 15),
-      "IC Booked Date": new Date(2026, 6, 1),
+      "MTA Created Date": new Date(2026, 5, 1),
+      "IC Booked Date": new Date(2026, 5, 1),
       "IC Completed Date": null,
       "Opportunity Won Date": null,
       "Revenue": 0
     },
 
     {
+      // 더 최근 터치 — 이후 IC Complete까지 진행된 시점의 스냅샷
+      // (2026-07-25 수정 전이면 이 값이 무시되고 위 row가 채택됐음)
       "Lead ID": "L1",
-      "MTA Created Date": new Date(2026, 5, 1),   // 더 이른 터치
-      "IC Booked Date": new Date(2026, 6, 1),
-      "IC Completed Date": null,
+      "MTA Created Date": new Date(2026, 6, 10),
+      "IC Booked Date": new Date(2026, 5, 1),
+      "IC Completed Date": new Date(2026, 6, 5),
       "Opportunity Won Date": null,
-      "Revenue": 0
+      "Revenue": 0,
+      "Sales Accepted Date": new Date(2026, 4, 20)
     },
 
     {
@@ -180,7 +208,8 @@ function testComputeMTAFunnelByLeadId(){
 
   const pass =
     Object.keys(result).length === 2 &&
-    result["L1"].icBookedDate.getTime() === new Date(2026, 6, 1).getTime() &&
+    result["L1"].salesAcceptedDate.getTime() === new Date(2026, 4, 20).getTime() &&
+    result["L1"].icCompletedDate.getTime() === new Date(2026, 6, 5).getTime() &&
     result["L2"].icBookedDate === null;
 
   Logger.log("Keys: " + Object.keys(result).length + " (expected 2)");
@@ -272,7 +301,8 @@ function syncMTAFunnelToOPS_(){
     "IC Booked Date": "icBookedDate",
     "IC Completed Date": "icCompletedDate",
     "Opportunity Won Date": "wonDate",
-    "Revenue": "revenue"
+    "Revenue": "revenue",
+    "Sales Accepted Date": "salesAcceptedDate"
   };
 
   let updated = 0;

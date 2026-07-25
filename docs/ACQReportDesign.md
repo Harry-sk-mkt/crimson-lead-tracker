@@ -87,18 +87,56 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 `rawRecord["Lead Source Detail"]`로 수정 완료 — 자세한 내용은 `docs/BusinessSegmentClassification.md`
 "MTA BOFU 판정 버그" 섹션 참고. 이 fix 반영을 위해 MTA_Master 재구축 진행 중.
 
-## Metric Definitions (2026-07-22 갱신)
+## Metric Definitions (2026-07-25 갱신)
 
 | Metric | Source | Date Driver | Count Condition |
 | --- | --- | --- | --- |
 | All Leads | MTA_Master | MTA Created Date (Event) | Count All |
 | All P1 | MTA_Master | MTA Created Date (Event) | `Lead Priority`에 `"1"` 포함(substring) — `Priority Override` 컬럼이 `MTA_Master`엔 없어서 New P1과 달리 그대로 유지 |
-| SAL | MTA_Master | MTA Created Date (Event) | Lead Record Type = "SAL" |
+| SAL | Leads_OPS | **Sales Accepted Date (Event)** | Sales Accepted Date가 그 달에 속함 (2026-07-25부터 — 아래 "SAL 과집계 원인 해결" 섹션 참고. 이전엔 MTA_Master의 Lead Record Type="SAL" 터치 건수였음) |
 | New Leads | Leads_OPS | Create Date (Cohort=Event) | Count All |
 | New P1 | Leads_OPS | Create Date (Cohort=Event) | 유효 Priority = "Priority 1" (exact match, `Priority Override` 우선 → 없으면 `Lead Priority`, 2026-07-22부터 `NewP1_REP` 설계와 통일. `isEffectiveP1_()`, `30_ACQReport.js`) |
 | IC Booked | Leads_OPS | **IC Booked Date (Event)** | IC Booked Date가 그 달에 속함 |
 | IC Complete | Leads_OPS | **IC Completed Date (Event)** | IC Completed Date가 그 달에 속함 |
 | Revenue | Leads_OPS | **Opportunity Won Date (Event)** | 그 달에 Won된 건의 Revenue 합 |
+
+## ⚠️ computeMTAFunnelByLeadId_() — "가장 오래된 터치" → "가장 최근 터치"로 정정 (2026-07-25)
+- **문제**: IC Booked/Completed/Won Date/Revenue는 Lead 레벨 스냅샷(그 터치 row가 export된 시점의
+  Salesforce 상태)이라 파이프라인 진행에 따라(IC Booked → Completed → Won) 값이 갱신되는데,
+  `computeMTAFunnelByLeadId_()`(`09_MTAFunnelSync.js`)가 mergeOPS()의 "earliest wins"(중복 리드
+  식별용) 원칙을 잘못 그대로 적용해 **가장 오래된 터치**의 스냅샷 값을 채택하고 있었음 — 실제로는
+  이미 진행된 Funnel 상태를 놓치는 구조적 오류였음.
+- **발견 경위**: 테스트 스프레드시트에서 이번 달 MTA만 재수출/재계산해 실제 Salesforce 수치와
+  비교하던 중, IC Booked/Complete/Revenue가 계속 실제보다 낮게 나오는 걸 사용자가 지적.
+- **수정**: 대표 터치 선정 기준을 **가장 최근 터치(MTA Created Date 최댓값)**로 변경 — ACQ_REP의
+  IC Booked/Complete/Revenue는 "그 달까지 실제로 어디까지 진행됐는지"를 보는 지표이므로 최신
+  스냅샷이 맞음(사용자 확인). `testComputeMTAFunnelByLeadId()` 갱신 완료.
+- **영향**: `syncMTAFunnelToOPS_()`가 이 함수를 사용해 Leads_OPS SYNC_COLUMNS를 채우므로,
+  기존에 이미 동기화된 IC Booked/Completed/Won Date/Revenue 값도 재동기화하면 달라질 수 있음
+  (더 정확해지는 방향).
+
+## ✅ SAL 과집계 원인 해결 — "Sales Accepted Date" 이벤트 필드 도입 (2026-07-25)
+- **문제**: Lead Record Type 역시 Lead 레벨 스냅샷 필드라, 리드가 "이미 오래전에" SAL이 된 경우
+  그 이후 발생하는 (SAL과 무관한) 터치들도 export 시점 기준 Record Type="SAL"이 그대로 찍혀서
+  나옴. 예: IC Booked Date가 2026-03-31로 오래전인 리드인데도, 이후 7월에 발생한 무관한 터치
+  row에도 Record Type=SAL이 찍혀 있어 7월 SAL 카운트에 잘못 포함됨(사용자 발견, 실측 MTA 리포트
+  SAL 총계 235 확인).
+- **해결**: Salesforce MTA export에 `Lead: Sales Accepted Date`(진짜 SAL 전환 이벤트 날짜) 필드
+  추가 가능함을 확인 — `13_MTATransformer.js`에 `Sales Accepted Date` 필드로 매핑,
+  `computeMTAFunnelByLeadId_()`(`09_MTAFunnelSync.js`)의 대표값(가장 최근 터치) 산출 대상에 포함,
+  `syncMTAFunnelToOPS_()`가 Leads_OPS `Sales Accepted Date` 컬럼(`20_OPS_Config.js` SYNC_COLUMNS)에
+  동기화. SAL 계산 자체를 `computeMTAAggregates_()`(MTA_Master, 터치 단위)에서
+  `computeOPSAggregates_()`(Leads_OPS, IC Booked/Complete와 동일하게 리드당 1건, 이벤트 날짜
+  기준)로 이동(`30_ACQReport.js`). 기존 MTA_Master 기반 SAL 로직/`Lead Record Type` 사용은 제거.
+
+## 💡 Opportunity Won Date 대체 후보 발견 — Lead: Sales Funnel Stage = "Won Deal" (2026-07-25, 발견만 기록·구현 보류)
+- CLAUDE.md "현재 알려진 미해결 항목" 5번(Opp Won Date는 진짜 Close Date가 아님)과 관련된 발견.
+  `Lead: Sales Funnel Stage`가 `"Won Deal"`인 리드는 전부 Revenue 값이 존재하는 것으로 확인됨
+  (사용자 확인) — Won 여부 판별에 Opportunity Won Date 대신/보조로 활용할 수 있는 후보.
+  이 필드는 이미 MTA_Master에 `Sales Funnel Stage` 컬럼으로 존재(`13_MTATransformer.js`,
+  `rawRecord["Lead: Sales Funnel Stage"]`에서 매핑) — 새 Salesforce export 필드 요청 불필요.
+- **구현은 보류** — 정확한 활용 방식(Won count만 대체할지, wonDate 자체를 대체할지 등)은 추후
+  별도 설계 논의 후 결정.
 
 **참고**: Event 기준으로 바뀌면서 오래전에 생성된 Lead(예: 2020년 Lead)가 이번 달에 IC Booked/Won 되면
 이번 달 지표에 정상적으로 잡힌다 — Create Date가 이번 달이 아니어도 무방. Lead 획득 시점 기준의 다운스트림

@@ -1,3 +1,125 @@
+# Changelog — 2026-07-25 (계속)
+
+## Business Segment QA 착수 — temp_QA 시트 신설 + 분류 룰 대량 보강
+
+**배경**: OPS 전체(Leads/BOFU/Search/Content/Events) 구축 완료 후 QA 착수. `getBusinessSegment()`
+(`16_TransformHelper.js`)로 분류된 Business Segment 중 "Other"로 잘못 떨어지는 케이스가 대량
+발견되어(최초 6,888건), 신규 시트/테스트 함수와 함께 여러 차례에 걸쳐 룰을 보강함.
+
+**신규 파일**: `25_TempQA_BusinessSegment.js` — Leads_OPS를 Leads_Master와 Lead ID로 조인해
+`getBusinessSegment()`로 재계산한 값과 실제 저장된 Business Segment를 비교, Other이거나 불일치하는
+행만 `temp_QA` 시트에 나열(`runTempQABusinessSegment()`). "comp"/"checklist"/"Mini Digital SAT"/
+"TOFU" 포함 + 여전히 Other인 케이스는 "Other 잘 분류"로 별도 표시(일반화 불가능한 개별 예외로 확인).
+
+**분류 룰 보강 (`16_TransformHelper.js`, 여러 차례에 걸쳐 반영, 최종 6,888건 → 2,269건 → 다수 추가
+보강)**:
+- Search: `leadSource.includes("search")`, `detail.includes("contact")` 추가
+- Seminar/Webinar: 캠페인명 패턴(`offline-seminar`/`online-webinar`), `summit`/`live event`/
+  `seminar`/`세미나`/`expo` 단어, `book a consult`, `open day` 추가. `EV-`/`WB-` 접두사 체크를
+  위치 무관 `includes()`로 완화(예: "Registered for EV-2024-..." 처럼 접두사가 아닌 위치의 케이스
+  대응)
+- BOFU: `ptc`(Push To Consult), `consultation request`/`consult page` 추가 — "book a consult"
+  (Webinar) > "consultation request"/"consult page"(BOFU) > 순수 "consult"(Search) 우선순위 확정
+- Content: `infographic`, `on-demand`/`ondemand` 추가, 단일 필드(campaign) 의존 문제 해결
+  (ebook 등 6개 키워드를 detail에도 미러링)
+- `BUSINESS_SEGMENT_EXCEPTIONS` 신설 — 공통 키워드 없는 순수 오타성 예외(Content 8건, Webinar 1건)
+  를 정확한 문자열 매칭으로 하드코딩 처리. 근본 수정 대상 Marketo 캠페인/폼 이름 목록을
+  `docs/BusinessSegmentClassification.md` "Marketo 네이밍 정정 필요 목록"에 기록
+- **N/A 세그먼트 신규 추가**: `getBusinessSegment()`에 4번째 파라미터 `category` 추가(Leads:
+  First Lead Source Category / MTA: Lead Source Category, 신규 export 필드). MKT UTM Campaign/
+  Lead Source Detail/Lead Source Category/Lead Source 4개가 전부 공백이면 "Other" 대신 "N/A" 반환
+  — "데이터 자체가 없음"과 "데이터는 있지만 룰에 안 맞음"을 구분
+
+자세한 배경/판단 근거는 `docs/BusinessSegmentClassification.md` 참고.
+
+## MTA Funnel Sync — 대표 터치 선정 기준 정정 (earliest → latest)
+
+**문제**: `computeMTAFunnelByLeadId_()`(`09_MTAFunnelSync.js`)가 Lead ID별 IC Booked/Completed/
+Won Date/Revenue를 뽑을 때 "가장 오래된 터치"(mergeOPS()의 중복 리드 식별 원칙을 잘못 그대로 적용)
+값을 채택하고 있었음 — 이 필드들은 파이프라인 진행에 따라 갱신되는 Lead 레벨 스냅샷이라, 오래된
+터치엔 아직 미완료 상태가 찍혀있을 수 있음. 테스트 스프레드시트에서 이번 달 MTA만 재수출해 실제
+Salesforce 수치와 비교하던 중 IC Booked/Complete/Revenue가 실제보다 낮게 나오는 걸 발견해 확인됨.
+
+**수정**: 대표 터치 선정 기준을 "가장 최근 터치(MTA Created Date 최댓값)"로 변경. ACQ_REP은 "그
+달까지 실제로 어디까지 진행됐는지"를 보는 지표이므로 최신 스냅샷이 맞음.
+
+## SAL 재설계 — Lead Record Type(과집계) → Sales Accepted Date(이벤트 기준)
+
+**문제**: 기존 SAL은 MTA_Master 터치 단위로 "Lead Record Type = SAL"인 행을 세었는데, 이 필드도
+리드 레벨 스냅샷이라 오래전에 이미 SAL이 된 리드의 무관한 후속 터치까지 SAL로 잘못 집계됨(실측
+MTA 리포트 SAL 총계 235 확인, 실제로는 훨씬 적어야 함).
+
+**해결**: Salesforce MTA export에 `Lead: Sales Accepted Date`(진짜 SAL 전환 이벤트 날짜) 필드
+추가 확인 → `13_MTATransformer.js`에 매핑, `computeMTAFunnelByLeadId_()`/`syncMTAFunnelToOPS_()`
+(`09_MTAFunnelSync.js`)에 반영해 Leads_OPS로 동기화, `20_OPS_Config.js`에 컬럼 추가(SYNC_COLUMNS +
+HEADER). SAL 계산을 `computeMTAAggregates_()`(MTA_Master 터치 단위)에서 `computeOPSAggregates_()`
+(Leads_OPS 리드 단위, Sales Accepted Date 이벤트 기준)로 이동(`30_ACQReport.js`).
+
+**주의(재발 방지 기록)**: `OPS.HEADER`에 컬럼을 코드로 추가한 것만으로는 시트에 컬럼이 안 생김 —
+시트 레이아웃을 실제로 다시 쓰는 `buildLeadsOPS()`를 재실행해야 함. 이번에 이 단계를 건너뛰어서
+`runSyncMTAFunnelToOPS()`를 여러 번 돌려도 "Sales Accepted Date" 컬럼이 안 생기고 값도 조용히
+스킵되는(에러 없음) 문제를 겪음 — `buildLeadsOPS()` 재실행 후 해결.
+
+## MTA 전체 재수출/재구축 (프로덕션)
+
+`Lead: Sales Accepted Date` 필드 포함해서 MTA 전체(82,714건) 재수출 → `resetMTACounterOnly()` →
+Import(4개 파일 분할, 각 2만 행 내외) → `rebuildMTAMaster()`/`appendNewMTA()`로 프로덕션 반영
+완료. 이 과정에서 대용량 재구축 시 실제로 벌어진 이슈들:
+- `buildLeadsOPS()` writeOPS() 단계에서 Sheets 서비스 타임아웃 2회 발생(3번째 시도에서 성공) —
+  실패한 시도가 Leads_OPS를 일부만 쓴 상태로 남겨, 700개 리드가 "신규"로 오인되어 수동 입력값
+  (FT Override/Notes/IC 날짜 등)이 초기화될 뻔한 리스크 확인(실제 영향 범위는 별도 확인 필요할 수
+  있음)
+- Apps Script 다이얼로그를 닫아도 서버 실행은 계속 진행됨(`docs/apps-script-gotchas.md` #5 실전
+  확인) — 성급한 재시도로 인한 중복 실행 위험 재확인
+- 상세 실행 시간 기록은 `docs/PerformanceBenchmark.md` 참고
+
+## Import 다이얼로그 개선 + 성능 버그 2건 수정
+
+- Import Leads/MTA 업로드 화면에 "Raw 기준 가장 최근 날짜" 표시 추가(`00_Import.js`,
+  `00_UploadDialog.html`) — 매주 export 범위를 정할 때 날짜 겹침으로 인한 중복 append 방지 목적.
+  단, "그 날짜까지 데이터가 빠짐없이 다 있다"는 보장은 아니라는 caveat 문구도 함께 표시(오래된
+  리드가 최근 재터치되면 날짜만 갑자기 앞당겨질 수 있음)
+- **성능 버그 발견/수정**: `parseDate()`(`16_TransformHelper.js`)에 조건 없는 디버그
+  `Logger.log()`가 남아있어 대량 레코드 처리(Import/Rebuild 전체) 시 실행 시간을 크게 늘리고
+  있었음 — 제거. `getLatestRawDate_()`도 시트 전체를 객체로 변환하던 걸 날짜 컬럼 하나만
+  `getRange()`로 읽도록 최적화(Import 다이얼로그 오픈 지연 해결)
+
+## 신규 TODO 기록 (`CLAUDE.md` 미해결 항목)
+- 7. Deal Tracker(`[KOR] Deal Tracking`) 통합 — 설계 메모는 아래 섹션 참고
+- 8. 완전 동일 중복 터치 자동 삭제 — 검출 로직은 기존 구현됨, 자동 삭제는 설계 대기
+- 9. Backend 실행 체인 비동기화(GAS Time-driven Trigger 체이닝) — 설계 세션 필요
+
+## Deal Tracker 통합 계획 메모 (구현 전, 설계용 기록)
+
+**배경**: 2026-07-20 논의 당시엔 "레거시 방식 유지, 구현 보류"로 종결됐던 Deal Tracker가 실제로는
+사용자가 `"[KOR] Deal Tracking"`이라는 이름으로 FY23부터 계속 관리해온 시트였음이 확인됨. SAL/
+Sales Accepted Date 개선 작업 중 Revenue/Segment 정확도 개선 아이디어로 다시 논의됨 — 이번엔
+Sales Accepted Date/SAL 작업을 먼저 마무리하고 별도 작업으로 진행하기로 함(사용자 확인).
+
+**시트**: `"[KOR] Deal Tracking"` — 컬럼: FY / Closed Month / Opp Name / Revenue (NZD) / Lead Source /
+Source Category / Content Category / HQ Digital Deal / Closed Date / Created Date / Created Month /
+Created Year / Lead Age (Day, Month) / SF Lead Age (Day, Month) / Marketo/SF Match / Lead Priority /
+P1 Strike / School / Source email / Lead Source Detail / Note (+ upsell 데이터 존재 — 순 매출액
+계산 가능).
+
+**범위**: KOR 딜만 커버(다른 국가는 별도 트래커 없음) — 따라서 `Opportunity Won Date` 기반 전체
+Revenue 계산을 통째로 대체할 수 없고, "매칭되면 우선 사용하는 보정 레이어"로만 활용 가능.
+
+**핵심 발견**:
+- `Closed Date` = 진짜 Close Date(Lead 리포트에서는 볼 수 없는 필드) — CLAUDE.md 미해결 항목 5번
+  (`Opportunity Won Date`가 진짜 Close Date가 아님)의 대체 후보로 유력.
+- `Source email`을 매칭키로 사용 가능(우리 파이프라인의 `Email`과 매칭). 이 시트의 `Created Date`를
+  First Touch 기준으로 사용 중이라고 함.
+- `Revenue (NZD)`는 값 자체가 고정이라 환율 변동에 취약 — 사용자 계획: 앞으로 입력값 자체를
+  원화(KRW)로 받고, NZD 환산 컬럼을 별도로 추가하는 방향으로 시트 운영 변경 예정(아직 미시행).
+- Upsell 데이터도 있어 순 매출액(신규 매출 - upsell 등) 계산 가능.
+
+**구현 방향(합의된 것만, 세부 설계는 미정)**: Deal Tracker 자체는 계속 독립적으로 수동 관리 —
+Leads_OPS에 흡수 합치는 대신, 별도 sync로 이 시트를 읽어 Email 기준 매칭 후 Leads_OPS에 신규
+컬럼(예: Close Date/Revenue "Deal Tracker" 버전)을 추가하고, 매칭되면 이 값을 우선 사용하는
+구조가 유력. **아직 코드 작업 없음 — 다음 세션에서 설계부터 시작.**
+
+
 # Changelog — 2026-07-24 (Events_OPS/Events_Engine 구현)
 
 ## NewP1 Report — 삭제 사고 → 재구성 → origin 실제 기록 발견으로 대체 (경위 기록)

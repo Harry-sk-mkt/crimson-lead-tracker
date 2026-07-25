@@ -4,19 +4,27 @@
  * ACQ Report
  *
  * Responsibility
- * Acquisition Report (Engine + Report 영역). New Leads/New P1/All Leads/
- * All P1/SAL은 Cohort(Create Date) 또는 Touch(MTA Created Date) 기준,
- * IC Booked/IC Complete/Revenue는 그 달의 실제 이벤트 발생 기준
- * (v1.4.0부터 — 아래 Change Log 참고). Cohort 관점(획득 월 기준
- * 다운스트림 퍼널)은 추후 NewP1_REP가 별도로 담당할 예정.
+ * Acquisition Report (Engine + Report 영역). New Leads/New P1은 Cohort
+ * (Create Date) 기준, All Leads/All P1은 Touch(MTA Created Date) 기준,
+ * SAL/IC Booked/IC Complete/Revenue는 각자의 이벤트 날짜(Sales Accepted
+ * Date/IC Booked Date/IC Completed Date/Opportunity Won Date) 기준
+ * (v1.4.0부터 IC Booked/Complete/Revenue, v1.6.0부터 SAL — 아래 Change Log
+ * 참고). Cohort 관점(획득 월 기준 다운스트림 퍼널)은 추후 NewP1_REP가
+ * 별도로 담당할 예정.
  *
  * Stage
  * 20 Reporting
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-07-25)
+ * - SAL을 computeMTAAggregates_()(MTA_Master, Lead Record Type 기준)에서
+ *   computeOPSAggregates_()(Leads_OPS, 새 "Sales Accepted Date" 필드의
+ *   이벤트 날짜 기준)로 이동. Lead Record Type이 리드 레벨 스냅샷이라
+ *   이미 SAL이 된 리드의 무관한 후속 터치까지 SAL로 잘못 집계되던 과집계
+ *   문제 해결(사용자 실측 확인) — docs/ACQReportDesign.md 참고.
  * v1.5.0 (2026-07-22)
  * - Added isEffectiveP1_(): New P1 판정을 NewP1_REP 설계와 통일 —
  *   Priority Override 우선, "Priority 1" exact match (기존
@@ -484,12 +492,20 @@ function writeACQEngine_(sheet, engineRows){
 
 /**
  * ==========================================================
- * Compute MTA Aggregates (All Leads / All P1 / SAL)
+ * Compute MTA Aggregates (All Leads / All P1)
  *
  * WHY
  * rangeStart/rangeEndExclusive가 둘 다 주어지면 그 기간 밖 행은
  * skip (ACQ Report의 부분 조회용). 둘 다 null/undefined면
  * 전체 스캔 (refreshACQSummary_()의 전체 재계산용).
+ *
+ * 2026-07-25 변경: SAL을 이 함수에서 제거하고 computeOPSAggregates_()로
+ * 이동. 기존엔 "Lead Record Type = SAL"인 터치를 MTA Created Date(터치
+ * 발생월) 기준으로 셌는데, Lead Record Type이 리드 레벨 스냅샷이라 리드가
+ * 오래전에 이미 SAL이 된 경우 그 이후 무관한 터치까지 전부 SAL로 잘못
+ * 집계되는 문제가 있었음(사용자 실측 확인). 새로 추가된 "Sales Accepted
+ * Date"(진짜 이벤트 날짜 필드)를 IC Booked Date처럼 Leads_OPS 기준으로
+ * 처리하도록 변경 — docs/ACQReportDesign.md "SAL 과집계 원인" 섹션 참고.
  *
  * @param {Date|null} rangeStart
  * @param {Date|null} rangeEndExclusive
@@ -502,8 +518,7 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
 
   const result = {
     allLeads: {},
-    allP1: {},
-    sal: {}
+    allP1: {}
   };
 
   if(!sheet) return result;
@@ -517,7 +532,6 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
   const dateCol = headers.indexOf("MTA Created Date");
   const segmentCol = headers.indexOf("Business Segment");
   const priorityCol = headers.indexOf("Lead Priority");
-  const recordTypeCol = headers.indexOf("Lead Record Type");
 
   const hasRangeFilter = !!(rangeStart && rangeEndExclusive);
 
@@ -545,10 +559,6 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
 
     if(String(row[priorityCol]).indexOf("1") !== -1){
       result.allP1[key] = (result.allP1[key] || 0) + 1;
-    }
-
-    if(recordTypeCol !== -1 && row[recordTypeCol] === "SAL"){
-      result.sal[key] = (result.sal[key] || 0) + 1;
     }
 
   }
@@ -630,7 +640,7 @@ function testIsEffectiveP1(){
 
 /**
  * ==========================================================
- * Compute OPS Aggregates (New Leads / New P1 / IC Booked / IC Complete / Revenue)
+ * Compute OPS Aggregates (New Leads / New P1 / SAL / IC Booked / IC Complete / Revenue)
  *
  * WHY (2026-07-22 변경)
  * IC Booked/IC Complete/Revenue를 "Create Date 코호트"(그 달에 생성된
@@ -641,6 +651,13 @@ function testIsEffectiveP1(){
  * (IC Booked Date / IC Completed Date / Opportunity Won Date)가
  * 속한 달로 귀속하도록 변경. New Leads/New P1은 "새로 생성된 Lead 수"
  * 자체가 정의상 Create Date 기준이라 그대로 유지 (코호트=이벤트가 동일).
+ *
+ * WHY (2026-07-25 추가 — SAL)
+ * SAL을 MTA_Master의 "Lead Record Type=SAL 터치 건수"(computeMTAAggregates_())로
+ * 세던 방식은, Lead Record Type이 리드 레벨 스냅샷이라 이미 SAL이 된 리드의
+ * 무관한 후속 터치까지 SAL로 잘못 잡히는 과집계 문제가 있었음. "Sales Accepted
+ * Date"(진짜 SAL 전환 이벤트 날짜)가 새로 확보되어, IC Booked/Complete와 동일한
+ * 방식(Leads_OPS 기준, 자기 이벤트 날짜가 속한 달)으로 전환.
  *
  * @param {Date|null} rangeStart
  * @param {Date|null} rangeEndExclusive
@@ -654,6 +671,7 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
   const result = {
     newLeads: {},
     newP1: {},
+    sal: {},
     icBooked: {},
     icComplete: {},
     revenue: {}
@@ -671,6 +689,7 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
   const segmentCol = headers.indexOf("Business Segment");
   const priorityCol = headers.indexOf("Lead Priority");
   const priorityOverrideCol = headers.indexOf("Priority Override");
+  const salesAcceptedCol = headers.indexOf("Sales Accepted Date");
   const icBookedCol = headers.indexOf("IC Booked Date");
   const icCompleteCol = headers.indexOf("IC Completed Date");
   const wonDateCol = headers.indexOf("Opportunity Won Date");
@@ -710,6 +729,17 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
         result.newP1[key] = (result.newP1[key] || 0) + 1;
       }
 
+    }
+
+    //------------------------------------------------------
+    // SAL — Sales Accepted Date 자체가 속한 달 (이벤트 기준)
+    //------------------------------------------------------
+
+    const salesAcceptedVal = row[salesAcceptedCol];
+
+    if(salesAcceptedVal instanceof Date && !isNaN(salesAcceptedVal.getTime()) && inRange(salesAcceptedVal)){
+      const key = keyFor(salesAcceptedVal, segment);
+      result.sal[key] = (result.sal[key] || 0) + 1;
     }
 
     //------------------------------------------------------

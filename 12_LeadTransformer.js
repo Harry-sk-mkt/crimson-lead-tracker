@@ -10,9 +10,13 @@
  * 10 Master Build
  *
  * Version
- * v3.0.0
+ * v3.1.0
  *
  * Change Log
+ * v3.1.0 (2026-07-25)
+ * - getBusinessSegment() 호출에 4번째 인자(First Lead Source Category) 추가 —
+ *   4개 어트리뷰션 필드가 전부 빈 리드를 "Other" 대신 "N/A"로 구분하기 위함
+ *   (16_TransformHelper.js 참고).
  * v3.0.0 (2026-07-20)
  * - Moved all helper functions to TransformHelper.
  * - Transformer now only contains transformation logic.
@@ -249,7 +253,8 @@ function transformLeadRecord(rawRecord){
       getBusinessSegment(
         rawRecord["First MKT UTM Campaign"],
         rawRecord["First Touch Detail"],
-        rawRecord["First Lead Source"]
+        rawRecord["First Lead Source"],
+        rawRecord["First Lead Source Category"]
       )
 
   };

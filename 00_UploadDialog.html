@@ -43,6 +43,15 @@
       font-size:12px;
     }
 
+    #lastDateNotice{
+      margin-bottom:15px;
+      padding:8px 10px;
+      background:#f0f4ff;
+      border-radius:4px;
+      font-size:12px;
+      color:#333;
+    }
+
   </style>
 
 </head>
@@ -50,6 +59,15 @@
 <body>
 
 <h3>Select CSV File</h3>
+
+<? if (lastDate) { ?>
+<div id="lastDateNotice">
+  현재 Raw 기준 가장 최근 날짜: <b><?= lastDate ?></b><br>
+  (겹치는 날짜를 다시 올리면 중복 터치/리드가 쌓일 수 있어요 — 이 날짜 다음날부터 export 권장.<br>
+  단, 이 값은 "그 날짜의 데이터가 하나라도 있다"는 뜻일 뿐 그 이전 날짜까지 빠짐없이 다 있다는
+  보장은 아니에요 — 오래된 리드가 최근에 재터치되면 이 날짜만 갑자기 앞당겨질 수 있어요.)
+</div>
+<? } ?>
 
 <input
     id="csvFile"

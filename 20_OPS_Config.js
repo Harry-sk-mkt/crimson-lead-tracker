@@ -7,9 +7,14 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.1
+ * v2.2
  *
  * Change Log
+ * v2.2 (2026-07-25)
+ * - "Sales Accepted Date" 추가 (SYNC_COLUMNS + HEADER, IC Booked Date 앞).
+ *   SAL 과집계 문제(Lead Record Type 스냅샷 반복) 해결을 위해 SAL 판정을
+ *   이벤트 날짜 기준으로 바꾸는 작업의 일부 — 09_MTAFunnelSync.js/
+ *   30_ACQReport.js 참고.
  * v2.1 (2026-07-22)
  * - "Last IC Requested Date"(MANUAL_COLUMNS), "Total IC Requests"(신규 IC_REQUEST.COUNTER) 추가.
  * - "IC Requested"를 MANUAL_COLUMNS에서 제외 — mergeOPS()에서 sync마다 리셋+카운트 증가하는
@@ -97,7 +102,8 @@ const OPS = {
     "IC Booked Date",
     "IC Completed Date",
     "Opportunity Won Date",
-    "Revenue"
+    "Revenue",
+    "Sales Accepted Date"
 
   ],
 
@@ -182,6 +188,8 @@ const OPS = {
     "Last IC Requested Date",
 
     "Total IC Requests",
+
+    "Sales Accepted Date",
 
     "IC Booked Date",
 

@@ -10,9 +10,15 @@
  * 10 Master Build
  *
  * Version
- * v5.2.0
+ * v5.3.0
  *
  * Change Log
+ * v5.3.0 (2026-07-25)
+ * - "Lead Source Category" 필드 추가(신규 MTA export 컬럼, "Lead Source Detail"과
+ *   동일한 저장 패턴). getBusinessSegment() 호출에 4번째 인자로 전달 —
+ *   4개 어트리뷰션 필드(MKT UTM Campaign/Lead Source Detail/Lead Source
+ *   Category/Lead Source)가 전부 빈 리드를 "Other" 대신 "N/A"로 구분하기
+ *   위함(16_TransformHelper.js 참고).
  * v5.2.0 (2026-07-24)
  * - Master 출력 필드명 "First Touch Detail" → "Lead Source Detail"로 변경
  *   (rawRecord 소스는 그대로 rawRecord["Lead Source Detail"], 필드명만 변경).
@@ -153,7 +159,8 @@ function transformMTARecord(rawRecord){
     getBusinessSegment(
       rawRecord["MKT UTM Campaign"],
       rawRecord["Lead Source Detail"],
-      rawRecord["Lead Source"]
+      rawRecord["Lead Source"],
+      rawRecord["Lead Source Category"]
     );
 
   //----------------------------------------------------------
@@ -218,6 +225,9 @@ function transformMTARecord(rawRecord){
     "Lead Source Detail":
       rawRecord["Lead Source Detail"] || "",
 
+    "Lead Source Category":
+      rawRecord["Lead Source Category"] || "",
+
     //------------------------------------------------------
     // Business
     //------------------------------------------------------
@@ -244,6 +254,12 @@ function transformMTARecord(rawRecord){
     "Opportunity Won Date":
       parseDate(
         rawRecord["Lead: Opportunity Won Date"],
+        DATE_FORMAT
+      ),
+
+    "Sales Accepted Date":
+      parseDate(
+        rawRecord["Lead: Sales Accepted Date"],
         DATE_FORMAT
       ),
 
