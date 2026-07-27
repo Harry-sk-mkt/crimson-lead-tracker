@@ -132,35 +132,71 @@
     (Leads_OPS, Create Date 기준)
   - `PrevP1V (b)` = 코호트2 Revenue(R2, Closed FY = 타겟 FY이지만 Created FY ≠ 타겟 FY) ÷
     (Leads_OPS all-time 총 P1 수 − 타겟 FY New P1 수)
-- 두 값 모두 `Target_Engine` Block B에 나란히 표시만 하고, **최종 FY 목표 공식(§6 ③)에서 a/b를
-  어떻게 합칠지는 아직 미정** — 사용자가 실물 값을 검토한 뒤 결정 예정. 그 전까지는 원래 단일
-  코호트 정의에 가장 가까운 `a`(CurrentFYP1V)를 임시로 사용.
-- Content처럼 나urture 사이클이 긴(최대 28개월) 채널은 코호트2 비중이 클 것으로 예상 — 검증 필요.
+- 두 값 모두 `Target_Engine` Block B에 나란히 표시된다. **a/b를 어떻게 합칠지는 2026-07-27
+  최종 확정됨 — §6 참고("New/Pipeline 2트랙" 분리, CLAUDE.md #7).**
+- Content처럼 nurture 사이클이 긴(최대 28개월) 채널은 코호트2 비중이 클 것으로 예상됐고,
+  실측으로 확인됨(FY26: content 코호트2 Revenue가 코호트1의 약 2.3배, R2/(R1+R2)=70%).
+  반대로 contact처럼 전환이 빠른 채널은 코호트1 비중이 압도적으로 큼(FY26 84.5%).
+- 3FY 평균/median은 쓰지 않고 **FY26(P1_VALUE_FY) 단일 스냅샷만 사용** — "이전 FY(24·25)는
+  본사(HQ)가 관리하던 체제라 지금 체제와 비교 가능한 추세를 형성하지 못한다"는 사용자 판단
+  (2026-07-27). 실측으로도 코호트1/2 비율이 FY24→25→26 사이 방향성 없이 크게 흔들림을 확인
+  (예: contact 85.65%→62.81%→84.53%, content 38.22%→60.38%→30.08%) — 노이즈로 간주.
 
-### 세그먼트 딜 비중 (Deal Share)
-- 정의: **Revenue 금액 비중** = 그룹 딜 금액 합 ÷ 조정 베이스 딜 금액 합
-- 조정 베이스 = 전체 딜 − 조정치(세일즈 레퍼럴 + 업셀) — 분모·분자 모두 조정 후 기준
-- 산출: **~~3개 FY 비중의 median~~ → 2026-07-27 변경: 타겟 FY 코호트1(Created FY = Closed FY =
-  타겟 FY) 단일 기준**. median이 최근 연도 실제 구성비와 10%p 이상 괴리(실측: contact 20.9%
-  median vs 31.3% FY26 코호트1 단독) — "내년에 들어온 리드 중 얼마나가 그 해 안에 클로징될지"를
-  보려면 같은 해 생성·클로징 딜만 봐야 한다는 논리로 사용자 확정. P1당 가치와 동일 기준으로 통일.
+### 세그먼트 딜 비중 (Deal Share) — **2026-07-27 New/Pipeline 2트랙으로 분리**
+> P1당 가치가 코호트1(a)/코호트2(b) 두 값으로 나뉜 것과 마찬가지로, 딜 비중도 그룹 배분 기준을
+> New 트랙(코호트1 기준)과 Pipeline 트랙(코호트2 기준)으로 분리한다 — 자세한 배경은 §6 참고.
+
+- **Deal Share (R1, New 트랙)**: 그룹 코호트1 Revenue 합 ÷ 조정 베이스(전체 코호트1 딜 −
+  referral/upsell). `computeDealShareRatiosFromDealRows_()`. 산출 기준: 타겟 FY 코호트1
+  (Created FY = Closed FY = 타겟 FY) 단일 — 원래 3FY median이었으나 최근 연도와 10%p+ 괴리로
+  폐기(2026-07-27, 실측: contact 20.9% median vs 31.3% FY26 코호트1 단독).
+- **Pipeline Share (R2, Pipeline 트랙)**: 그룹 코호트2 Revenue 합 ÷ 조정 베이스(전체 코호트2
+  딜 − referral/upsell). `computeDealShareRatiosCohort2FromDealRows_()` 신규(2026-07-27) —
+  **New 트랙 딜비중(R1)을 그대로 재사용하면 안 됨**: 실측 결과 contact처럼 같은 해 빠르게
+  전환되는 채널(R1 비중 84.5%)에 파이프라인 목표까지 과도하게 쏠리는 문제가 발견됨. 실제로
+  "백로그가 전환되고 있는" 비중(R2)을 써야 content처럼 nurture가 긴 채널이 올바르게 더 큰
+  파이프라인 몫을 받는다(FY26 실측: content R2 비중 26.4% vs contact R2 비중 12.4%).
 - 그룹 분류: `classifyDealSegment_()` (딜 자체 필드 직접 분류, Leads_OPS 매칭 없음 — §12 Open Item #5 참고)
 
-## 6. Target Derivation (top-down 공식 체인)
+## 6. Target Derivation (top-down 공식 체인) — **2026-07-27 New/Pipeline 2트랙 최종 확정**
+
+> a/b(코호트1/2 P1당 가치)를 어떻게 합칠지 미정이던 상태(CLAUDE.md #7)가 2026-07-27 최종
+> 확정됨. 단일 코호트로 억지로 합치는 대신, **①번 공식 자체를 New 트랙과 Pipeline 트랙 둘로
+> 나눠 각각 계산한 뒤 더한다.**
 
 ```
-① FY P1 목표(그룹)  = 마케팅 Revenue 타겟(수동 입력, 조정 후 베이스)
-                       × 그룹 딜 비중
-                       ÷ 그룹 P1당 가치
-② 월 P1 목표        = FY P1 목표 × 그룹 시즌성 비중(월)      ← 시즌성 비례 배분
+⓪ 트랙 분리   = 마케팅 Revenue 타겟(수동 입력, 조정 후 베이스) 를
+                 New 트랙(코호트1 비중)과 Pipeline 트랙(코호트2 비중)으로 분리
+                 (computeNewPipelineRevenueSplit_() — FY26 전체 코호트1/2 Revenue 비율)
+
+① FY New P1 목표      = New 트랙 Revenue × 그룹 Deal Share(R1) ÷ 그룹 CurrentFYP1V(a)
+① FY Pipeline P1 목표  = Pipeline 트랙 Revenue × 그룹 Pipeline Share(R2) ÷ 그룹 PrevP1V(b)
+① FY 총 P1 목표(그룹)  = FY New P1 목표 + FY Pipeline P1 목표
+
+② 월 P1 목표        = FY 총 P1 목표 × 그룹 시즌성 비중(월)      ← 시즌성 비례 배분
 ③ 주 P1 목표        = 월 P1 목표 ÷ 그 달의 주 수(4 or 5)
 ④ 월 CPNP1 목표     = 월 CPNP1 벤치마크 × 개선계수(그룹별, <1.0)
 ```
 
+- **왜 트랙을 나누는가**: New 트랙만으로 전체 Revenue 타겟을 커버하려 하면(원래 단일 코호트
+  방식) 딜비중(R1 기준)과 P1가치(a, R1/NewP1)가 둘 다 같은 R1으로 만들어져 있어 계산 과정에서
+  서로 상쇄되고, 결과가 "그룹별 현재 실적(NewP1)에 회사 전체 배율 하나를 곱한 값"으로 퇴화한다
+  (그룹 간 효율 차이가 전혀 반영 안 됨 — 실측으로 확인, 2026-07-27 논의). 반대로 블렌딩한 단일
+  값(예: (R1+R2)/(NewP1+PrevP1))으로 나누면 "코호트1 정의 매출 목표"를 "코호트1+2 섞인 전환율"
+  로 나누는 단위 불일치가 생겨, 산출된 헤드카운트를 다시 검산하면 원래 목표보다 매출이 부풀려
+  나온다(실측: 거의 2배 괴리). 트랙을 물리적으로 분리하면 두 문제 다 해소된다 — New 트랙은
+  "코호트1 매출 목표 ÷ 코호트1 전환율"로 단위가 일치하고, Pipeline 트랙도 마찬가지로
+  코호트2끼리 맞아떨어지며, 딜비중 기준(R1)과 pipeline비중 기준(R2)이 서로 다르기 때문에
+  더 이상 상쇄되지 않아 그룹별 실제 효율 차이가 최종 목표에 반영된다.
 - **마케팅 Revenue 타겟은 수동 입력** (예: 회사 전체 13.5M × ~0.7 ≈ 9.45M — 확정 시 값만 교체).
   Engine은 조정 계산을 하지 않는다 (2026-07-27 확정, 옵션 (b)).
+- ⓪ 트랙 분리 비율(New/Pipeline)과 ①의 Deal Share(R1)/Pipeline Share(R2) 전부 FY26 단일
+  스냅샷 기준(3FY 평균/median 안 씀 — §5 참고).
 - 개선계수: CPNP1은 낮을수록 좋으므로 성장률 대신 **개선계수(<1.0)** 사용. 초기값 0.9 placeholder,
   그룹별 3셀. (New P1 쪽 성장률 계수는 top-down 전환으로 **폐기** — 공식에 존재하지 않음)
+- 구현: `90_TargetEngine.js`의 `computeDealShareBlockRows_()`(Block C — New/Pipeline 각 트랙
+  계산 + 합산)와 `computeTargetDerivationRows_()`(Block D — 합산된 FY 총 P1 목표를 월/주로
+  전개, New/Pipeline을 주 단위로 각각 쪼개는 것은 아직 미구현 — 필요시 후속 논의).
 
 ### 시즌성 비중 (②의 가중치)
 - 그룹별: 과거 FY들의 월별 New P1 **가중평균**(아래 §7)이 연간 합에서 차지하는 % (12개 월 합 = 100%)
@@ -203,7 +239,7 @@
 | **0 — Inputs** | Target FY / 마케팅 Revenue 타겟(NZD) / 개선계수×3 / 딜 비중×3(임시) / 벤치마크 가중치(1:2:3, 2:3) / 전환일(2026-08-03) | **절대 덮어쓰지 않음** (읽기만) |
 | **A — 벤치마크** | 그룹×월: FY별 New P1, 가중평균, 시즌성 %, CPNP1 벤치마크. events는 Seminar/Webinar 분해 보조 행 | clear 후 재작성 |
 | **B — P1당 가치** | 그룹별 1행: New P1 수 / 코호트1 Revenue(R1) / CurrentFYP1V(a) / Prev P1 수 / 코호트2 Revenue(R2) / PrevP1V(b) | clear 후 재작성 |
-| **C — 딜 비중** | 딜트랙커 타겟 FY 코호트1(같은 해 생성·클로징) 기준 계산. 접근 실패 시 블록 0 수동값 Fallback | clear 후 재작성 |
+| **C — 딜 비중 + New/Pipeline FY 목표** | 그룹별 1행: Deal Share(R1)/Pipeline Share(R2)/FY New P1 Target/FY Pipeline P1 Target/FY Total P1 Target. 딜트랙커 타겟 FY 코호트1·2 각각 기준 계산(2026-07-27 2트랙 분리, §6). 접근 실패 시 블록 0 수동값 Fallback | clear 후 재작성 |
 | **D — 목표 전개** | FY 목표 → 월 목표 → 주 캘린더(월~일 전체 나열) → 주 목표, CPNP1 목표 | clear 후 재작성 |
 
 - Engine이 순수 Disposable이 아님 — **블록 0 보존형** (Events_OPS Manual 영역 보존 패턴 준용).
@@ -308,7 +344,7 @@
 | 사이클 전환 | 2026-08-03부터 전 실무 시트 월~일, 마지막 구방식 주 7/26~8/2 |
 | 마케팅 타겟 | 수동 입력 (조정 계산 안 함, 예: 13.5M×0.7≈9.45M) |
 | 딜 비중 | Revenue 금액 비중, 조정 베이스(−세일즈 레퍼럴·업셀), **타겟 FY 코호트1(같은 해 생성·클로징) 단일**(2026-07-27, 3FY median 폐기), `classifyDealSegment_()`로 딜 자체 필드 직접 분류(Leads_OPS 매칭 없음) — 접근 실패 시에만 Input 수동값 Fallback |
-| P1당 가치 | **코호트1/2 이원화**(2026-07-27): CurrentFYP1V(a)=코호트1 Revenue÷타겟FY New P1, PrevP1V(b)=코호트2 Revenue÷(all-time 총 P1−타겟FY New P1). Revenue는 Deal Tracker 원천(Leads_OPS Revenue 컬럼 아님). a/b 블렌딩 방식은 미정(임시 a 사용) |
+| P1당 가치 | **코호트1/2 이원화**(2026-07-27): CurrentFYP1V(a)=코호트1 Revenue÷타겟FY New P1, PrevP1V(b)=코호트2 Revenue÷(all-time 총 P1−타겟FY New P1). Revenue는 Deal Tracker 원천(Leads_OPS Revenue 컬럼 아님). **a/b 블렌딩 방식 최종 확정(2026-07-27)**: 블렌딩 대신 New/Pipeline 2트랙 분리(§6) |
 | 월 배분 | 시즌성 비례 (벤치마크 월 분포 재활용) |
 | 벤치마크 | 가중평균 — New P1: FY24·25·26=1:2:3 / CPNP1: FY25·26=2:3 (확보 FY만), 기간 불일치 허용 |
 | CPNP1 목표 | 벤치마크 × 개선계수(<1.0, 그룹별, 초기 0.9) |
