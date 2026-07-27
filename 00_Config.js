@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-07-27)
+ * - CONFIG.TARGET.ENGINE.BLOCK_D_COLUMNS 8→12(Block D도 New/Pipeline 각각
+ *   전개), CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT 5→7(Target_REP에 Target
+ *   New/Pipeline P1 컬럼 추가) — Target_REP에서 New/Pipeline P1 목표를 분리
+ *   표시해달라는 사용자 요청 반영. 90_TargetEngine.js/91_TargetReport.js/
+ *   92_TargetStyles.js 참고.
  * v1.12.0 (2026-07-27)
  * - CONFIG.TARGET.ENGINE.BLOCK_C_COLUMNS 2→6(딜비중+New/Pipeline 2트랙 FY
  *   목표), BLOCK_D_START_COL 24→28(X열→AB열, Block C 확장에 따른 이동) —
@@ -460,8 +466,12 @@ const CONFIG = {
       BLOCK_C_COLUMNS: 6,     // Group, Deal Share(R1), Pipeline Share(R2),
                                 // FY New P1 Target, FY Pipeline P1 Target, FY Total P1 Target
 
-      BLOCK_D_START_COL: 28,  // AB열 — 목표 전개 (주 캘린더 전체 나열, FY Total P1 Target 기준)
-      BLOCK_D_COLUMNS: 8      // Week Start, Week End, Month(라벨만, 예 "AUG"), Group, Month Target P1, Week Target P1, Month CPNP1 Benchmark, Week Target CPNP1
+      // 2026-07-27 사용자 요청: Target_REP에서 New/Pipeline P1 목표가 분리 표시돼야
+      // 해서, 합계(Total)로 뭉쳐 전개하던 걸 New/Pipeline 각각 전개하도록 확장.
+      BLOCK_D_START_COL: 28,  // AB열 — 목표 전개 (주 캘린더 전체 나열)
+      BLOCK_D_COLUMNS: 12     // Week Start, Week End, Month(라벨만, 예 "AUG"), Group,
+                                // Month/Week New P1 Target, Month/Week Pipeline P1 Target,
+                                // Month/Week Target P1(합계), Month CPNP1 Benchmark, Week Target CPNP1
 
     },
 
@@ -477,8 +487,9 @@ const CONFIG = {
         REPORT_DATA_START: 3
       },
 
-      // 그룹당 5컬럼: Target P1 / Actual P1 / 달성% / Target CPNP1 / Actual CPNP1
-      GROUP_COLUMN_COUNT: 5,
+      // 그룹당 7컬럼(2026-07-27 New/Pipeline 분리 표시 — 사용자 요청): Target New P1 /
+      // Target Pipeline P1 / Target P1(합계) / Actual P1 / 달성% / Target CPNP1 / Actual CPNP1
+      GROUP_COLUMN_COUNT: 7,
 
       FIXED_HEADERS: ["Week Start", "Week End", "Month"]
 

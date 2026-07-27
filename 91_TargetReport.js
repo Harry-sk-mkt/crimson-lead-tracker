@@ -17,9 +17,17 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-07-27)
+ * - Target P1이 New/Pipeline 합계로만 표시되던 걸 분리(사용자 요청): 그룹당
+ *   컬럼이 5→7개로 확장(Target New P1 / Target Pipeline P1 / Target P1(합계) /
+ *   Actual P1 / 달성% / Target CPNP1 / Actual CPNP1). buildTargetReportHeaders_(),
+ *   generateTargetReport_(), updateTargetReportActuals_()의 baseCol 오프셋 전부
+ *   갱신(CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT 5→7). 신규 capitalizeGroupLabel_()
+ *   로 헤더의 그룹명을 "events"→"Events"처럼 첫 글자만 대문자로 표시(내부
+ *   lookup 키는 그대로 소문자 유지 — 표시 전용).
  * v1.3.0 (2026-07-27)
  * - setupTargetReport()가 clearContent()만 하던 걸 resetTargetReportSheet_()
  *   (병합 해제 + clearFormat + clearContent + clearDataValidations, 넉넉한
@@ -47,7 +55,41 @@
 
 /**
  * ==========================================================
- * Build Target Report Headers (그룹당 5컬럼 × 3그룹 + 고정 3컬럼)
+ * Capitalize Group Label (표시 전용 — 내부 key는 계속 소문자, CONFIG.TARGET.
+ * GROUP_ORDER/SEGMENT_GROUPS 등 lookup에 쓰이는 값은 절대 안 바꾼다)
+ *
+ * WHY
+ * 사용자 요청(2026-07-27): Target_REP 헤더에 "events"가 아니라 "Events"로
+ * 보이길 원함. 내부 group 키("events"/"contact"/"content")는 여러 곳에서
+ * 정확히 일치해야 하는 lookup 키로 쓰이므로(classifyDealSegment_, Block D
+ * Group열 읽기 등) 그대로 두고, 화면에 표시되는 헤더 텍스트를 만들 때만
+ * 첫 글자를 대문자로 바꿔 렌더링한다.
+ *
+ * TEST
+ * capitalizeGroupLabel_("events") === "Events"
+ * ==========================================================
+ */
+function capitalizeGroupLabel_(group){
+
+  const str = String(group || "");
+
+  if(str.length === 0) return str;
+
+  return str.charAt(0).toUpperCase() + str.slice(1);
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Target Report Headers (그룹당 7컬럼 × 3그룹 + 고정 3컬럼)
+ *
+ * WHY (2026-07-27 New/Pipeline 분리 표시 — 사용자 요청)
+ * "Target_REP에서 P1이 합계로만 나온다, New P1 Target과 Pipeline P1 Target을
+ * 따로 보고 싶다"는 요청에 따라 Target P1(합계) 앞에 Target New P1 / Target
+ * Pipeline P1 두 컬럼을 추가(5컬럼 → 7컬럼). Actual P1은 여전히 실적 리드
+ * 카운트 하나뿐(리드 생성 시점엔 New/Pipeline 트랙 구분이 없음 — 목표만
+ * 트랙별로 나뉘고 실적/달성%는 계속 합계 기준).
  * ==========================================================
  */
 function buildTargetReportHeaders_(){
@@ -56,12 +98,16 @@ function buildTargetReportHeaders_(){
 
   CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
 
+    const label = capitalizeGroupLabel_(group);
+
     headers.push(
-      group + " Target P1",
-      group + " Actual P1",
-      group + " 달성%",
-      group + " Target CPNP1",
-      group + " Actual CPNP1"
+      label + " Target New P1",
+      label + " Target Pipeline P1",
+      label + " Target P1",
+      label + " Actual P1",
+      label + " 달성%",
+      label + " Target CPNP1",
+      label + " Actual CPNP1"
     );
 
   });
@@ -344,8 +390,11 @@ function generateTargetReport_(){
 
     CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
 
-      const target = week.byGroup[group] || { weeklyP1Target: 0, weeklyCPNP1Target: 0 };
+      const target = week.byGroup[group] ||
+        { weeklyNewP1Target: 0, weeklyPipelineP1Target: 0, weeklyP1Target: 0, weeklyCPNP1Target: 0 };
 
+      const targetNewP1 = target.weeklyNewP1Target;
+      const targetPipelineP1 = target.weeklyPipelineP1Target;
       const targetP1 = target.weeklyP1Target;
       const actualP1 = actualCounts[group] || 0;
       const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
@@ -353,7 +402,10 @@ function generateTargetReport_(){
       const actualSpent = spentCounts ? spentCounts[group] : null;
       const actualCPNP1 = (actualSpent !== null && actualP1 > 0) ? actualSpent / actualP1 : "";
 
-      row.push(targetP1, actualP1, achievementPct, target.weeklyCPNP1Target, actualCPNP1);
+      row.push(
+        targetNewP1, targetPipelineP1, targetP1,
+        actualP1, achievementPct, target.weeklyCPNP1Target, actualCPNP1
+      );
 
     });
 
@@ -429,8 +481,11 @@ function updateTargetReportActuals_(sheet){
 
       const baseCol = fixedColCount + i * groupColCount;
 
-      // row[baseCol]=Target P1, row[baseCol+3]=Target CPNP1 — 둘 다 읽기만 하고 그대로 둠 (덮어쓰지 않음)
-      const targetP1 = row[baseCol];
+      // 컬럼 순서(2026-07-27 New/Pipeline 분리, 7컬럼): 0=Target New P1,
+      // 1=Target Pipeline P1, 2=Target P1(합계), 3=Actual P1, 4=달성%,
+      // 5=Target CPNP1, 6=Actual CPNP1. 0/1/2/5는 읽기만 하고 그대로 둠(Generate가
+      // 이미 계산해둔 목표값 — 여기선 실적/달성%만 갱신).
+      const targetP1 = row[baseCol + 2];
 
       const actualP1 = actualCounts[group] || 0;
       const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
@@ -438,9 +493,9 @@ function updateTargetReportActuals_(sheet){
       const actualSpent = spentCounts ? spentCounts[group] : null;
       const actualCPNP1 = (actualSpent !== null && actualP1 > 0) ? actualSpent / actualP1 : "";
 
-      row[baseCol + 1] = actualP1;
-      row[baseCol + 2] = achievementPct;
-      row[baseCol + 4] = actualCPNP1;
+      row[baseCol + 3] = actualP1;
+      row[baseCol + 4] = achievementPct;
+      row[baseCol + 6] = actualCPNP1;
 
     });
 

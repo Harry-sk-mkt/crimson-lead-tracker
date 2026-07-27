@@ -21,9 +21,18 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.12.2
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-07-27)
+ * - computeTargetDerivationRows_()(Block D)가 New/Pipeline FY 목표를 합쳐서
+ *   전개하던 걸 각각 전개하도록 변경(사용자 요청: Target_REP에서 New P1
+ *   Target/Pipeline P1 Target을 분리해서 보고 싶다). 월/주 캐시가 New/Pipeline
+ *   각각 생기고, weeklyP1Target(합계)은 둘을 더한 값으로 계속 유지(달성% 분모).
+ *   두 트랙 모두 같은 시즌성 %를 재사용(트랙별 다른 시즌성 커브는 미정).
+ *   buildTargetDerivationHeaders_/targetDerivationRowsToMatrix_/
+ *   readTargetEngineDerivationRows_ 전부 8→12컬럼으로 갱신
+ *   (CONFIG.TARGET.ENGINE.BLOCK_D_COLUMNS).
  * v1.12.2 (2026-07-27)
  * - refreshTargetEngine_()의 wide-clear를 clearContent()→clear()로 변경 —
  *   사용자 실측 확인: 예전 Block D 위치(X·Y열, Week Start/Week End Date 서식)에
@@ -1954,15 +1963,18 @@ function testComputeDealShareBlockRows(){
  *
  * WHY (2026-07-27 New/Pipeline 2트랙 확정 — CLAUDE.md #7 최종 결정)
  * FY P1 목표는 이제 Block C(computeDealShareBlockRows_)에서 New 트랙(코호트1
- * 비율÷a)과 Pipeline 트랙(코호트2 비율÷b)을 각각 계산해 더한 `totalP1Target`
- * 으로 이미 확정돼 들어온다 — a/b를 어떻게 합칠지 미정이라 a만 쓰던 placeholder
- * 는 폐기됨. 이 함수는 그 확정된 FY 합계를 월별 시즌성 비중(②)·주별 균등
- * 분배(③)로 전개하는 역할만 한다(New/Pipeline을 주 단위까지 각각 쪼개서
- * 보여줄지는 미정 — 우선 합계 기준으로 주간 페이싱만 지원, 필요시 후속 논의).
+ * 비율÷a)과 Pipeline 트랙(코호트2 비율÷b)을 각각 계산해 들어온다 — a/b를
+ * 어떻게 합칠지 미정이라 a만 쓰던 placeholder는 폐기됨. 이 함수는 New/Pipeline
+ * FY 목표를 **각각** 월별 시즌성 비중(②)·주별 균등 분배(③)로 전개한다(합계로
+ * 뭉쳐서 전개한 뒤 나누는 게 아니라, 처음부터 트랙별로 따로 전개 — 사용자
+ * 요청, 2026-07-27: Target_REP에 New/Pipeline이 분리 표시돼야 함). 두 트랙
+ * 모두 같은 시즌성 %를 적용한다(트랙별 다른 시즌성 커브는 아직 미정).
+ * weeklyP1Target(합계)는 New+Pipeline을 더한 값으로 계속 유지 — 기존
+ * 달성%(Actual÷Target) 계산의 분모로 쓰임.
  *
  * @param {number} targetFY
  * @param {Array<Object>} benchmarkRows
- * @param {Array<Object>} dealShareRows  computeDealShareBlockRows_() 결과(totalP1Target 포함)
+ * @param {Array<Object>} dealShareRows  computeDealShareBlockRows_() 결과(newP1Target/pipelineP1Target 포함)
  * @param {Object} inputs
  * @return {Array<Object>}
  * ==========================================================
@@ -1984,13 +1996,16 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
     content: inputs.improvementFactorContent
   };
 
-  const fyP1TargetByGroup = {};
+  const fyNewP1TargetByGroup = {};
+  const fyPipelineP1TargetByGroup = {};
 
   dealShareRows.forEach(function(row){
-    fyP1TargetByGroup[row.group] = row.totalP1Target;
+    fyNewP1TargetByGroup[row.group] = row.newP1Target;
+    fyPipelineP1TargetByGroup[row.group] = row.pipelineP1Target;
   });
 
-  const monthlyP1TargetCache = {};
+  const monthlyNewP1TargetCache = {};
+  const monthlyPipelineP1TargetCache = {};
   const monthlyCPNP1TargetCache = {};
 
   const rows = [];
@@ -2004,10 +2019,17 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
 
       const monthKey = group + "|" + week.fy + "|" + week.month;
 
-      if(monthlyP1TargetCache[monthKey] === undefined){
+      if(monthlyNewP1TargetCache[monthKey] === undefined){
 
-        monthlyP1TargetCache[monthKey] = computeMonthlyP1Target_(
-          fyP1TargetByGroup[group],
+        // New/Pipeline 둘 다 같은 시즌성 비중(월별 New P1 실적 기반)을 적용한다 —
+        // 트랙별로 다른 시즌성 커브를 쓸지는 아직 미정, 필요시 후속 논의(§6 참고).
+        monthlyNewP1TargetCache[monthKey] = computeMonthlyP1Target_(
+          fyNewP1TargetByGroup[group],
+          benchmark.seasonalityPct
+        );
+
+        monthlyPipelineP1TargetCache[monthKey] = computeMonthlyP1Target_(
+          fyPipelineP1TargetByGroup[group],
           benchmark.seasonalityPct
         );
 
@@ -2020,7 +2042,8 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
 
       const weeksInMonth = weeksInMonthCounts[week.fy + "|" + week.month] || 1;
 
-      const weeklyP1Target = computeWeeklyP1Target_(monthlyP1TargetCache[monthKey], weeksInMonth);
+      const weeklyNewP1Target = computeWeeklyP1Target_(monthlyNewP1TargetCache[monthKey], weeksInMonth);
+      const weeklyPipelineP1Target = computeWeeklyP1Target_(monthlyPipelineP1TargetCache[monthKey], weeksInMonth);
 
       rows.push({
         weekStart: week.weekStart,
@@ -2028,8 +2051,12 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
         fy: week.fy,
         month: week.month,
         group: group,
-        monthlyP1Target: monthlyP1TargetCache[monthKey],
-        weeklyP1Target: weeklyP1Target,
+        monthlyNewP1Target: monthlyNewP1TargetCache[monthKey],
+        monthlyPipelineP1Target: monthlyPipelineP1TargetCache[monthKey],
+        monthlyP1Target: monthlyNewP1TargetCache[monthKey] + monthlyPipelineP1TargetCache[monthKey],
+        weeklyNewP1Target: weeklyNewP1Target,
+        weeklyPipelineP1Target: weeklyPipelineP1Target,
+        weeklyP1Target: weeklyNewP1Target + weeklyPipelineP1Target,
         monthlyCPNP1Target: monthlyCPNP1TargetCache[monthKey],
         weeklyCPNP1Target: monthlyCPNP1TargetCache[monthKey]
       });
@@ -2057,9 +2084,9 @@ function testComputeTargetDerivationRows(){
   ];
 
   const dealShareRows = [
-    { group: "events", dealShare: 0.5, pipelineShare: 0.5, newP1Target: 500, pipelineP1Target: 0, totalP1Target: 500 },
-    { group: "contact", dealShare: 0.3, pipelineShare: 0.3, newP1Target: 300, pipelineP1Target: 0, totalP1Target: 300 },
-    { group: "content", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 0, totalP1Target: 200 }
+    { group: "events", dealShare: 0.5, pipelineShare: 0.5, newP1Target: 500, pipelineP1Target: 200, totalP1Target: 700 },
+    { group: "contact", dealShare: 0.3, pipelineShare: 0.3, newP1Target: 300, pipelineP1Target: 100, totalP1Target: 400 },
+    { group: "content", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 400, totalP1Target: 600 }
   ];
 
   const inputs = {
@@ -2073,20 +2100,27 @@ function testComputeTargetDerivationRows(){
 
   const augEventsRows = rows.filter(function(r){ return r.group === "events" && r.month === "AUG"; });
 
-  const expectedFYTarget = (1000000 * 0.5) / 1000; // 500
-  const expectedMonthlyTarget = expectedFYTarget * 0.5; // 250
-  const expectedWeeklyTarget = expectedMonthlyTarget / augEventsRows.length;
+  const expectedMonthlyNewTarget = 500 * 0.5; // 250
+  const expectedMonthlyPipelineTarget = 200 * 0.5; // 100
+  const expectedMonthlyTotalTarget = expectedMonthlyNewTarget + expectedMonthlyPipelineTarget; // 350
+  const expectedWeeklyNewTarget = expectedMonthlyNewTarget / augEventsRows.length;
+  const expectedWeeklyPipelineTarget = expectedMonthlyPipelineTarget / augEventsRows.length;
 
   const pass =
     (augEventsRows.length === 4 || augEventsRows.length === 5) &&
-    Math.abs(augEventsRows[0].monthlyP1Target - expectedMonthlyTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].weeklyP1Target - expectedWeeklyTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyNewP1Target - expectedMonthlyNewTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyPipelineP1Target - expectedMonthlyPipelineTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyP1Target - expectedMonthlyTotalTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyNewP1Target - expectedWeeklyNewTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyPipelineP1Target - expectedWeeklyPipelineTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyP1Target - (expectedWeeklyNewTarget + expectedWeeklyPipelineTarget)) < 1e-6 &&
     Math.abs(augEventsRows[0].monthlyCPNP1Target - 450) < 1e-6 &&
     augEventsRows[0].weeklyCPNP1Target === augEventsRows[0].monthlyCPNP1Target;
 
   Logger.log("AUG events week rows: " + augEventsRows.length + " (expected 4 or 5)");
-  Logger.log("Monthly P1 Target: " + augEventsRows[0].monthlyP1Target + " (expected " + expectedMonthlyTarget + ")");
-  Logger.log("Weekly P1 Target: " + augEventsRows[0].weeklyP1Target + " (expected " + expectedWeeklyTarget + ")");
+  Logger.log("Weekly New P1 Target: " + augEventsRows[0].weeklyNewP1Target + " (expected " + expectedWeeklyNewTarget + ")");
+  Logger.log("Weekly Pipeline P1 Target: " + augEventsRows[0].weeklyPipelineP1Target + " (expected " + expectedWeeklyPipelineTarget + ")");
+  Logger.log("Weekly Total P1 Target: " + augEventsRows[0].weeklyP1Target);
   Logger.log("Monthly CPNP1 Target: " + augEventsRows[0].monthlyCPNP1Target + " (expected 450)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
@@ -2268,6 +2302,8 @@ function buildTargetDerivationHeaders_(){
 
   return [
     "Week Start", "Week End", "Month", "Group",
+    "Month New P1 Target", "Week New P1 Target",
+    "Month Pipeline P1 Target", "Week Pipeline P1 Target",
     "Month Target P1", "Week Target P1",
     "Month CPNP1 Benchmark", "Week Target CPNP1"
   ];
@@ -2316,6 +2352,8 @@ function targetDerivationRowsToMatrix_(rows){
       r.weekStart, r.weekEnd,
       r.month, // FY 접두사 없이 월 라벨만(예: "AUG") — 사용자 요청, 2026-07-27
       r.group,
+      r.monthlyNewP1Target, r.weeklyNewP1Target,
+      r.monthlyPipelineP1Target, r.weeklyPipelineP1Target,
       r.monthlyP1Target, r.weeklyP1Target,
       r.monthlyCPNP1Target, r.weeklyCPNP1Target
     ];
@@ -2474,10 +2512,14 @@ function readTargetEngineDerivationRows_(){
         weekEnd: row[1],
         month: row[2],
         group: row[3],
-        monthlyP1Target: row[4],
-        weeklyP1Target: row[5],
-        monthlyCPNP1Target: row[6],
-        weeklyCPNP1Target: row[7]
+        monthlyNewP1Target: row[4],
+        weeklyNewP1Target: row[5],
+        monthlyPipelineP1Target: row[6],
+        weeklyPipelineP1Target: row[7],
+        monthlyP1Target: row[8],
+        weeklyP1Target: row[9],
+        monthlyCPNP1Target: row[10],
+        weeklyCPNP1Target: row[11]
       };
 
     });
