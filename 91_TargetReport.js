@@ -17,9 +17,16 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.4.0
+ * v1.4.1
  *
  * Change Log
+ * v1.4.1 (2026-07-27)
+ * - generateTargetReport_()가 헤더 행을 한 번도 다시 안 쓰고 있었던 버그
+ *   발견·수정 — 헤더는 setupTargetReport()(최초 1회)에서만 쓰였고, 이후
+ *   Generate를 아무리 반복해도 그대로 남아있어서, 컬럼 구조가 바뀌면
+ *   (v1.4.0의 5→7컬럼 확장) 헤더와 실제 데이터 폭이 어긋나는 문제가
+ *   실측됨(사용자 리포트: "매칭되는 헤더가 없다"). generateTargetReport_()가
+ *   매번 헤더도 40컬럼 버퍼로 지운 뒤 다시 쓰도록 수정.
  * v1.4.0 (2026-07-27)
  * - Target P1이 New/Pipeline 합계로만 표시되던 걸 분리(사용자 요청): 그룹당
  *   컬럼이 5→7개로 확장(Target New P1 / Target Pipeline P1 / Target P1(합계) /
@@ -415,9 +422,24 @@ function generateTargetReport_(){
 
   clearTargetReportArea_(sheet);
 
+  const headers = buildTargetReportHeaders_();
+
+  // 헤더는 원래 setupTargetReport()(최초 1회)에서만 썼는데, Generate를 반복
+  // 실행해도 헤더가 그때 그대로 남아있어 컬럼 구조가 바뀌면(2026-07-27 New/
+  // Pipeline 분리처럼 5→7컬럼) 헤더와 데이터 폭이 어긋나는 문제가 실측됨
+  // (사용자 리포트: "매칭되는 헤더가 없다"). Generate할 때마다 헤더도 항상
+  // 다시 써서 코드의 현재 buildTargetReportHeaders_()와 무조건 일치시킨다.
+  // 넉넉한 버퍼(40컬럼)까지 먼저 비워서, 향후 컬럼 수가 줄어드는 변경이
+  // 생겨도 옛 헤더 텍스트가 뒤쪽에 안 남도록 방어(Target_Engine wide-clear와
+  // 동일한 교훈, 2026-07-27).
+  const HEADER_CLEAR_COLS = 40;
+  sheet.getRange(CONFIG.TARGET.REPORT.ROWS.REPORT_HEADER, 1, 1, HEADER_CLEAR_COLS).clearContent();
+  sheet.getRange(CONFIG.TARGET.REPORT.ROWS.REPORT_HEADER, 1, 1, headers.length)
+    .setValues([headers]);
+
   sheet.getRange(
     CONFIG.TARGET.REPORT.ROWS.REPORT_DATA_START, 1,
-    outputRows.length, buildTargetReportHeaders_().length
+    outputRows.length, headers.length
   ).setValues(outputRows);
 
   applyTargetReportStyles_(sheet, outputRows.length);
