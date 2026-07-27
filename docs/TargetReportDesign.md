@@ -120,7 +120,12 @@
 
 - Revenue 원천: `Leads_OPS.Revenue`가 아니라 **Deal Tracker**(`[KOR] Deal Tracking`, Close
   Date/Created Date는 실제 Date 셀 — 텍스트 파싱 불필요 확인됨). 분류는 `classifyDealSegment_()`
-  (Deal Tracker 자체 필드로 직접 `getBusinessSegment()` 호출, Leads_OPS 매칭 없음).
+  (Deal Tracker 자체 필드로 직접 분류, Leads_OPS 매칭 없음). **2026-07-27 재확정**: 최초엔
+  Lead Source Detail을 `getBusinessSegment()`로 퍼지 매칭했으나, Lead Source Detail 공란
+  딜이 "Other"로 오분류되는 문제 발견 → Deal Tracker 실제 컬럼(H열 "Content Category",
+  WebFetch로 확인)을 직접 매핑하는 방식으로 교체(`CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.
+  CONTENT_CATEGORY_GROUP_MAP`). 현재 매핑은 임시 단순화 버전(Consult→contact 직행,
+  TOFU/On demand/eBook→content 뭉뚱그림) — 사용자가 추후 세분화 예정, CLAUDE.md #13 참고.
 - **코호트1(같은 해 생성·클로징)**과 **코호트2(과거 생성, 이번 FY 클로징 — 파이프라인 기여분)**를
   분리해 각각 계산 (사용자 논리: "이번 FY 총 딜 = 이번 FY 생성 리드 코호트 + 더 오래된 리드 코호트").
   - `CurrentFYP1V (a)` = 코호트1 Revenue(R1, Created FY = Closed FY = 타겟 FY) ÷ 타겟 FY New P1 수

@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-07-27)
+ * - CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS에 CONTENT_CATEGORY(H열) 추가,
+ *   CONTENT_CATEGORY_GROUP_MAP 신규 — classifyDealSegment_()(90_TargetEngine.js)가
+ *   더 이상 Lead Source Detail 퍼지 키워드 매칭(getBusinessSegment())이 아니라
+ *   이 컬럼을 직접 매핑하도록 전환(사용자 확정). Lead Source Detail이 공란인
+ *   딜이 "Other"로 오분류되던 문제 발견 후 수정 — 상세: CLAUDE.md #13.
  * v1.10.0 (2026-07-27)
  * - CONFIG.TARGET.ENGINE Block B를 4컬럼→7컬럼으로 확장(코호트1 CurrentFYP1V/
  *   코호트2 PrevP1V 분리 표시), Block C/D 시작 컬럼 뒤로 이동(U열/X열).
@@ -346,21 +352,39 @@ const CONFIG = {
 
         // 헤더 1행 기준, 24컬럼 중 실제로 쓰는 6개.
         COLUMNS: {
-          FY: 1,                // A  ("FY26" 등 텍스트 — 그대로 사용, 날짜 파생 불필요)
+          FY: 1,                 // A  ("FY26" 등 텍스트 — 그대로 사용, 날짜 파생 불필요)
           REVENUE: 5,            // E  (Revenue (NZD))
-          LEAD_SOURCE: 6,        // F  (Upsell/Referral/Paid Search/... — 제외 필터 + 세그먼트 분류 공용)
-          SOURCE_CATEGORY: 7,    // G  (세그먼트 분류의 category 파라미터로 사용)
-          CLOSE_DATE: 10,        // J  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
-          CREATED_DATE: 11,      // K  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
-          LEAD_SOURCE_DETAIL: 23 // W  (세그먼트 분류의 campaign/detail 파라미터로 이중 사용 —
-                                  //     이 시트엔 별도 UTM Campaign 컬럼이 없어 Lead Source Detail을
-                                  //     campaign/detail 둘 다에 넣음, getBusinessSegment()가 각각
-                                  //     .includes() 체크라 안전)
+          LEAD_SOURCE: 6,        // F  (Upsell/Referral/Paid Search/... — 제외 필터 전용)
+          SOURCE_CATEGORY: 7,    // G  (미사용 — 분류엔 CONTENT_CATEGORY 사용, 보존만)
+          CONTENT_CATEGORY: 8,   // H  (Webinar/Seminar/Consult/eBook/TOFU/On demand/N/A —
+                                  //     2026-07-27부터 그룹 분류 직접 원천, CONTENT_CATEGORY_GROUP_MAP 참고)
+          CLOSE_DATE: 10,        // J
+          CREATED_DATE: 11,      // K
+          LEAD_SOURCE_DETAIL: 23 // W  (미사용 — 분류엔 CONTENT_CATEGORY 사용, 보존만)
         },
 
         // 조정 베이스 = 전체 딜 − 조정치(세일즈 레퍼럴 + 업셀) — 분모·분자 모두 제외.
         // 대소문자 무시 비교(실측: "Upsell"/"UpSell" 표기가 섞여 있음).
-        EXCLUDE_LEAD_SOURCES: ["upsell", "referral"]
+        EXCLUDE_LEAD_SOURCES: ["upsell", "referral"],
+
+        // Content Category(H열) → Target 그룹 직접 매핑 (2026-07-27 확정).
+        // classifyDealSegment_()(90_TargetEngine.js)가 getBusinessSegment() 퍼지
+        // 키워드 매칭(Lead Source Detail 기반) 대신 이 컬럼을 직접 쓴다 — Lead
+        // Source Detail이 공란인 딜(실측 다수 존재)이 "Other"로 오분류되던 문제
+        // 해결. 소문자·trim 비교. 매핑 안 되는 값(N/A 등)은 미분류(null) 처리.
+        //
+        // TODO(CLAUDE.md #13): 지금은 단순화된 임시 매핑 — "Consult"를 세부
+        // 구분(BOFU/Search) 없이 바로 contact로, TOFU/On demand/eBook을 전부
+        // content로 뭉뚱그렸다. 사용자가 추후 실제 Business Segment 세분류
+        // 기준으로 업데이트할 예정 — 임의로 세분화하지 말 것.
+        CONTENT_CATEGORY_GROUP_MAP: {
+          "webinar": "events",
+          "seminar": "events",
+          "consult": "contact",
+          "tofu": "content",
+          "on demand": "content",
+          "ebook": "content"
+        }
 
         // 딜 비중 계산 대상 FY는 3FY median이 아니라 CONFIG.TARGET.P1_VALUE_FY
         // (FY26) 단일 코호트를 그대로 쓴다 — 2026-07-27 사용자 확정: "딜 비중도

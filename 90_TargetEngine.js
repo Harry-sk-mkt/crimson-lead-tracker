@@ -21,9 +21,20 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-07-27)
+ * - classifyDealSegment_() 전면 교체 — getBusinessSegment() 퍼지 키워드 매칭
+ *   (Lead Source Detail 기반) 대신 Deal Tracker 실제 컬럼 "Content Category"
+ *   (H열, WebFetch로 실물 확인)를 직접 매핑(CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.
+ *   CONTENT_CATEGORY_GROUP_MAP)하도록 변경 — 사용자 발견: Lead Source Detail이
+ *   공란인 딜(다수 존재)이 Content Category엔 명확히 값이 있는데도 "Other"로
+ *   오분류되고 있었음. readDealTrackerRawRows_()가 contentCategory 필드 추가
+ *   반환. classifyDealSegment_()의 @param도 {contentCategory} 하나로 단순화.
+ *   관련 테스트(testClassifyDealSegment/testComputeDealShareRatiosFromDealRows/
+ *   testComputeDealCohortsFromDealRows) fixture 전부 contentCategory 기반으로
+ *   갱신. 상세: CLAUDE.md #13.
  * v1.10.0 (2026-07-27)
  * - P1당 가치(Block B)를 코호트1/2 이원화 구조로 전면 재작성 — 사용자 확정
  *   프레임워크: CurrentFYP1V(a) = 코호트1(Created=Closed=타겟FY) Revenue ÷
@@ -847,7 +858,7 @@ function parseDealTrackerCloseDate_(value){
  * (computeDealCohortsFromDealRows_() 참고). 예전 "FY" 텍스트 컬럼은 더 이상
  * 안 씀(Close Date에서 직접 파생하는 게 더 신뢰할 수 있음).
  *
- * @return {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>}
+ * @return {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, contentCategory:string, leadSourceDetail:string}>}
  * ==========================================================
  */
 function readDealTrackerRawRows_(){
@@ -888,6 +899,7 @@ function readDealTrackerRawRows_(){
       revenue: parseCurrencyValue_(row[cols.REVENUE - 1]),
       leadSource: String(row[cols.LEAD_SOURCE - 1] || "").trim().toLowerCase(),
       sourceCategory: String(row[cols.SOURCE_CATEGORY - 1] || "").trim(),
+      contentCategory: String(row[cols.CONTENT_CATEGORY - 1] || "").trim().toLowerCase(),
       leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim()
     });
 
@@ -1341,23 +1353,33 @@ function testComputeP1ValueBlockRows(){
  * 으로 복구 불가능한 경우가 있어(Ryan Kang 등 실측 사례) 개별 리드 매칭
  * 자체가 근본적으로 신뢰할 수 없었다. Deal Tracker는 애초에 모든 Opportunity
  * 를 담고 있으므로(사용자 판단), 개별 리드 식별 없이 딜 자체에 기록된
- * Lead Source Detail(campaign/detail 이중 사용 — 이 시트엔 별도 UTM Campaign
- * 컬럼이 없음)/Lead Source/Source Category를 getBusinessSegment()
- * (16_TransformHelper.js, 프로젝트 공용 분류 로직)에 그대로 넣어 세그먼트를
- * 직접 분류한다. 93_TempQA_DealTrackerMatch.js도 동일 로직을 재사용해야
- * QA 시트와 실제 계산이 어긋나지 않는다.
+ * Lead Source Detail/Lead Source/Source Category를 getBusinessSegment()
+ * (16_TransformHelper.js, 프로젝트 공용 분류 로직)에 넣어 세그먼트를 분류했었다.
  *
- * @param {{leadSource:string, sourceCategory:string, leadSourceDetail:string}} row
+ * WHY (2026-07-27 Content Category 직접 매핑으로 전환)
+ * 위 getBusinessSegment() 방식은 Lead Source Detail의 퍼지 키워드 매칭에
+ * 의존하는데, 실측 결과 Lead Source Detail이 공란인 딜이 다수 존재해
+ * "Other"로 오분류되고 있었다(예: Content Category="Webinar"인데 Lead Source
+ * Detail 공란이라 미분류). WebFetch로 Deal Tracker 실제 컬럼을 확인한 결과
+ * H열 "Content Category"에 Webinar/Seminar/Consult/eBook/TOFU/On demand/N/A
+ * 값이 이미 명시적으로 기록돼 있음을 발견 — 이걸 직접 매핑
+ * (CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.CONTENT_CATEGORY_GROUP_MAP)하는 것으로
+ * 교체(사용자 확정). 93_TempQA_DealTrackerMatch.js도 동일 함수를 재사용하므로
+ * QA 시트와 실제 계산이 자동으로 일치한다.
+ *
+ * TODO(CLAUDE.md #13): 지금 매핑은 단순화된 임시 버전(Consult→contact 직행,
+ * TOFU/On demand/eBook→content 뭉뚱그림) — 사용자가 추후 실제 Business
+ * Segment 세분류 기준으로 업데이트 예정.
+ *
+ * @param {{contentCategory:string}} row
  * @return {string|null}  그룹(events/contact/content) 또는 분류 불가 시 null
  * ==========================================================
  */
 function classifyDealSegment_(row){
 
-  const segment = getBusinessSegment(
-    row.leadSourceDetail, row.leadSourceDetail, row.leadSource, row.sourceCategory
-  );
+  const contentCategory = String(row.contentCategory || "").trim().toLowerCase();
 
-  return deriveTargetGroup_(segment);
+  return CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.CONTENT_CATEGORY_GROUP_MAP[contentCategory] || null;
 
 }
 
@@ -1380,7 +1402,7 @@ function classifyDealSegment_(row){
  * 없음) — 분류 안 되는 딜은 조정 베이스(분모)엔 포함되지만 특정 그룹(분자)
  * 엔 배분되지 않는다(분류율은 로그로 확인 가능).
  *
- * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>} dealRows
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, contentCategory:string}>} dealRows
  * @return {Object}  group -> ratio (0~1)
  *
  * TEST
@@ -1448,32 +1470,33 @@ function computeDealShareRatiosFromDealRows_(dealRows){
  */
 function testClassifyDealSegment(){
 
-  const webinarMatch = classifyDealSegment_({
-    leadSource: "Paid Social", sourceCategory: "", leadSourceDetail: "Registered for webinar session"
-  });
-
-  const searchMatch = classifyDealSegment_({
-    leadSource: "Paid Search", sourceCategory: "Naver Search", leadSourceDetail: ""
-  });
-
-  const contentMatch = classifyDealSegment_({
-    leadSource: "Organic", sourceCategory: "", leadSourceDetail: "ebook-download-2025"
-  });
-
-  const noMatch = classifyDealSegment_({
-    leadSource: "", sourceCategory: "", leadSourceDetail: ""
-  });
+  const webinarMatch = classifyDealSegment_({ contentCategory: "Webinar" });
+  const seminarMatch = classifyDealSegment_({ contentCategory: "Seminar" });
+  const consultMatch = classifyDealSegment_({ contentCategory: "Consult" });
+  const tofuMatch = classifyDealSegment_({ contentCategory: "TOFU" });
+  const onDemandMatch = classifyDealSegment_({ contentCategory: "On demand" });
+  const ebookMatch = classifyDealSegment_({ contentCategory: "eBook" });
+  const naMatch = classifyDealSegment_({ contentCategory: "N/A" });
+  const blankMatch = classifyDealSegment_({ contentCategory: "" });
 
   const pass =
     webinarMatch === "events" &&
-    searchMatch === "contact" &&
-    contentMatch === "content" &&
-    noMatch === null;
+    seminarMatch === "events" &&
+    consultMatch === "contact" &&
+    tofuMatch === "content" &&
+    onDemandMatch === "content" &&
+    ebookMatch === "content" &&
+    naMatch === null &&
+    blankMatch === null;
 
-  Logger.log("Webinar(Lead Source Detail) 분류: " + webinarMatch + " (expected events)");
-  Logger.log("Search(Lead Source) 분류: " + searchMatch + " (expected contact)");
-  Logger.log("Content(ebook) 분류: " + contentMatch + " (expected content)");
-  Logger.log("전부 공백 → 분류 불가: " + noMatch + " (expected null)");
+  Logger.log("Webinar 분류: " + webinarMatch + " (expected events)");
+  Logger.log("Seminar 분류: " + seminarMatch + " (expected events)");
+  Logger.log("Consult 분류: " + consultMatch + " (expected contact)");
+  Logger.log("TOFU 분류: " + tofuMatch + " (expected content)");
+  Logger.log("On demand 분류: " + onDemandMatch + " (expected content)");
+  Logger.log("eBook 분류: " + ebookMatch + " (expected content)");
+  Logger.log("N/A → 분류 불가: " + naMatch + " (expected null)");
+  Logger.log("공백 → 분류 불가: " + blankMatch + " (expected null)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1483,15 +1506,15 @@ function testComputeDealShareRatiosFromDealRows(){
 
   const dealRows = [
     // 코호트1 (closeFY===createdFY===26) — Deal Share 계산에 포함되는 것들
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid search", sourceCategory: "", leadSourceDetail: "" },
-    { closeFY: 26, createdFY: 26, revenue: 200, leadSource: "organic", sourceCategory: "", leadSourceDetail: "ebook-download" },
-    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", sourceCategory: "", leadSourceDetail: "" }, // 분류 안 됨
-    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", sourceCategory: "", leadSourceDetail: "" }, // 제외 대상
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid social", contentCategory: "webinar" },
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid search", contentCategory: "consult" },
+    { closeFY: 26, createdFY: 26, revenue: 200, leadSource: "organic", contentCategory: "ebook" },
+    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", contentCategory: "n/a" }, // 분류 안 됨
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", contentCategory: "n/a" }, // 제외 대상
     // 코호트2 (closeFY=26이지만 createdFY=25) — Deal Share 계산에서 완전 제외돼야 함
-    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" },
     // closeFY가 타겟 FY(26)가 아님 — 제외
-    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" }
+    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" }
   ];
 
   const result = computeDealShareRatiosFromDealRows_(dealRows);
@@ -1523,7 +1546,7 @@ function testComputeDealShareRatiosFromDealRows(){
  * 분류 안 되는 딜(classifyDealSegment_()가 null)은 어느 그룹에도 배분하지
  * 않는다(그룹별 Revenue라 분모 개념이 없어 Deal Share처럼 별도 베이스 집계 불필요).
  *
- * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>} dealRows
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, contentCategory:string}>} dealRows
  * @return {Object}  group -> {cohort1Revenue, cohort2Revenue}
  * ==========================================================
  */
@@ -1578,15 +1601,15 @@ function testComputeDealCohortsFromDealRows(){
 
   const dealRows = [
     // 코호트1: closeFY===createdFY===26
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid social", contentCategory: "webinar" },
     // 코호트2: closeFY===26이지만 createdFY===24(오래된 리드가 이번 FY 클로징)
-    { closeFY: 26, createdFY: 24, revenue: 300, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 24, revenue: 300, leadSource: "paid social", contentCategory: "webinar" },
     // 제외 대상(Upsell)
-    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", sourceCategory: "", leadSourceDetail: "" },
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", contentCategory: "n/a" },
     // closeFY가 타겟 FY 아님 — 전부 제외
-    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" },
     // 분류 불가 — 그룹 배분에서 제외
-    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", sourceCategory: "", leadSourceDetail: "" }
+    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", contentCategory: "n/a" }
   ];
 
   const result = computeDealCohortsFromDealRows_(dealRows);
