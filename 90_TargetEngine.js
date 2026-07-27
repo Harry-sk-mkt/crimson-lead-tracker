@@ -21,9 +21,15 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.12.1
+ * v1.12.2
  *
  * Change Log
+ * v1.12.2 (2026-07-27)
+ * - refreshTargetEngine_()의 wide-clear를 clearContent()→clear()로 변경 —
+ *   사용자 실측 확인: 예전 Block D 위치(X·Y열, Week Start/Week End Date 서식)에
+ *   새 Block C의 FY New/Pipeline P1 Target이 겹치면서 남아있던 Date 서식 때문에
+ *   숫자값이 "12/30/1899"류 날짜로 잘못 표시되는 버그 발견 → clear()로 값+서식
+ *   모두 제거하도록 수정.
  * v1.12.1 (2026-07-27)
  * - computeDealShareRatiosFromDealRows_() 로그 메시지 정정 — Content Category
  *   직접 매핑 전환(v1.11.0) 이후에도 "Lead Source Detail/Lead Source/Source
@@ -2384,11 +2390,18 @@ function refreshTargetEngine_(){
   // — writeTargetEngineBlock_()는 자기 블록 너비만큼만 지우므로, 예전 Block D
   // 위치(X열~)에 남아있던 잔재가 안 지워질 수 있다. Block A~D 전체 영역을
   // 넉넉하게 먼저 비운 뒤 새로 쓴다(향후 블록 구조가 또 바뀌어도 동일하게 안전).
+  //
+  // clearContent()가 아니라 clear()를 쓴다 — 실측 확인(2026-07-27): 예전 Block D의
+  // Week Start/Week End(X·Y열)가 Date 서식이 적용된 셀이었는데, 새 Block C의
+  // FY New/Pipeline P1 Target이 같은 컬럼 위치를 차지하면서 clearContent()로는
+  // 안 지워진 Date 서식이 그대로 남아 숫자값이 "12/30/1899" 같은 날짜로 잘못
+  // 표시되는 버그 발생. clear()는 값+서식을 모두 지워 근본적으로 방지한다
+  // (Target_Engine은 수식/수동 서식이 없는 순수 계산 시트라 안전).
   const WIDE_CLEAR_END_COL = 60;
   sheet.getRange(
     1, CONFIG.TARGET.ENGINE.BLOCK_A_START_COL, 2000,
     WIDE_CLEAR_END_COL - CONFIG.TARGET.ENGINE.BLOCK_A_START_COL + 1
-  ).clearContent();
+  ).clear();
 
   writeTargetEngineBlock_(
     sheet, CONFIG.TARGET.ENGINE.BLOCK_A_START_COL,
