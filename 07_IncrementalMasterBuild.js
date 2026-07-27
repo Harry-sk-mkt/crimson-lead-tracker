@@ -10,9 +10,13 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-07-27)
+ * - appendNewLeads()에 refreshTargetActuals_() 호출 추가 (refreshContentEngine_()
+ *   바로 옆) — Target_REP 실적(Actual P1/CPNP1) 컬럼도 항상 최신 유지
+ *   (Engine 목표 재계산은 하지 않음, 90_TargetEngine.js/91_TargetReport.js 참고).
  * v1.3.0 (2026-07-24)
  * - appendNewLeads()에 refreshSearchEngine_()/refreshContentEngine_() 호출 추가
  *   (refreshBOFUEngine_() 바로 옆) — Search/Content Engine도 Master/OPS 변경 시
@@ -112,6 +116,7 @@ function appendNewLeads(){
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
+  refreshTargetActuals_();
 
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);

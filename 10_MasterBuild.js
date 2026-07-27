@@ -10,9 +10,13 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.2.0
+ * v4.3.0
  *
  * Change Log
+ * v4.3.0 (2026-07-27)
+ * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 refreshTargetActuals_()
+ *   호출 추가 (refreshContentEngine_() 바로 옆) — Target_REP 실적 컬럼도
+ *   항상 최신 유지 (docs/TargetReportDesign.md 참고).
  * v4.2.0 (2026-07-24)
  * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 refreshSearchEngine_()/
  *   refreshContentEngine_() 호출 추가 (refreshBOFUEngine_() 바로 옆).
@@ -83,6 +87,7 @@ function rebuildLeadsMaster(showAlert = true) {
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
+  refreshTargetActuals_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +
@@ -169,6 +174,7 @@ function rebuildMTAMaster(showAlert = true) {
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
+  refreshTargetActuals_();
 
   Logger.log(
     CONFIG.LOG.PREFIX +

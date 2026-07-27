@@ -16,9 +16,18 @@
  * 20 Reporting
  *
  * Version
- * v1.6.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-07-27)
+ * - onEdit()의 Target_REP 분기 제거. Simple Trigger(onEdit)는 제한된 권한으로
+ *   실행돼 Target_REP에 필요한 SpreadsheetApp.openById()(외부 채널시트 참조)를
+ *   호출할 수 없다는 게 실측 확인됨 — Target_REP는 수동 실행(runGenerateTargetReport(),
+ *   91_TargetReport.js)으로 전환.
+ * v1.7.0 (2026-07-27)
+ * - onEdit()에 Target_REP 분기 추가 (handleTargetReportGenerateEdit_(),
+ *   91_TargetReport.js) — Target_REP 구현 착수, docs/TargetReportDesign.md 참고.
+ *   (v1.8.0에서 제거됨)
  * v1.6.0 (2026-07-25)
  * - SAL을 computeMTAAggregates_()(MTA_Master, Lead Record Type 기준)에서
  *   computeOPSAggregates_()(Leads_OPS, 새 "Sales Accepted Date" 필드의

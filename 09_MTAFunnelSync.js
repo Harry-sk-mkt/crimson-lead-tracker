@@ -18,9 +18,12 @@
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-07-27)
+ * - refreshTargetActuals_() 호출 추가 (refreshContentEngine_() 바로 옆) —
+ *   Target_REP 실적 컬럼도 항상 최신 유지 (docs/TargetReportDesign.md 참고).
  * v1.4.0 (2026-07-25)
  * - "Sales Accepted Date" 필드 추가(13_MTATransformer.js에서 매핑) — SAL을
  *   Lead Record Type(터치마다 반복되는 스냅샷, 과집계 문제 있음) 대신 이
@@ -366,6 +369,7 @@ function syncMTAFunnelToOPS_(){
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
+  refreshTargetActuals_();
 
 }
 

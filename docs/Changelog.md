@@ -1,3 +1,211 @@
+# Changelog — 2026-07-27
+
+## Target_REP P1당 가치(Block B) — 코호트1/2 이원화 구현
+
+**배경**: 바로 아래 섹션("Deal Tracker Source of Truth 전환")에서 "다음 단계(미착수)"로 남겨뒀던
+코호트1/2 분리를 이어서 구현. content(ebook 등)처럼 nurture 사이클이 긴 채널은 단일 FY 코호트만
+으로 P1당 가치를 구하면 심각하게 저평가된다는 문제의식에서 출발.
+
+**확정된 프레임워크(사용자, "응 맞아")**: 이번 FY 총 딜 = 이번 FY 생성된 리드 코호트(코호트1) +
+더 오래된 리드 코호트(코호트2).
+- `CurrentFYP1V (a)` = 코호트1 Revenue(Created FY = Closed FY = 타겟 FY) ÷ 타겟 FY New P1 수
+- `PrevP1V (b)` = 코호트2 Revenue(Closed FY = 타겟 FY, Created FY ≠ 타겟 FY) ÷ (Leads_OPS
+  all-time 총 P1 수 − 타겟 FY New P1 수)
+
+**구현**: `readDealTrackerRawRows_()`가 텍스트 FY 컬럼 대신 실제 Date 셀인 Close Date/Created
+Date에서 `closeFY`/`createdFY`를 직접 파생(더블클릭 시 캘린더 뜨는 진짜 Date 타입임을 사용자가
+확인 — 텍스트 파싱 리스크 없음). `computeDealCohortsFromDealRows_()` 신규 — 그룹별 코호트1/2
+Revenue를 한 번에 계산. `computeTargetLeadsOPSAggregates_()`가 `newP1CountByGroup`(타겟 FY 신규
+P1 수)과 `totalP1CountByGroup`(all-time 총 P1 수)를 반환하도록 변경(구 `p1ValueByGroup`/
+Leads_OPS Revenue 합산 제거 — Revenue는 이제 Deal Tracker 코호트 기준). `computeP1ValueBlockRows_()`
+가 a/b를 둘 다 계산해 Target_Engine Block B(4→7컬럼 확장, `CONFIG.TARGET.ENGINE`)에 나란히 기록.
+
+Deal Share(Block C) 계산도 같은 세션에서 "3FY median" → "타겟 FY 코호트1 단일" 로 이미 전환된
+상태(직전 커밋)였는데, 이번 라운드에서 필터 조건을 `closeFY===createdFY===타겟FY`로 보강(기존엔
+Close FY만 봤음 — 사실상 결과는 동일했으나 코호트 정의를 명시적으로 맞춤).
+
+**최종 FY P1 목표 공식(Block D)에서 a/b를 어떻게 합칠지는 아직 미정** — 사용자가 실물 값을 직접
+검토한 뒤 결정하기로 함. 그 전까지는 원래 단일 코호트 정의에 가장 가까운 `a`를
+`computeTargetDerivationRows_()`의 임시 placeholder로 사용.
+
+`93_TempQA_DealTrackerMatch.js`도 `readDealTrackerRawRows_()`의 반환 필드 변경(`fy` →
+`closeFY`/`createdFY`)에 맞춰 갱신 — 구 `MEDIAN_FYS` 설정 참조가 남아있어 방치 시 런타임 에러가
+날 상황이었음.
+
+**아직 검증 필요**: `runRefreshTargetEngine()` 실행 후 Target_Engine Block B의 코호트1/2
+Revenue·New P1/Prev P1 수·a·b 값이 실물 데이터와 맞는지 확인 전까지 완료로 간주하지 말 것.
+`docs/TargetReportDesign.md` §5 "P1당 가치" / CLAUDE.md #7에 상세 반영.
+
+## Deal Tracker 매칭 아키텍처 전면 폐기 → Deal Tracker Source of Truth 전환
+
+**배경**: Student Contact Email/Primary Guardian Email/Account Name 3단계 매칭으로 매칭률을
+10.7%→86.5%까지 끌어올렸으나(위 섹션들 참고), Sales팀에 직접 확인한 결과 근본적 한계 발견 —
+**상담 종료 후 학부모가 이메일 변경을 요청하면 Salesforce의 Lead/Opportunity 이메일이 그대로
+덮어써져, 원본 마케팅 터치 이메일이 시스템적으로 복구 불가능한 경우가 있음**. 즉 아무리 매칭
+로직을 정교화해도 원천 데이터 자체가 소실된 케이스는 근본적으로 못 잡는다는 것이 확인됨.
+
+**최종 결정**: Leads_OPS 개별 리드 매칭을 전부 폐기하고, **Deal Tracker 자체를 Source of Truth로
+전환**. 딜 자체에 기록된 Lead Source/Source Category/Lead Source Detail로 `getBusinessSegment()`
+(16_TransformHelper.js, 프로젝트 전체가 쓰는 공용 분류 로직)를 직접 호출해 세그먼트 분류
+(`classifyDealSegment_()`, 90_TargetEngine.js) — Leads_OPS 조회 자체가 필요 없어짐. P1 판정도
+제거(사용자 확인: 딜의 99%가 이미 P1이라 사실상 전수 반영과 동일). `Deal_Raw` 자체 파이프라인화
+(이전 섹션)와 재구축 시트(Student/Guardian Email 포함) 둘 다 폐기하고, 원래 쓰던 시트(gid
+498663095)로 복귀 — 컬럼 구조는 FY(텍스트)/Revenue (NZD)/Lead Source/Source Category/Lead
+Source Detail만 사용, Close Date/Created Date는 다음 단계(P1당 가치 재설계)를 위해 읽어서
+보존만 해둠.
+
+`computeTargetLeadsOPSAggregates_()`의 emailToGroupMap/nameToGroupsMap 빌드 로직 전부 제거(사용처
+없어짐 — 코드 단순화). `93_TempQA_DealTrackerMatch.js`는 "분류 실패한 딜"(Lead Source/Source
+Category/Lead Source Detail 조합별 집계) 기반으로 재작성.
+
+**다음 단계(미착수)**: content(ebook 등) 리드는 nurturing이 최대 28개월 걸려 FY26 단일 코호트만
+으로 P1당 가치를 구하면 심각하게 저평가됨(원래 발견: content Target P1이 주 871로 비정상적으로
+높게 나왔던 원인). 딜트래커의 Created Date 기준 "이번 FY 생성 코호트"(코호트1)와 Close Date
+기준 "이번 FY 종료·이전 FY 생성"(코호트2) 두 개를 분리 산출해 Target_Engine에 나란히 표시하기로
+사용자와 합의 — 최종 공식 반영 방식은 숫자를 보고 추후 결정. CLAUDE.md #7에 상세 기록.
+
+## Deal_Raw 파이프라인화 결정 재검토 → 구글시트 단일 관리로 원복
+
+바로 아래 섹션("Deal_Raw 자체 파이프라인화로 방향 확대")에서 내린 결정을 사용자가 다시 생각해보고
+번복함 — 어차피 Lead Source(Student/Guardian 이메일) 오류 교정은 마케팅팀이 계속 수동으로 해야
+하는 작업이라, 자동 import 파이프라인(Deal_Raw)을 따로 만들어도 "업로드 + 수동 관리" 이중 작업이
+될 뿐 실익이 없다는 판단. **원래대로 구글시트 하나로 관리(수동 교정도 같은 시트에서)하는 방식으로
+확정** — 단, 시트는 Student Contact Email/Primary Guardian Email 컬럼을 포함해 FY24~26 기준으로
+새로 재구축 중. CLAUDE.md #7 갱신함(아래 섹션 대신 이 결정이 최종).
+
+## Deal Tracker 매칭 문제 근본 원인 규명 — Deal_Raw 자체 파이프라인화로 방향 확대 (2026-07-27, 이후 번복됨 — 위 섹션 참고)
+
+**배경**: Opp Email 2차 매칭(아래 섹션)을 추가한 뒤에도 근본 원인을 더 파다가, 훨씬 명확한 설명을 찾음 —
+Salesforce Opportunity는 "Student Contact: Email"과 "Primary Guardian: Email" 두 개의 서로 다른
+이메일을 관련 컨택트로 가짐. Marketo 마케팅 액티비티(퍼스트터치)는 보통 Student 쪽 이메일에 남는데,
+Leads_OPS.Email은 (Lead Merge 등의 이유로) 종종 Guardian 쪽 이메일로 남아있는 경우가 있음. 사용자가
+Salesforce 리포트에서 "Primary Guardian: Email"/"Student Contact: Email"을 직접 뽑아 기존 확인
+사례(Ryan Kang)와 대조 — Student Contact Email(`rkckdev@gmail.com`)이 실제 마케팅 리드였고, Guardian
+Email(`tomyalice@naver.com`)이 Leads_OPS에 잘못 남아있던 값과 정확히 일치함을 검증 완료.
+
+**방향 결정**: 외부 구글시트([KOR] Deal Tracking)를 `openById()`로 계속 참조하며 매칭 로직만 보정하는
+대신, 이 프로젝트 자체의 `Deal_Raw` import 파이프라인(Leads_Raw/MTA_Raw와 동일 패턴 — Raw 불변성,
+날짜 Plain Text 보호, Validation 등 기존 인프라 재사용)으로 승격하기로 결정. 이참에 CLAUDE.md #5
+(Opportunity Won Date 대체)와 #7(Deal Tracker 통합)을 하나의 설계로 묶어서 별도 세션에서 다루기로
+합의 — 오늘 세션이 이미 길어져서 결정 사항만 CLAUDE.md #7/#12에 기록하고 구현은 시작하지 않음.
+Deal Tracker 시트 구조는 사용자가 FY24~26 기준으로 Salesforce 리포트에서 재구축 중(날짜 컬럼은
+`docs/DateParsing.md`의 기존 Plain Text 가이드 안내함 — 단, 현재 매칭 로직은 날짜 컬럼을 전혀 안 읽어서
+당장의 계산엔 영향 없음).
+
+## Deal Tracker Opp Email 2차 매칭 추가 (Source email 매칭률 10.7% 원인 조사 후속)
+
+**배경**: 매칭 안 되는 이메일 목록(`temp_DealTrackerUnmatched`)을 사용자가 직접 Leads_OPS/Salesforce와
+대조하며 2건(June Chang, Philip Ahn) 조사 — 둘 다 딜트래커의 Source email(마케팅 퍼스트터치 이메일)이
+아니라, 그 Opportunity가 속한 **Account의 정식 이메일**로는 Leads_OPS에 실제로 존재함을 확인. 즉
+Opportunity 레벨 이메일과 Account 레벨 이메일이 서로 다른 게 반복되는 구조적 패턴으로 확인됨(단순
+오타 아님).
+
+**해결**: 사용자가 딜트래커 시트에 `Opp Email`(신규) / `Revenue KRW`(신규) 컬럼 추가, `Revenue (NZD)`는
+A1 환율 셀 기준 `Revenue KRW`를 변환한 수식값으로 전환(향후 환율 일관성 개선). `matchDealEmailToGroup_()`
+신규(90_TargetEngine.js) — Source email 매칭 실패 시 Opp Email을 2차 후보로 시도. 컬럼 위치 전체 이동에
+맞춰 `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS` 갱신(00_Config.js). `93_TempQA_DealTrackerMatch.js`도
+동일 매칭 로직을 재사용하도록 수정(기존엔 Source email 단독 매칭만 확인해서 QA 시트가 실제 계산보다
+과다하게 "안 맞음"으로 보여줬음), Opp Email 컬럼도 표시. CLAUDE.md #12에 상세 기록.
+
+**별개 발견 — ACQ_REP Revenue 갭 조사**: 이 과정에서 이번 FY 전체 Revenue를 Salesforce 리포트/딜트래커와
+ACQ_REP로 대조하다 Referral 세그먼트에서 연간 $636,739(약 22.8%) 갭 발견 — 단 최근 3개월(5·6·7월)은
+갭이 미미(환율 수준)해서 현재 진행 중인 문제는 아닌 것으로 판단, 낮은 우선순위로 CLAUDE.md #13에 기록.
+KRW 원본 값 기반 자체 환율 변환이 정확도를 높일 수 있다는 가설도 함께 메모.
+
+## Target_REP Block C(딜 비중) 균등분할 placeholder → Deal Tracker 실데이터 연동
+
+**배경**: 사용자가 content 그룹의 Target P1이 비정상적으로 크게 나오는 걸 발견 — 원인은
+목표 공식(FY P1 목표 = Revenue Target × 딜 비중 ÷ P1당 가치)에서 딜 비중이 아직 딜트래커
+미이관 상태라 events 34% / contact 33% / content 33% 균등분할 placeholder였던 것. content는
+실제로 P1당 가치가 낮은데 딜 비중까지 과대평가되면서 목표 P1 수가 크게 튀어나옴. 사용자가
+"P1 목표도 작년 딜(레퍼럴·업셀 제외)에서 나오는 실제 비중만큼 가져가야 한다"고 지적, Deal
+Tracker(`[KOR] Deal Tracking`, 스프레드시트 ID `1oGCY8okaxhpHrtotUzbhyprCOVcJ9ndX5kX3m5qqxME`)
+링크 공유받아 WebFetch로 실물 구조 확인 후 연동.
+
+**Deal Tracker 실물 구조**: FY24·25·26 3개 FY 존재(design의 "3FY median"과 정확히 일치).
+`Lead Source` 컬럼에 "Upsell"/"Referral" 값이 명확히 구분돼 있어 그대로 제외 필터로 사용 가능.
+`Source email`로 Leads_OPS의 `Email`과 매칭해 Business Segment(→그룹) 확인.
+
+**구현**: `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER` 추가(00_Config.js). `readDealTrackerRawRows_()`
+(원시 행 읽기) / `computeDealShareRatiosFromDealRows_()`(순수 계산 — 조정 베이스 대비 그룹별
+비중, FY별 계산 후 3FY median) / `computeDealShareFromTracker_()`(I/O 래퍼) 신규
+(90_TargetEngine.js). `computeTargetLeadsOPSAggregates_()`를 확장해 Leads_OPS 1회 스캔에서
+New P1 벤치마크/P1당 가치와 함께 `emailToGroupMap`(P1 여부 무관 전체 리드 대상)도 같이 만들도록
+변경 — 딜은 P1이 아니었던 리드에서도 발생할 수 있어 P1 필터 이전 단계에서 매핑해야 함. Deal
+Tracker 접근 실패 시(시트 없음 등)엔 Input 블록 수동값으로 Fallback(`computeDealShareBlockRows_()`)
+— 완전 실데이터 대체가 아니라 안전장치로 유지. `docs/TargetReportDesign.md` §12 Open Item #5
+완료 처리, CLAUDE.md #7과는 별개 좁은 용도임을 명시(Opportunity Won Date 보정 레이어는 여전히 미착수).
+
+## Target_REP 실물 확인 후 UI/데이터 수정 4건
+
+**1) Week Start/End 연도가 1926년으로 나오는 버그** — `generateCalendarWeeksForFY_()`가
+`new Date(targetFY - 1, 7, 1)`을 호출하는데, `targetFY`가 2자리 숫자(27)라 `new Date(26, 7, 1)`이
+되고 JS `Date` 생성자가 0~99 사이 연도를 자동으로 1900년대로 해석("26" → 1926)하는 함정에 걸림.
+같은 원인으로 요일 정렬도 틀어져 월요일로 시작해야 할 첫 주가 일요일(8/2)부터 시작하는 것처럼
+보였음 — 사용자가 "2026-08-03이 월요일 맞는데 왜 8/2부터 시작하냐"고 지적해 발견. `resolveTargetFYCalendarYear_()`
+추가(2자리 FY → 실제 4자리 연도 보정)로 해결, 수정 후 2026-08-03(월) 정렬 정상 확인 가능.
+
+**2) Month 컬럼 "FY27 AUG" → "AUG"** — 사용자 요청으로 FY 접두사 제거, 월 라벨만 표시
+(`targetDerivationRowsToMatrix_()`, `90_TargetEngine.js`).
+
+**3) Target_REP Control 영역(1~3행) 전체 삭제** — 체크박스/안내문/파라미터 요약이 있던 자리를
+삭제하고 1행은 향후 월 소계 행 후보로 비워둠, 2행부터 리포트 헤더, 3행부터 데이터 시작
+(`CONFIG.TARGET.REPORT.ROWS`, `00_Config.js`). `writeTargetParamSummary_()` 제거.
+
+**4) 숫자 서식 — 소수점 전부 제거, 달성%만 소수 2자리** — 기존 Target P1(소수1)/CPNP1(소수2)를
+전부 정수(`#,##0`)로, 달성%는 `0.00%`로 통일 (`92_TargetStyles.js`).
+
+## Target_REP 실측 버그 수정 2건 (setupTargetReport() 실행 중 발견)
+
+**1) Block 0 입력값 개별 셀 호출로 인한 타임아웃** — `setupTargetReport()` 최초 실행 중
+"Service Spreadsheets timed out" 발생. `readTargetEngineInputs_()`/`setupTargetEngineInputDefaults_()`
+(`90_TargetEngine.js`)가 Input 블록 9개 행을 셀 단위로 개별 `getValue()`/`setValue()`(최대 27회
+왕복) 하던 게 원인 — 컬럼 전체 `getValues()`/`setValues()` 배치 호출(1회 읽기 + 2회 쓰기)로 교체,
+해결 확인(20.21초 만에 정상 완료).
+
+**2) Generate 체크박스가 Simple Trigger 권한 한계로 동작 불가** — 타임아웃 수정 후 체크박스를
+눌러보니 `Exception: Specified permissions are not sufficient to call SpreadsheetApp.openById`
+발생. Apps Script의 Simple Trigger(전역 `onEdit(e)`)는 제한된 권한(restricted authorization)으로
+실행되어 컨테이너 밖의 다른 스프레드시트를 여는 것 자체가 원천적으로 불가능함 — ACQ_REP/NewP1_REP는
+외부 파일을 안 열어서 지금까지 드러난 적 없던 문제. 사용자 확인 후 Target_REP만 체크박스+onEdit을
+제거하고 **수동 실행**(`runGenerateTargetReport()`, `91_TargetReport.js`를 Apps Script 편집기에서
+직접 Run)으로 전환 — 직접 Run은 Full Authorization이라 문제없음. `30_ACQReport.js`의 중앙
+`onEdit()` 디스패처에서도 Target_REP 분기 제거. `docs/TargetReportDesign.md` §9 갱신.
+
+## Target_REP (Weekly Segment Target & Achievement Report) — 설계 확정 + 1차 구현
+
+**배경**: 주 단위(월~일)로 세그먼트 그룹(events/contact/content)별 New P1/CPNP1 목표를 top-down
+(마케팅 Revenue 타겟 × 딜 비중 ÷ P1당 가치)으로 역산해 실적과 대조하는 신규 리포트. 설계 전문은
+`docs/TargetReportDesign.md` 참고.
+
+**막힌 지점 해소(구현 착수 전 확인)**:
+- Leads_OPS FY24 커버리지 존재 확인 → New P1 벤치마크 FY24·25·26 = 1:2:3 가중 유지
+- 채널시트 FY24 광고비 복구 불가 확인 → CPNP1 벤치마크 FY25·26 = 2:3 가중 유지
+- 외부 채널시트/Naver 시트 실물 구조를 WebFetch(CSV export)로 직접 확인 — 스프레드시트 ID
+  `1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A`, 채널시트 gid `1718473299`, Naver gid
+  `387972603`, 컬럼 레이아웃 확정 (`docs/TargetReportDesign.md` §3). 탭 이름이 아닌 gid로 매칭.
+- 채널시트 "2026-06-28/07-05/07-19 세 주 완전 동일값" 문제를 직접 대조해 실제 데이터 문제로 확인 —
+  사용자가 구현 착수 전 채널시트에서 직접 교정하기로 결정, Engine은 별도 보정 로직 없이 값을 그대로 신뢰.
+
+**신규 파일**:
+- `90_TargetEngine.js` — Block A(벤치마크)~D(목표 전개) 계산/작성. 월~일 주 캘린더 생성
+  (`generateCalendarWeeksForFY_()`), 결측 FY 자동 제외 가중평균(`computeWeightedAverage_()`),
+  top-down 공식 체인(`computeFYP1Target_()`→`computeMonthlyP1Target_()`→`computeWeeklyP1Target_()`,
+  `computeMonthlyCPNP1Target_()`), 외부 채널시트/Naver 시트 gid 매칭 참조.
+- `91_TargetReport.js` — `setupTargetReport()`(최초 1회 수동), Generate 체크박스(onEdit, Engine
+  전체 재계산 후 리포트 작성), `refreshTargetActuals_()`(Engine 재계산 없이 Actual/달성%만 갱신 —
+  기존 `refreshACQSummary_()` 호출 지점 4곳에 나란히 배선).
+- `92_TargetStyles.js` — ACQ_REP 관례 서식(% 소수 1자리, 금액 콤마, 테두리, 짝수 행 배경, 헤더 Note).
+- `CONFIG.TARGET`(`00_Config.js`) — 시트명/그룹 매핑/벤치마크 가중치/외부 파일 참조/Engine·Report
+  레이아웃 전부 중앙화.
+
+**onEdit 배선**: `30_ACQReport.js`의 중앙 `onEdit()` 디스패처에 `CONFIG.TARGET.SHEET` 분기 추가
+(`handleTargetReportGenerateEdit_()`, NewP1_REP과 동일한 이유로 onEdit()은 한 파일에만 둠).
+
+**미해결(구현 후 실물 확인 필요, `docs/TargetReportDesign.md` §12 #6~8)**: 개선계수 초기값 0.9
+placeholder, events의 Seminar/Webinar 분해 보조 표시 여부, 월 소계 행 여부. `setupTargetReport()`
+(91_TargetReport.js) 실행 및 실제 시트 검증 전까지 미완료 상태.
+
 # Changelog — 2026-07-25 (계속)
 
 ## Business Segment QA 착수 — temp_QA 시트 신설 + 분류 룰 대량 보강
