@@ -21,9 +21,14 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.12.0
+ * v1.12.1
  *
  * Change Log
+ * v1.12.1 (2026-07-27)
+ * - computeDealShareRatiosFromDealRows_() 로그 메시지 정정 — Content Category
+ *   직접 매핑 전환(v1.11.0) 이후에도 "Lead Source Detail/Lead Source/Source
+ *   Category로 분류 안 됨" 문구가 안 바뀌어 있었음(실제 계산 로직은 이미
+ *   갱신됐으나 로그 문구만 stale) — "Content Category로 분류 안 됨"으로 수정.
  * v1.12.0 (2026-07-27)
  * - FY P1 목표 공식을 New/Pipeline 2트랙 분리로 전면 교체 — CLAUDE.md #7
  *   최종 결정(a/b 블렌딩 방식 미정 상태 해소). 신규
@@ -1463,7 +1468,7 @@ function computeDealShareRatiosFromDealRows_(dealRows){
   Logger.log(
     CONFIG.LOG.PREFIX + " Deal Tracker classify (FY" + targetFY + " 코호트1 — 같은 해 생성·클로징): " +
     classifiedCount + " classified / " + unclassifiedCount + " unclassified " +
-    "(Lead Source Detail/Lead Source/Source Category로 세그먼트 분류 안 된 건수)"
+    "(Content Category로 세그먼트 분류 안 된 건수)"
   );
 
   const result = {};
