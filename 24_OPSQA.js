@@ -14,9 +14,30 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.3.0
+ * v1.4.1
  *
  * Change Log
+ * v1.4.1 (2026-07-28)
+ * - testFindExactDuplicateLeadRowsToDelete_()/testFindExactDuplicateLeadRowsToDeleteTieBreak_()
+ *   함수명 끝의 `_` 제거 (사용자가 Apps Script 편집기 Run 드롭다운에서 안 보인다고
+ *   발견 — docs/apps-script-gotchas.md #2 "이름 끝에 `_`가 붙은 함수는 Run
+ *   드롭다운에 안 뜬다"에 해당하는 실수. 테스트 함수는 편집기에서 직접 Run 해야
+ *   하므로 언더스코어가 없어야 함). MTA_Master용 동명 함수(v1.3.0에서 추가된
+ *   testFindExactDuplicateTouchRowsToDelete_()/...TieBreak_())도 동일한 문제가
+ *   있는 것으로 추정되나, 기존 코드 변경은 범위 밖이라 이번엔 건드리지 않음.
+ * v1.4.0 (2026-07-28)
+ * - Leads_Master 완전 동일 중복 행 탐지/자동삭제 신규 구현 (MTA_Master용
+ *   미해결 항목 3/8과 동일한 문제를 Leads_Master에도 적용, 사용자 요청).
+ *   신규 checkExactDuplicateLeadRows_()/findExactDuplicateLeadRows_()
+ *   (runOPSQA_()에 배선 — 자동 탐지)와 findExactDuplicateLeadRowsToDelete_()/
+ *   readLeadsMasterRowsWithIndex_()/runAutoDeleteExactDuplicateLeadRows()
+ *   (수동 실행 전용). MTA_Master는 터치 단위라 5개 필드 복합키가 필요했지만,
+ *   Leads_Master는 Lead ID 1개 = 행 1개가 정상 구조라 Lead ID 단독을
+ *   그룹 키로 사용(사용자 확정). 진행 단계 판정은 computeTouchProgressionScore_()
+ *   를 그대로 재사용(Leads_Master 필드명이 동일 — Opportunity Won Date/
+ *   Revenue/IC Completed Date/IC Booked Date). MTA_Master 버전과 동일하게
+ *   자동 실행 체인(appendNewLeads() 등)에는 배선하지 않음 — 실데이터 검증
+ *   전까지는 수동 Run.
  * v1.3.0 (2026-07-28)
  * - CLAUDE.md 미해결 항목 8(완전 동일 중복 터치 자동 삭제) 구현 — 신규
  *   runAutoDeleteExactDuplicateTouchRows()/findExactDuplicateTouchRowsToDelete_()/
@@ -62,6 +83,7 @@ function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
   checkRowCount_(issues);
   checkMTAFunnelAndMatching_(issues);
   checkLeadIdUniqueness_(issues);
+  checkExactDuplicateLeadRows_(issues);
   checkExactDuplicateTouchRows_(issues);
 
   if (preMergeOpsSnapshot && newlyWrittenRows) {
@@ -467,6 +489,109 @@ function checkLeadIdUniqueness_(issues) {
         }
 
     });
+
+}
+
+
+/**
+ * ==========================================================
+ * Check — Exact Duplicate Lead Row (완전 동일 중복 검출, Leads_Master)
+ *
+ * WHY
+ * MTA_Master는 한 Lead가 여러 번 나오는 게 정상(터치 단위)이라 5개 필드
+ * 복합키가 필요했지만(아래 checkExactDuplicateTouchRows_() 참고),
+ * Leads_Master는 Lead ID 1개 = 행 1개가 정상 구조(한 Lead는 한 번만
+ * 생성됨). 주간 Lead export 날짜 범위가 겹치면 appendNewLeads()가 같은
+ * Lead ID를 Leads_Master에 다시 append할 수 있음 — MTA_Master 완전중복
+ * (CLAUDE.md 미해결 항목 3)과 동일한 원인으로 가정(2026-07-28 사용자 확인).
+ * 따라서 Lead ID만으로 그룹핑해 2번 이상 등장하면 완전 동일 중복으로
+ * 판단한다(5필드 복합키는 MTA와 달리 불필요 — 사용자 확정).
+ * ==========================================================
+ */
+function checkExactDuplicateLeadRows_(issues) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const masterSheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
+
+  if (!masterSheet) return;
+
+  const leadRecords = sheetToObjects(masterSheet);
+  const duplicates = findExactDuplicateLeadRows_(leadRecords);
+
+  duplicates.forEach(function (d) {
+
+    issues.push({
+      check: "Exact Duplicate Lead Row",
+      leadId: d.leadId,
+      email: d.email,
+      detail:
+        "Leads_Master에 " + d.count +
+        "번 완전 동일하게 등장 (export 중복 의심)"
+    });
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Find Exact Duplicate Lead Rows (순수 함수, QA 보고용)
+ *
+ * @param {Array<Object>} records  Leads_Master 레코드 배열 (sheetToObjects() 결과)
+ * @return {Array<{leadId:string, email:string, count:number}>}
+ *
+ * TEST
+ * testFindExactDuplicateLeadRows() 참고
+ * ==========================================================
+ */
+function findExactDuplicateLeadRows_(records) {
+
+  const groups = {};
+
+  records.forEach(function (record) {
+
+    const leadId = String(record["Lead ID"] || "").trim();
+
+    if (!leadId) return;
+
+    if (!groups[leadId]) {
+      groups[leadId] = { leadId: leadId, email: record["Email"] || "", count: 0 };
+    }
+
+    groups[leadId].count++;
+
+  });
+
+  return Object.keys(groups)
+    .map(function (k) { return groups[k]; })
+    .filter(function (g) { return g.count > 1; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateLeadRows()
+ * ==========================================================
+ */
+function testFindExactDuplicateLeadRows() {
+
+  const records = [
+    { "Lead ID": "L1", "Email": "a@x.com" },
+    { "Lead ID": "L1", "Email": "a@x.com" }, // 완전 동일 중복
+    { "Lead ID": "L2", "Email": "b@x.com" }  // 단독 — 중복 아님
+  ];
+
+  const result = findExactDuplicateLeadRows_(records);
+
+  const pass =
+    result.length === 1 &&
+    result[0].leadId === "L1" &&
+    result[0].count === 2;
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected 1 dup group, L1 x2)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1625,6 +1750,246 @@ function runAutoDeleteExactDuplicateTouchRows() {
   Logger.log(
     "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
     "MTA_Master 현재 행 수(헤더 제외): " + (sheet.getLastRow() - 1)
+  );
+
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Leads Master Rows With Sheet Row Index
+ *
+ * WHY
+ * readMTAMasterRowsWithIndex_()와 동일한 목적 — sheetToObjects()는 실제
+ * 시트 행 번호를 모르므로, 삭제 대상 행을 지목하려면 별도로 필요.
+ *
+ * @return {Array<{rowIndex:number, record:Object}>}  rowIndex는 1-based 시트 행 번호
+ * ==========================================================
+ */
+function readLeadsMasterRowsWithIndex_() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
+
+  if (!sheet) return [];
+
+  const values = sheet.getDataRange().getValues();
+
+  if (values.length <= 1) return [];
+
+  const headers = values[0];
+  const rows = [];
+
+  for (let r = 1; r < values.length; r++) {
+
+    const record = {};
+
+    headers.forEach(function (h, c) {
+      record[String(h).trim()] = values[r][c];
+    });
+
+    rows.push({ rowIndex: r + 1, record: record });
+
+  }
+
+  return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * Find Exact Duplicate Lead Rows To Delete (순수 함수)
+ *
+ * WHY
+ * checkExactDuplicateLeadRows_()와 동일한 키(Lead ID)로 그룹핑하되,
+ * 그룹당 하나(가장 진행된 단계 — Won > IC Complete > IC Booked > 없음,
+ * 동점이면 시트상 더 나중 행)만 남기고 나머지의 실제 시트 행 번호를
+ * 삭제 대상으로 반환한다. computeTouchProgressionScore_()는 MTA_Master용
+ * 으로 먼저 만들어졌지만 참조하는 필드명(Opportunity Won Date/Revenue/
+ * IC Completed Date/IC Booked Date)이 Leads_Master(12_LeadTransformer.js)
+ * 와 동일해 그대로 재사용 가능(로직 자체가 도메인 무관, 2026-07-28).
+ * 삭제 시 행 번호가 밀리지 않도록 내림차순으로 정렬해서 반환 —
+ * 호출부는 그대로 순서대로 deleteRow()하면 안전하다.
+ *
+ * @param {Array<{rowIndex:number, record:Object}>} rowsWithIndex
+ *   readLeadsMasterRowsWithIndex_()의 반환값
+ * @return {number[]}  삭제할 시트 행 번호(1-based), 내림차순 정렬
+ *
+ * TEST
+ * testFindExactDuplicateLeadRowsToDelete() 참고
+ * ==========================================================
+ */
+function findExactDuplicateLeadRowsToDelete_(rowsWithIndex) {
+
+  const groups = {};
+
+  rowsWithIndex.forEach(function (item) {
+
+    const leadId = String(item.record["Lead ID"] || "").trim();
+
+    if (!leadId) return;
+
+    if (!groups[leadId]) groups[leadId] = [];
+
+    groups[leadId].push(item);
+
+  });
+
+  const rowsToDelete = [];
+
+  Object.keys(groups).forEach(function (leadId) {
+
+    const items = groups[leadId];
+
+    if (items.length <= 1) return;
+
+    items.sort(function (a, b) {
+
+      const scoreA = computeTouchProgressionScore_(a.record);
+      const scoreB = computeTouchProgressionScore_(b.record);
+
+      if (scoreA !== scoreB) return scoreB - scoreA; // 높은 점수(더 진행됨) 먼저
+
+      return b.rowIndex - a.rowIndex; // 동점이면 시트상 더 나중 행을 유지 대상으로
+
+    });
+
+    for (let i = 1; i < items.length; i++) {
+      rowsToDelete.push(items[i].rowIndex);
+    }
+
+  });
+
+  rowsToDelete.sort(function (a, b) { return b - a; }); // 내림차순 — 삭제 시 인덱스 안 밀리도록
+
+  return rowsToDelete;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateLeadRowsToDelete_()
+ * ==========================================================
+ */
+function testFindExactDuplicateLeadRowsToDelete() {
+
+  const rowsWithIndex = [
+    {
+      rowIndex: 5, record: {
+        "Lead ID": "L1",
+        "IC Booked Date": new Date(2026, 0, 2), "IC Completed Date": "",
+        "Opportunity Won Date": "", "Revenue": 0
+      }
+    },
+    {
+      rowIndex: 12, record: {
+        "Lead ID": "L1",
+        "IC Booked Date": new Date(2026, 0, 2), "IC Completed Date": new Date(2026, 0, 5),
+        "Opportunity Won Date": "", "Revenue": 0
+      }
+    }, // 더 진행됨(IC Complete) — 이 행을 남겨야 함
+    {
+      rowIndex: 20, record: {
+        "Lead ID": "L2",
+        "IC Booked Date": "", "IC Completed Date": "", "Opportunity Won Date": "", "Revenue": 0
+      }
+    } // 단독 — 삭제 대상 아님
+  ];
+
+  const result = findExactDuplicateLeadRowsToDelete_(rowsWithIndex);
+
+  const pass = result.length === 1 && result[0] === 5;
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected [5])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateLeadRowsToDelete_() 동점 타이브레이크
+ * ==========================================================
+ */
+function testFindExactDuplicateLeadRowsToDeleteTieBreak() {
+
+  const rowsWithIndex = [
+    { rowIndex: 3, record: { "Lead ID": "L3" } },
+    { rowIndex: 7, record: { "Lead ID": "L3" } }
+  ];
+
+  const result = findExactDuplicateLeadRowsToDelete_(rowsWithIndex);
+
+  const pass = result.length === 1 && result[0] === 3; // 동점 — 더 나중 행(7)을 남기고 3을 삭제
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected [3])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Auto Delete Exact Duplicate Lead Rows (수동 실행용)
+ *
+ * WHY
+ * runAutoDeleteExactDuplicateTouchRows()(MTA_Master, CLAUDE.md 미해결
+ * 항목 8)와 동일한 필요성 — 주간 Lead export 날짜 범위가 겹치면 같은
+ * Lead ID가 Leads_Master에 중복 append됨(2026-07-28 신규 설계, 사용자
+ * 요청). LEADS_LAST_ROW 카운터는 Leads_Raw 처리 진행률만 추적할 뿐
+ * Leads_Master 행 위치와 무관하고(07_IncrementalMasterBuild.js
+ * appendNewLeads() 참고), Leads_Master는 매 append마다 어차피
+ * sortSheetByDate()로 재정렬되므로 삭제로 인한 카운터/정렬 부작용
+ * 없음 — MTA_Master와 동일 구조(2026-07-28 검증 완료 사례 참고).
+ *
+ * 삭제 대상이 아닌(가장 진행된) 행만 남기므로 IC Booked/Completed/Won/
+ * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에
+ * 먼저 전부 나열한 뒤 삭제 — 실행 로그가 곧 감사 기록.
+ *
+ * ⚠️ MTA_Master 버전과 동일한 방침으로 runOPSQA_()/appendNewLeads() 등
+ * 자동 실행 체인에는 배선하지 않았다 — 실제 데이터로 검증 전까지는
+ * 사용자가 Apps Script 편집기에서 직접 Run할 것.
+ * ==========================================================
+ */
+function runAutoDeleteExactDuplicateLeadRows() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
+
+  if (!sheet) {
+    Logger.log(CONFIG.SHEETS.LEADS_MASTER + " sheet not found.");
+    return;
+  }
+
+  const rowsWithIndex = readLeadsMasterRowsWithIndex_();
+  const rowsToDelete = findExactDuplicateLeadRowsToDelete_(rowsWithIndex);
+
+  Logger.log("======================================");
+  Logger.log("Auto Delete Exact Duplicate Lead Rows");
+  Logger.log("======================================");
+  Logger.log("Leads_Master 현재 행 수(헤더 제외): " + (sheet.getLastRow() - 1));
+
+  if (rowsToDelete.length === 0) {
+    Logger.log("삭제할 완전 동일 중복 행 없음.");
+    return;
+  }
+
+  Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
+  Logger.log("삭제 대상 시트 행 번호(내림차순): " + rowsToDelete.join(", "));
+
+  rowsToDelete.forEach(function (rowIndex) {
+    sheet.deleteRow(rowIndex);
+  });
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
+    "Leads_Master 현재 행 수(헤더 제외): " + (sheet.getLastRow() - 1)
   );
 
   Logger.log("======================================");

@@ -302,6 +302,98 @@ Referral은 ACQ_REP의 정식 Business Segment라 제외하면 안 되는 게 �
 드러남 — 실제로는 Segment 키워드 매칭 부정확 + 타임존 버그가 더 크게 기여(위쪽 최신 항목들
 참고). 최종적으로 5·6·7월 전 세그먼트가 실제 값과 일치 확인됨.
 
+## Leads_Master 완전 동일 중복 행 탐지/자동삭제 신규 구현 (CLAUDE.md #13)
+
+**배경**: MTA_Master 완전 동일 중복(#3/#8)과 같은 문제가 Leads_Master에도 있는지 확인 요청 —
+`24_OPSQA.js`에 Leads_Master 전용 로직이 없다는 게 확인돼 새로 설계.
+
+**설계**: MTA_Master(터치 단위, 한 Lead가 여러 번 나오는 게 정상)와 달리 Leads_Master는 Lead ID
+1개 = 행 1개가 정상 구조라, 5필드 복합키 대신 **Lead ID 단독**을 그룹 키로 사용. 진행 단계
+tie-break(Won > IC Complete > IC Booked > 없음)는 기존 `computeTouchProgressionScore_()` 재사용
+(필드명이 동일해 그대로 호환).
+
+**구현(`24_OPSQA.js` v1.4.1)**: `checkExactDuplicateLeadRows_()`/`findExactDuplicateLeadRows_()`
+(탐지, `runOPSQA_()`에 배선) + `findExactDuplicateLeadRowsToDelete_()`/
+`readLeadsMasterRowsWithIndex_()`/`runAutoDeleteExactDuplicateLeadRows()`(자동삭제, 수동 실행
+전용). 자동삭제는 MTA_Master 버전과 동일 방침으로 `appendNewLeads()` 자동 체인엔 배선 안 함.
+
+**검증 완료**: 단위 테스트 3개 전부 PASS, `runOPSQA_()` 실행 결과 현재 Leads_Master 완전 중복
+0건(탐지 로직 정상 동작 확인, 실제 삭제 동작은 향후 중복 발생 시 검증 예정).
+
+**사이드노트**: 최초 구현 시 테스트 함수명에 `_`를 붙였다가(`testFindExactDuplicateLeadRowsToDelete_()`)
+Apps Script Run 드롭다운에 안 보이는 문제 발견(`docs/apps-script-gotchas.md` #2) → 제거(v1.4.1).
+MTA_Master용 동명 함수는 동일 문제 추정되나 사용자 결정으로 그대로 둠.
+
+## Backend 실행 체인 비동기화 — 설계 확정, 구현은 TODO (CLAUDE.md #9)
+
+**배경**: `appendNewLeads()`/`appendNewMTA()`가 Import 후속 처리(OPS Build/Engine 갱신 7개)까지
+전부 한 실행 안에서 순차 처리해 느림 — 사용자가 Import만 하고 나머지는 백그라운드 처리되길 원함.
+
+**막힌 지점 해소**: `docs/PerformanceBenchmark.md`의 `rebuildMTAMaster()` 실측(7m58s, 타임아웃
+없이 정상 완료)으로 미루어 이 프로젝트는 Google Workspace 계정(30분 제한)으로 추정 — 실행시간
+하드 리밋 자체는 병목이 아니고, 진짜 문제는 UX(브라우저 다이얼로그 대기)와 진단 가능성.
+
+**설계 확정**: 단계마다 트리거를 걸면 GAS 트리거 디스패치 지연이 누적돼 오히려 느려질 위험이
+있어, **트리거는 파이프라인당 1번만 걸고 그 안에서 전체 체인을 순차 실행**하는 구조로 확정.
+적용 범위는 `appendNewLeads()`/`appendNewMTA()`만(Full Rebuild 제외). 동시 실행은 단순 락으로
+거부, 실패 시 즉시 중단 + 수동 재시도, 진행상태는 기존 README 탭에 표시. 상세: CLAUDE.md #9.
+
+**상태**: 설계만 확정, 코드 변경 없음 — 사용자 요청으로 구현은 TODO 보류.
+
+## Search_OPS Business Segment 분류 개선 — 다단계 (CLAUDE.md #14)
+
+**배경**: 사용자가 Search_OPS에서 ebook/guide/SAT practice test 등 콘텐츠성 캠페인이 Search로
+잘못 분류된 걸 발견하면서 시작된 연쇄 개선 작업. 상세 이력은
+`docs/BusinessSegmentClassification.md`의 2026-07-28 항목들에 전부 기록 — 요약만 남김.
+
+**1단계 — leadSource 우선순위 반전**: `leadSource.includes("search")`가 Content 판정보다 먼저
+체크돼 ebook 등 콘텐츠 리드가 Search로 덮어써지던 문제(22개 값·약 1,190건 실측) → Content
+판정 뒤로 이동. `runInvestigateSearchMisclassifiedCampaigns()`(`71_Search_Engine.js`)로 진단.
+
+**2단계 — SAT Practice Test 하드코딩 예외**: 공통 키워드가 없는 "Mini/Digital SAT Practice
+Test" 계열 3건을 `BUSINESS_SEGMENT_EXCEPTIONS`에 추가.
+
+**3단계 — campaign의 "_contact"/"consult"도 동일 문제**: 이 계정 Meta 캠페인 다수가 슬러그에
+관례적으로 `_contact`/`consult`를 붙여서 Content 캠페인까지 가로챔 → `campaign.includes("search")`/
+`campaign.includes("sitelink")`를 확정 신호로 신규 분리(Content보다 먼저), `_contact`/`consult`는
+fallback으로 이동. 사용자가 제시한 "명확한 Search" 49개 캠페인 전수 검증으로 안전성 확인.
+
+**4단계 — Content 키워드 확장**: "download"/"case study"/"quiz"/공백형 "on demand" 추가(사용자 확정).
+
+**5단계 — BOFU/Search fallback 재설계**: 사용자 확정 — "BOFU/Search 세그먼트 캠페인 둘 다
+`_contact`를 붙이는데, Search는 역사적으로 Lead Source가 Naver/Google/Organic(+Paid) Search인
+경우만 존재, 그 외는 전부 BOFU". `search`/`sitelink` 확정 신호가 없는 순수 `_contact`/`consult`
+캠페인은 leadSource로 최종 판별(search 계열이면 Search, 아니면 BOFU)하도록 재설계.
+
+**Search_OPS 죽은 키 정리**: `mergeSearchOPS_()`의 합집합 병합 때문에 Business Segment가 바뀌어도
+지워지지 않던 레거시 행 116건 발견 — 수동 컬럼 전부 공백 확인 후 `runDeleteDeadSearchOPSRows()`
+(`71_Search_Engine.js`) 신규 추가.
+
+**구현 파일**: `16_TransformHelper.js`(v1.5.0→v1.8.0, `getBusinessSegment()` 핵심 로직),
+`71_Search_Engine.js`(v1.4.0→v1.7.0, 진단/삭제 유틸리티). 신규 테스트:
+`testGetBusinessSegmentContentBeatsLeadSourceSearch()`, `testGetBusinessSegmentSearchCampaignSignals()`,
+`testGetBusinessSegmentContactFallbackToBOFU()`.
+
+**잔존 미해결(CLAUDE.md #14)**: 옛날 ebook Marketo flow가 UTM 없으면 leadSource를 "Organic
+Search"로 기본 처리하던 레거시 때문에, leadSource가 문자 그대로 "Organic Search"인 리드 중 일부는
+실제로는 진짜 검색 유입이 아닐 수 있음 — 식별 기준이 아직 없어 별도 재검토 필요.
+
+### 다음 세션 시작 시 할 일 (미실행 상태로 세션 종료)
+
+아래는 전부 **코드/clasp push는 완료**됐지만, 사용자가 Apps Script 편집기에서 아직 **실행하지
+않은** 항목 — 다음 세션 시작 시 이어서 진행:
+
+1. `16_TransformHelper.js`의 `testGetBusinessSegmentContactFallbackToBOFU()` Run (신규 테스트,
+   BOFU/Search leadSource 판별 검증).
+2. `71_Search_Engine.js`의 `runDeleteDeadSearchOPSRows()` Run (죽은 키 116건 삭제).
+3. `10_MasterBuild.js`의 `rebuildLeadsMaster()` → `rebuildMTAMaster()` 순서로 재실행 (Content
+   키워드 확장 + BOFU/Search 재설계를 Master 전체에 소급 적용 — 직전 Rebuild는 3단계 수정
+   전이라 아직 최신 로직 미반영 상태).
+4. `72_Search_Build.js`의 `buildSearchOPS()` Run (Search_Engine 최신값을 Search_OPS에 반영).
+5. 위 4단계 완료 후, Search_OPS를 다시 살펴보고 남은 문제(예: SAT Practice Test의 다른 문구
+   변형들 — "Core SAT practice test" 등, 기존 하드코딩 예외와 다른 값이라 아직 미해결)가 있는지
+   확인.
+
 # Changelog — 2026-07-27
 
 ## Target_REP P1당 가치(Block B) — 코호트1/2 이원화 구현

@@ -160,6 +160,74 @@ N/A       (2026-07-25 추가 — 아래 참고)
   호출부 갱신, MTA_Master에 `Lead Source Category` 컬럼 신규 추가. 테스트:
   `testGetBusinessSegmentNA()`.
 
+### ⚠️ Search의 Lead Source 신호가 Content보다 먼저 체크되던 우선순위 반전 (2026-07-28)
+- **문제**: 2026-07-25(위 "Search 판정에 Lead Source 조건 추가")에서 도입한 `leadSource.includes("search")`는
+  당시 "Content보다는 선순위 유지"로 확정했었으나, 이 순서 때문에 campaign/detail에 ebook/guide/
+  on-demand/infographic 등 명확한 Content 키워드가 있어도 그 리드의 `First Lead Source`가 "Paid
+  Search"/"Organic Search"면 무조건 Search로 덮어써지는 문제가 있었음. 사용자가 Search_OPS를
+  검토하다가 콘텐츠 다운로드성 캠페인 22개가 Search_OPS에 노출되는 걸 보고 발견 — 진단 함수
+  `runInvestigateSearchMisclassifiedCampaigns()`(`71_Search_Engine.js`)로 실측한 결과, 22개 중 20개
+  ·총 약 1,190건이 이 원인으로 잘못 분류돼 있었음 확인(예: detail="WF-2021-09-KOR-MOFU-Core
+  Hyperlocalized ECL eBook" + leadSource="Organic Search" → recomputed도 Search, 라이브 버그).
+- **수정**: `leadSource.includes("search")`를 Search 블록에서 제거하고 Content 판정 **뒤**, N/A/Other
+  **앞**으로 이동(신규 "Search (Lead Source fallback)" 블록) — campaign/detail에 뚜렷한 신호(Search
+  계열 문구도, Content 키워드도)가 전혀 없을 때만 leadSource를 최후 수단으로 사용. 2026-07-25에 이
+  신호를 추가한 원래 목적(First Lead Source에 "Search" 포함되는데 Other로 떨어지던 2,264건 구제)은
+  fallback 위치에서 그대로 유지됨. Seminar/Webinar/BOFU 및 campaign/detail 기반 Search 신호(contact/
+  consult/paid search/organic search 문구)의 우선순위는 변경 없음. 테스트:
+  `testGetBusinessSegmentContentBeatsLeadSourceSearch()`(`16_TransformHelper.js`).
+- **소급 적용**: Leads_Master/MTA_Master 기존 행에 반영하려면 `rebuildLeadsMaster()`/`rebuildMTAMaster()`
+  Full Rebuild 필요 — ACQ_REP/NewP1_REP/Search_OPS 등 Business Segment를 쓰는 모든 리포트에 영향.
+
+### ⚠️ campaign의 "_contact"/"consult"도 Content보다 먼저 체크되던 문제 + "search"/"sitelink" 확정 신호 도입 (2026-07-28, 계속)
+- **문제**: 위 항목 수정 후 Full Rebuild + `buildSearchOPS()`까지 실행했는데도, "Downloaded Top 50 NZ
+  High Schools", "Prospectus", "Case Study", SAT Practice Test 계열, Webinar 등 명백한 콘텐츠 detail
+  값들이 여전히 Search에 남아있음을 발견(`runAuditSearchSegmentIssues()`, `71_Search_Engine.js`). 원인은
+  이 계정의 거의 모든 Meta 리타게팅 캠페인이 슬러그 끝에 관례적으로 `_contact`/`consult`를 붙이고
+  있어서, `campaign.includes("_contact")`/`"contact"`/`"consult"`가 Content 판정보다 먼저 체크되며
+  ebook/prospectus 캠페인까지 가로챈 것 — leadSource 문제와 동일한 패턴이 campaign 레벨에도 있었음.
+- **검증**: 사용자가 "명확한 Search" 캠페인 49개를 직접 제시(전부 campaign에 `search` 또는 `sitelink`
+  포함, 예: `KR_core_2021-04-01_search-kr_tier1-college-specific_contact`,
+  `KR_core_2025-01-15_sitelink-ext-bookconsultukoxbridge_lead`). 이 49개를 전수 검증한 결과, 단순히
+  `_contact`/`consult`만 Content 뒤로 미루면 `search-ap-curriculum-courses_contact`(Content 키워드
+  "curriculum"과 우연히 겹침), `sitelink-ext-..._lead`(Content 키워드 "_lead"와 우연히 겹침) 같은
+  **진짜 Search 캠페인이 잘못 Content로 넘어갈 뻔함**이 확인됨.
+- **수정**: `campaign.includes("search")`/`campaign.includes("sitelink")`를 신규 확정 신호로 추가해
+  Content 판정보다 **먼저** 체크(사용자 확정 기준: organic/paid 무관하게 campaign에 search/sitelink가
+  있으면 무조건 Search). `campaign.includes("_contact")`/`"contact"`/`"consult"`는 여기서 제거하고
+  Content 판정 **뒤** fallback으로 이동(`leadSource.includes("search")`와 같은 블록에 통합).
+  `detail.includes("contact")`/`"paid search"`/`"organic search"`는 더 구체적인 폼 제출 신호라 기존
+  위치(Content보다 먼저) 그대로 유지. 테스트:
+  `testGetBusinessSegmentSearchCampaignSignals()`(`16_TransformHelper.js`) — 49개 검증 중 대표 케이스
+  포함.
+- **남은 잔여 케이스**: "Downloaded X"/"Case Study"/"Quiz"/공백형 "On Demand"(하이픈 없음)는 아래
+  2026-07-28(계속) 항목에서 Content 키워드로 추가돼 해결됨. SAT Practice Test의 다른 문구 변형(예:
+  "Core SAT practice test", "Filled out form for Mini SAT Practice Test")은 기존 하드코딩 예외 목록의
+  정확한 문자열과 달라 여전히 미해결 — 필요 시 개별 예외 추가.
+- **Search_OPS 죽은 키**: `mergeSearchOPS_()`(`73_Search_Merge.js`)가 "현재 Engine 키 ∪ 기존 Search_OPS
+  키"로 합치는 구조라, 위 수정들로 Business Segment가 바뀌어도 Search_OPS에 한 번 들어간 키는 지표만
+  0이 된 채 행 자체는 남음. `runAuditSearchSegmentIssues()` Part 1로 실측한 결과 죽은 키 116건 전부
+  수동 컬럼(PIC/Impressions/Spent 등)이 완전히 비어있어 삭제 확정 — `runDeleteDeadSearchOPSRows()`
+  (`71_Search_Engine.js`)로 실행.
+
+### ⚠️ Content 키워드 확장 + BOFU/Search "_contact" 공용 fallback을 leadSource 기반으로 재설계 (2026-07-28, 계속)
+- **Content 키워드 확장(사용자 확정)**: "download"/"case study"/"quiz"/"on demand"(공백형, 하이픈 없음)를
+  Content 키워드로 추가(campaign/detail 양쪽) — 위 "남은 잔여 케이스"의 "Downloaded Top 50 NZ High
+  Schools"(26건)/"Case Study" 계열/"Career Quiz"/공백형 "On Demand" 계열이 이제 Content로 분류됨.
+- **BOFU/Search 판별 기준 재정의(사용자 확정)**: "이 계정 BOFU/Search 세그먼트 캠페인 둘 다 슬러그에
+  관례적으로 `_contact`를 붙이는데, Search는 역사적으로 Lead Source가 Naver Search/Google
+  Search/Organic Search(+Paid Search)인 경우만 존재 — 그 외(Paid Social 등)는 전부 BOFU여야 한다"는
+  기준 확정. campaign에 `search`/`sitelink` 확정 신호가 없는 순수 `_contact`/`contact`/`consult`
+  캠페인의 fallback을, 이전(v1.7.0)의 "무조건 Search"에서 **leadSource.includes("search") 여부로
+  BOFU/Search를 최종 판별**하도록 재설계(leadSource에 search 계열 값이 있으면 Search, 없으면 BOFU).
+  테스트: `testGetBusinessSegmentContactFallbackToBOFU()`(`16_TransformHelper.js`).
+- **잔여 이슈(별도, 미해결 — CLAUDE.md에도 기록)**: 옛날 ebook Marketo flow가 UTM 값이 없으면
+  leadSource를 "Organic Search"로 기본 처리하던 레거시(위 첫 항목 참고) 때문에, leadSource="Organic
+  Search"라고 전부 진짜 Search는 아닐 수 있음(사용자 확인). 이번 수정은 leadSource가 Paid Social 등
+  **명확히 다른 값**인 케이스만 해소 — leadSource 필드 자체가 "Organic Search"로 잘못 남아있는 잔존
+  레거시(campaign.includes("search")로 이미 확정되는 케이스나 leadSource 최종 fallback 경로 포함)는
+  식별 기준이 아직 없어 별도 처리 필요, 임의로 처리하지 말 것.
+
 ## Marketo 네이밍 정정 필요 목록 (2026-07-25)
 아래는 `BUSINESS_SEGMENT_EXCEPTIONS`로 임시 우회 중인 캠페인/폼 이름. Marketo에서 이름 자체를
 정정(예: 프로그램명에 콘텐츠 유형 키워드 포함)하면 코드 하드코딩 없이도 일반 룰로 분류 가능해짐.
@@ -175,6 +243,9 @@ N/A       (2026-07-25 추가 — 아래 참고)
 | WF-2025-12-UK-TOFU-Core 2 Year Roadmap to the Ivy League | Content | 〃 |
 | WF-2026-04-USA-MOFU-Postgrad The 6-Month Recruitment Prep Workbook | Content | 〃 |
 | 2021-07-KOR-Book a consult page | Webinar | 이름은 "consult"지만 실제로는 대부분 웨비나 프로그램. 일부 예외는 수동 관리 필요(사용자 확인, 예외 목록 미확정) |
+| WF-2023-05-KOR-MOFU-Core Mini Digital SAT Practice Test 2023 | Content | "SAT"/"practice test"는 공통 키워드로 일반화하기엔 오탐 위험(2026-07-28) |
+| WF-2023-05-KOR-MOUF-Core Mini Digital SAT Practice Test 2023 | Content | 위와 동일 값의 "MOUF" 오타 변형(2026-07-28) |
+| WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test | Content | "SAT"/"practice test"는 공통 키워드로 일반화하기엔 오탐 위험(2026-07-28) |
 
 ## 구현 위치
 `16_TransformHelper.js`의 `getBusinessSegment(campaign, detail, leadSource)` — Leads/MTA 양쪽에서 공용으로 호출됨.

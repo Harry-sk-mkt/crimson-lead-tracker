@@ -1,24 +1,84 @@
-/** 
- * parseDate()
-
-parseDMY()
-
-parseMDY()
-
-parseISO()
-
-getFiscalYear()
-
-getQuarter()
-
-getWeek()
-
-getMonthKey()
-
-getMonthText()
-
-getBusinessSegment()
-*/
+/**
+ * ==========================================================
+ * Marketing 2.0
+ * Transform Helper
+ *
+ * Responsibility
+ * 순수 헬퍼 함수 전용: parseDate/parseDMY/parseMDY/parseISO/getFiscalYear/
+ * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
+ *
+ * Version
+ * v1.8.0
+ *
+ * Change Log
+ * v1.8.0 (2026-07-28)
+ * - Content 키워드에 "download"/"case study"/"quiz"/"on demand"(공백형) 추가
+ *   (campaign/detail 양쪽, 사용자 확정) — "Downloaded Top 50 NZ High Schools",
+ *   "Case Study", "Career Quiz", 공백형 "On Demand" 계열이 Content로 분류됨.
+ * - BOFU/Search 공용 fallback 재설계 — 사용자 확정: 이 계정 BOFU/Search 세그먼트
+ *   캠페인 둘 다 슬러그에 관례적으로 "_contact"를 붙이는데, Search는 역사적으로
+ *   Lead Source가 Naver Search/Google Search/Organic Search(+Paid Search)인
+ *   경우만 존재 — 그 외(Paid Social 등)는 전부 BOFU. campaign에 "search"/
+ *   "sitelink" 확정 신호가 없는 순수 "_contact"/"contact"/"consult" 캠페인은
+ *   이제 leadSource.includes("search") 여부로 BOFU/Search를 최종 판별(이전
+ *   v1.7.0에서는 무조건 Search fallback이었음). 신규 테스트:
+ *   testGetBusinessSegmentContactFallbackToBOFU(). 기존
+ *   testGetBusinessSegmentQABatch2()의 "순수 consult" 케이스 기대값을
+ *   Search→BOFU로 갱신(leadSource 빈 값 기준, 의도된 변경).
+ * - ⚠️ 잔여 이슈(CLAUDE.md 미해결 항목에 기록): 옛날 ebook Marketo flow가 UTM
+ *   없으면 leadSource를 "Organic Search"로 기본 처리하던 레거시 때문에,
+ *   leadSource="Organic Search"라고 다 진짜 Search는 아닐 수 있음(사용자 확인).
+ *   이번 수정은 leadSource가 명확히 다른 값(Paid Social 등)인 케이스만 해소 —
+ *   leadSource 자체가 "Organic Search"로 잘못 남아있는 잔존 레거시는 별도 처리 필요.
+ * v1.7.0 (2026-07-28)
+ * - getBusinessSegment() Search 판정 재설계 — campaign.includes("search")/
+ *   campaign.includes("sitelink")를 Content 판정보다 먼저 체크하는 확정
+ *   신호로 신규 추가(사용자 확정 기준: "campaign에 search/sitelink가 있으면
+ *   organic/paid 무관하게 무조건 Search"). campaign.includes("_contact")/
+ *   "contact"/"consult")는 이 확정 신호 블록에서 제거하고 Content 판정 뒤
+ *   fallback으로 이동 — 이 계정 Meta 리타게팅 캠페인 다수가 슬러그에 관례적
+ *   으로 "_contact"/"consult"를 붙이고 있어서(runAuditSearchSegmentIssues(),
+ *   71_Search_Engine.js 실측), Content 판정보다 먼저 체크하면 ebook/
+ *   prospectus 등 명백한 콘텐츠 캠페인까지 Search로 가로채는 문제 발견.
+ *   단순히 "_contact"/"consult"만 뒤로 미루면 "sitelink-ext-..._lead"처럼
+ *   Content 키워드("_lead")와 우연히 겹치는 진짜 Search 캠페인이 잘못
+ *   Content로 넘어갈 뻔했음 — 사용자가 제시한 "명확한 Search" 49개 캠페인
+ *   전수 검증 후 "search"/"sitelink"를 별도 확정 신호로 분리해 해결.
+ *   detail.includes("contact")/"paid search"/"organic search")와
+ *   leadSource.includes("search") fallback은 기존 위치/동작 유지. 신규
+ *   테스트: testGetBusinessSegmentSearchCampaignSignals().
+ * v1.6.0 (2026-07-28)
+ * - BUSINESS_SEGMENT_EXCEPTIONS에 "Mini/Digital SAT Practice Test" 계열 3건
+ *   추가(2개 값 + "MOUF" 오타 변형 1개, 전부 Content). "SAT"/"practice test"는
+ *   공통 키워드로 일반화하기엔 다른 세그먼트 오탐 위험이 커서 ebook 계열과
+ *   동일하게 정확한 문자열 하드코딩으로 처리(사용자 확인). 배경: 옛날 ebook류를
+ *   처리하던 Marketo flow가 UTM 값이 없으면 Lead Source를 "Organic Search"로
+ *   기본 처리하도록 설계돼 있었음(사용자 확인) — v1.5.0의 leadSource fallback
+ *   순위 조정만으로는 해결 안 되는 잔여 케이스(공통 Content 키워드 자체가 없어
+ *   fallback까지 도달해 Search로 남거나 Other로 떨어짐). 신규 테스트 케이스
+ *   testGetBusinessSegmentHardcodedExceptions()에 3건 추가.
+ * v1.5.0 (2026-07-28)
+ * - getBusinessSegment(): leadSource.includes("search")를 Search 블록에서
+ *   제거하고 Content 판정 뒤로 이동(신규 "Search (Lead Source fallback)"
+ *   블록). campaign/detail에 명확한 Content 키워드(ebook/guide/on-demand/
+ *   infographic 등)가 있어도 leadSource가 "Paid Search"/"Organic Search"면
+ *   무조건 Search로 덮어써지던 문제 수정 — 사용자가 Search_OPS에서 콘텐츠성
+ *   캠페인 22개를 검토하다 발견, runInvestigateSearchMisclassifiedCampaigns()
+ *   (71_Search_Engine.js) 실측으로 그중 20개·약 1,190건이 이 원인으로 잘못
+ *   분류돼 있었음을 확인 후 수정. 2026-07-25에 leadSource=search 신호를 추가한
+ *   원래 목적(Other로 떨어지던 2,264건 구제)은 fallback 위치에서 그대로 유지.
+ *   신규 테스트: testGetBusinessSegmentContentBeatsLeadSourceSearch(). 기존
+ *   testGetBusinessSegmentLeadSourceSearch()의 "ebook-campaign"+"Paid Search"
+ *   케이스 기대값을 Search→Content로 갱신(우선순위 반전에 따른 의도된 변경).
+ *   ⚠️ Leads_Master/MTA_Master 전체에 소급 적용하려면 rebuildLeadsMaster()/
+ *   rebuildMTAMaster() Full Rebuild 필요(사용자 확인 후 별도 실행 예정).
+ * ==========================================================
+ *
+ * 함수 목록
+ * parseDate() / parseDMY() / parseMDY() / parseISO() / getFiscalYear() /
+ * getQuarter() / getWeek() / getMonthKey() / getMonthText() /
+ * getBusinessSegment()
+ */
 
 /**
  * Parse dd/mm/yyyy
@@ -412,6 +472,16 @@ function getMonthText(date) {
  * 근본 수정은 Marketo에서 캠페인/폼 명명을 정정하는 것 — 이 목록은 그 전까지의
  * 임시 우회. 실제 리네이밍 대상 목록은 docs/BusinessSegmentClassification.md
  * "Marketo 네이밍 정정 필요 목록" 참고.
+ *
+ * 2026-07-28 추가분 — "Mini/Digital SAT Practice Test" 계열
+ * "ebook"/"guide" 같은 공통 Content 키워드가 전혀 없어 일반 룰로 못 잡히고,
+ * leadSource="Organic Search"/"Paid Search"인 건은 fallback으로도 Search에
+ * 남고 나머지는 Other로 떨어지던 케이스. 사용자 확인: 옛날 ebook류를 처리하던
+ * Marketo flow가 UTM 값이 없으면 Lead Source를 "Organic Search"로 기본
+ * 처리하도록 설계돼 있었음 — 즉 이 leadSource 값 자체가 실제 검색 유입을
+ * 의미하지 않는 레거시 아티팩트. "SAT"/"practice test"는 너무 일반적인
+ * 단어라 새 공통 키워드로 추가하기엔 다른 세그먼트 오탐 위험이 있어, ebook
+ * 계열과 동일하게 정확한 문자열 하드코딩으로 처리(사용자 확인).
  * ==========================================================
  */
 const BUSINESS_SEGMENT_EXCEPTIONS = {
@@ -425,6 +495,12 @@ const BUSINESS_SEGMENT_EXCEPTIONS = {
   "wf-2023-09-kor-mofu-core how to ace your academics for us universities (relaunching)": "Content",
   "wf-2025-12-uk-tofu-core 2 year roadmap to the ivy league": "Content",
   "wf-2026-04-usa-mofu-postgrad the 6-month recruitment prep workbook": "Content",
+
+  // Content — "Mini/Digital SAT Practice Test" 계열 (2026-07-28, 옛날 ebook
+  // Marketo flow의 "UTM 없으면 Organic Search로 기본 처리" 아티팩트 대응)
+  "wf-2023-05-kor-mofu-core mini digital sat practice test 2023": "Content",
+  "wf-2023-05-kor-mouf-core mini digital sat practice test 2023": "Content", // "mouf" 오타 변형
+  "wf-2022-11-kor-mofu-core new digital mini sat practice test": "Content",
 
   // Webinar — 명시적 확인
   "2021-07-kor-book a consult page": "Webinar"
@@ -613,17 +689,32 @@ function getBusinessSegment(
   }
 
   //----------------------------------------------------------
-  // Search
+  // Search — 확정 신호(Content보다 먼저, 2026-07-28 재설계)
+  //
+  // 사용자 확정 기준: campaign에 "search" 또는 "sitelink"가 있으면(organic/
+  // paid 무관) 무조건 Search — 실제 사용자가 "명확한 Search" 49개 캠페인을
+  // 검증용으로 제시했고, 그중 다수가 campaign에 "curriculum"(Content
+  // 키워드) 등을 우연히 포함하고 있어 이 확정 신호가 Content보다 먼저
+  // 와야 함(예: "search-ap-curriculum-courses_contact"). "sitelink-ext-..._lead"
+  // 처럼 "_lead"(Content 키워드)로 끝나는 캠페인도 있어 "sitelink" 역시
+  // 동일하게 최우선 확정 신호로 취급. detail의 "contact"/"paid search"/
+  // "organic search"는 기존처럼 여기 유지(더 구체적인 폼 제출 신호라 Content
+  // 오탐 사례가 발견되지 않음).
+  //
+  // ⚠️ campaign.includes("_contact")/"contact"/"consult")는 여기서 제거하고
+  // Content 판정 뒤 fallback으로 이동(아래 참고) — 이 계정의 거의 모든 Meta
+  // 리타겟팅 캠페인이 슬러그 끝에 "_contact"/"consult"를 관례적으로 붙이고
+  // 있어서, ebook/prospectus/case study/webinar/SAT practice test 등 명백한
+  // 콘텐츠 캠페인까지 이 조건 하나로 Search가 돼버리는 문제 발견
+  // (runAuditSearchSegmentIssues(), 71_Search_Engine.js 실측).
   //----------------------------------------------------------
 
   if (
-    campaign.includes("_contact") ||
-    campaign.includes("contact") ||
-    campaign.includes("consult") ||
+    campaign.includes("search") ||
+    campaign.includes("sitelink") ||
     detail.includes("contact") ||
     detail.includes("paid search") ||
-    detail.includes("organic search") ||
-    leadSource.includes("search")
+    detail.includes("organic search")
   ) {
     return "Search";
   }
@@ -642,6 +733,12 @@ function getBusinessSegment(
     campaign.includes("curriculum") ||
     campaign.includes("parent ebook") ||
     campaign.includes("infographic") ||
+    campaign.includes("download") ||
+    campaign.includes("case study") ||
+    campaign.includes("quiz") ||
+    campaign.includes("on-demand") ||
+    campaign.includes("ondemand") ||
+    campaign.includes("on demand") ||
     detail.includes("ebook") ||
     detail.includes("planner") ||
     detail.includes("guide") ||
@@ -650,10 +747,52 @@ function getBusinessSegment(
     detail.includes("curriculum") ||
     detail.includes("parent ebook") ||
     detail.includes("infographic") ||
+    detail.includes("download") ||
+    detail.includes("case study") ||
+    detail.includes("quiz") ||
     detail.includes("on-demand") ||
-    detail.includes("ondemand")
+    detail.includes("ondemand") ||
+    detail.includes("on demand")
   ) {
     return "Content";
+  }
+
+  //----------------------------------------------------------
+  // BOFU/Search 공용 fallback (campaign에 "_contact"/"contact"/"consult"만
+  // 있는 경우, 2026-07-28 재설계)
+  //
+  // 사용자 확정: 이 계정 BOFU/Search 세그먼트 캠페인 둘 다 슬러그에 관례적
+  // 으로 "_contact"를 붙이는데, Search는 역사적으로 Lead Source가 Naver
+  // Search/Google Search/Organic Search(+Paid Search)인 경우만 존재 — 그 외
+  // 나머지(예: Paid Social 등)는 전부 BOFU여야 함. "search"/"sitelink"가
+  // campaign에 없는 순수 "_contact"/"consult" 캠페인은 leadSource로 최종
+  // 판별: leadSource에 "search"가 포함되면 Search, 아니면 BOFU.
+  // ⚠️ 잔여 이슈(별도, CLAUDE.md 미해결 항목 참고): 옛날 ebook Marketo flow가
+  // UTM 없으면 leadSource를 "Organic Search"로 기본 처리하던 레거시 때문에,
+  // leadSource="Organic Search"라고 다 진짜 Search는 아닐 수 있음 — 이번
+  // 수정으로 이 fallback 경로는 해소되지만, campaign.includes("search")로
+  // 이미 확정 Search 처리되는 케이스나 leadSource 자체가 남아있는 잔존
+  // 레거시는 별도 처리 필요.
+  //----------------------------------------------------------
+
+  if (
+    campaign.includes("_contact") ||
+    campaign.includes("contact") ||
+    campaign.includes("consult")
+  ) {
+    return leadSource.includes("search") ? "Search" : "BOFU";
+  }
+
+  //----------------------------------------------------------
+  // Search (leadSource 최종 fallback, 2026-07-25)
+  //
+  // campaign/detail 어디에도 신호가 전혀 없을 때만 사용 — First Lead
+  // Source에 "Search"가 포함되는데 Other로 떨어지던 2,264건 구제 목적
+  // 그대로 유지.
+  //----------------------------------------------------------
+
+  if (leadSource.includes("search")) {
+    return "Search";
   }
 
   //----------------------------------------------------------
@@ -789,7 +928,7 @@ function testGetBusinessSegmentLeadSourceSearch(){
     ["", "", "Organic Search", "Search"],
     ["", "", "search", "Search"],
     ["", "", "SEARCH", "Search"],
-    ["ebook-campaign", "", "Paid Search", "Search"],   // Content 조건보다 Search가 우선
+    ["ebook-campaign", "", "Paid Search", "Content"],  // 2026-07-28 우선순위 반전 — Content가 leadSource=search보다 우선(과거엔 Search였음, 아래 leadSource fallback 테스트 참고)
     ["", "BOFU-Consult", "Paid Search", "BOFU"],       // BOFU가 Search보다 우선(기존 순서 유지)
     ["", "", "Direct", "Other"],
 
@@ -810,6 +949,202 @@ function testGetBusinessSegmentLeadSourceSearch(){
 
     // Content — detail에만 ebook 키워드가 있는 경우
     ["", "WF-2021-09-KOR-MOFU-Core Hyperlocalized ECL eBook", "", "Content"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() Content vs leadSource="search" 우선순위 (2026-07-28)
+ *
+ * WHY
+ * 사용자가 Search_OPS를 검토하다가 ebook/guide/on-demand/infographic 등
+ * 콘텐츠 다운로드 리드가 Business Segment=Search로 잘못 찍혀있는 걸 발견.
+ * 원인은 leadSource.includes("search")가 Content 판정보다 먼저 체크되던
+ * 순서 — 실측 결과(runInvestigateSearchMisclassifiedCampaigns(),
+ * 71_Search_Engine.js) 콘텐츠성 캠페인 22개 중 20개에서 총 약 1,190건이
+ * 이 원인으로 잘못 분류돼 있었음(예: "Hyperlocalized ECL eBook" detail +
+ * leadSource="Organic Search" 조합, 실데이터에서 그대로 확인됨). Content
+ * 판정을 leadSource fallback보다 먼저 체크하도록 순서를 바꿔 수정.
+ * 2026-07-25에 leadSource="search" 신호를 추가한 원래 목적(Other로
+ * 떨어지던 2,264건 구제)은 fallback으로 유지되므로 그대로 보존됨.
+ * ==========================================================
+ */
+function testGetBusinessSegmentContentBeatsLeadSourceSearch(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+
+    // 실제 발견된 케이스 — detail에 ebook, leadSource="Organic Search"
+    ["", "WF-2021-09-KOR-MOFU-Core Hyperlocalized ECL eBook", "Organic Search", "Content"],
+
+    // campaign에 ebook, leadSource="Paid Search"
+    ["ebook-campaign", "", "Paid Search", "Content"],
+
+    // campaign/detail 둘 다 콘텐츠 신호 없음 — leadSource fallback 그대로 동작해야 함
+    ["", "", "Paid Search", "Search"],
+    ["", "", "Organic Search", "Search"],
+
+    // detail에 명시적 Search 문구("contact")가 있으면 Content 키워드 없어도 Search
+    // (이 케이스는 애초에 Content 키워드가 없으므로 우선순위 변경과 무관, 회귀 확인용)
+    ["", "Crimson Education Contact Us form", "Paid Search", "Search"],
+
+    // BOFU가 여전히 Content/leadSource-Search보다 우선(순서 변경 영향 없음)
+    ["", "BOFU-Consult", "Paid Search", "BOFU"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() campaign "search"/"sitelink" 확정 신호 vs
+ * "_contact"/"consult" fallback 재설계 (2026-07-28)
+ *
+ * WHY
+ * 사용자가 "명확한 Search" 캠페인 49개를 직접 검증용으로 제시(전부 campaign에
+ * "search" 또는 "sitelink" 포함, 일부는 Naver 등 예외는 별도 detail 값으로
+ * 구분되므로 여기서는 다루지 않음). 그중 "search-ap-curriculum-courses_contact"
+ * 처럼 Content 키워드("curriculum")와, "sitelink-ext-..._lead"처럼 Content
+ * 키워드("_lead")와 우연히 겹치는 케이스가 있어, "search"/"sitelink"를 Content
+ * 판정보다 먼저 확정 신호로 체크해야 함(단순히 "_contact"/"consult"만 뒤로
+ * 미루는 걸로는 부족 — sitelink/search 케이스가 Content로 잘못 넘어갈 뻔했음).
+ * 동시에 이 계정 Meta 리타게팅 캠페인 다수가 슬러그에 관례적으로 "_contact"/
+ * "consult"를 붙이고 있어(runAuditSearchSegmentIssues() 실측), 이걸 Content
+ * 판정보다 먼저 체크하면 ebook/prospectus 같은 콘텐츠 캠페인까지 가로채는
+ * 문제가 있었음 — "_contact"/"consult"는 fallback으로 유지하되, 이후
+ * 사용자 확정에 따라 leadSource로 BOFU/Search를 최종 판별하도록 갱신됨
+ * (testGetBusinessSegmentContactFallbackToBOFU() 참고).
+ * ==========================================================
+ */
+function testGetBusinessSegmentSearchCampaignSignals(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+
+    // "search"가 Content 키워드("curriculum")보다 우선
+    ["US_cgahq_2025-04-01_search-ap-curriculum-courses_contact", "", "", "Search"],
+
+    // "sitelink"가 Content 키워드("_lead")보다 우선
+    ["KR_core_2025-01-15_sitelink-ext-bookconsultukoxbridge_lead", "", "", "Search"],
+    ["KR_core_2025_01_01_sitelink-ext-bookconsultv2_lead", "", "", "Search"],
+
+    // 순수 "search"만 있어도 Search (organic/paid 무관)
+    ["KR_core_2021-04-01_search-kr_tier1-college-specific_contact", "", "", "Search"],
+
+    // "search"/"sitelink" 없이 "_contact"/"consult"만 있는 경우 — leadSource로
+    // 최종 판별(2026-07-28, BOFU/Search 공용 fallback 재설계 참고): leadSource에
+    // "search"가 있으면 Search, 없으면 BOFU
+    ["{KR_core_brand_contact}", "", "Organic Search", "Search"],
+    ["{KR_core_study-consult_contact}", "", "Google Search", "Search"],
+    ["{KR_core_brand_contact}", "", "Paid Social", "BOFU"],
+    ["{KR_core_study-consult_contact}", "", "", "BOFU"],
+    ["some-consult-campaign", "", "", "BOFU"],
+
+    // "_contact"/"consult"만 있고 Content 키워드도 있으면 이제는 Content가 이김
+    // (이 계정 캠페인 실측 사례 — Hyperlocal Case Study eBook이 campaign에
+    // "consult"가 있어서 예전엔 Search로 잘못 잡혔던 패턴 재현)
+    ["some-consult-campaign_contact", "WF-2022-06-KOR-MOFU-Core Hyperlocal Case Study eBook", "", "Content"],
+    ["kr_core_2022-XX_prospectus-download-consult_contact", "", "", "Content"],
+
+    // "search"/"sitelink"도, Content 키워드도, "_contact"/"consult"도 전혀
+    // 없으면 leadSource 최종 fallback (기존 동작 유지)
+    ["KR_core_2025-07-03_brand", "", "Organic Search", "Search"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() "_contact"/"consult" fallback → BOFU/Search
+ * leadSource 판별 (2026-07-28)
+ *
+ * WHY
+ * 사용자 확정: 이 계정의 BOFU/Search 세그먼트 캠페인 둘 다 슬러그에 관례적
+ * 으로 "_contact"를 붙이는데, Search는 역사적으로 Lead Source가 Naver
+ * Search/Google Search/Organic Search(+Paid Search)인 경우만 존재 — 그 외
+ * (예: Paid Social) 나머지는 전부 BOFU여야 함. campaign에 "search"/"sitelink"
+ * 확정 신호가 없는 순수 "_contact"/"consult" 캠페인은 leadSource로 최종
+ * 판별하도록 재설계(이전엔 무조건 Search fallback이었음).
+ * ==========================================================
+ */
+function testGetBusinessSegmentContactFallbackToBOFU(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+
+    // leadSource가 Naver/Google/Organic/Paid Search면 Search
+    ["US_core_2025-12-12_leads-school_contact-fbiglg", "", "Naver Search", "Search"],
+    ["US_core_2025-12-12_leads-school_contact-fbiglg", "", "Google Search", "Search"],
+    ["US_core_2025-12-12_leads-school_contact-fbiglg", "", "Organic Search", "Search"],
+    ["US_core_2025-12-12_leads-school_contact-fbiglg", "", "Paid Search", "Search"],
+
+    // leadSource가 그 외(Paid Social 등)면 BOFU
+    ["US_core_2025-12-12_leads-school_contact-fbiglg", "", "Paid Social", "BOFU"],
+    ["CA_core_2023-04-02_admissions-consulting-other_contact", "", "Paid Social", "BOFU"],
+    ["US_cgahq_2025-11-26_perfmax-eng_consolidated_contact", "", "", "BOFU"],
+
+    // "ptc"가 이미 있으면 기존처럼 그냥 BOFU(leadSource 무관, 우선순위 변경 없음)
+    ["US_core_2026-02-07_ptc-retargeting_contact-fbiglg", "", "Paid Social", "BOFU"],
+
+    // campaign에 "search"가 있으면 leadSource 무관하게 Search(우선순위 변경 없음)
+    ["JP_core_2021-04-01_search-eng_brand-crimson_contact", "", "Paid Social", "Search"]
   ];
 
   let pass = true;
@@ -877,8 +1212,9 @@ function testGetBusinessSegmentQABatch2(){
     ["", "KR Consult Page", "", "BOFU"],
     ["", "Challenge #Accepted 2024 - US & UK Admissions Results | Consultation Request", "", "BOFU"],
 
-    // 순수 "consult"는 기존처럼 Search 유지
-    ["some-consult-campaign", "", "", "Search"],
+    // 순수 "consult"는 2026-07-28부터 leadSource로 BOFU/Search 판별
+    // (leadSource가 search 계열이 아니면 BOFU — testGetBusinessSegmentContactFallbackToBOFU() 참고)
+    ["some-consult-campaign", "", "", "BOFU"],
 
     // Infographic -> Content
     ["", "WF-2023-04-KOR-MOFU-Core Hyperlocalized Korean Army Infographic", "", "Content"],
@@ -932,7 +1268,13 @@ function testGetBusinessSegmentHardcodedExceptions(){
     ["", "WF-2023-09-KOR-MOFU-Core How to Ace Your Academics for US Universities (relaunching)", "", "Content"],
     ["", "WF-2025-12-UK-TOFU-Core 2 Year Roadmap to the Ivy League", "", "Content"],
     ["", "WF-2026-04-USA-MOFU-Postgrad The 6-Month Recruitment Prep Workbook", "", "Content"],
-    ["2021-07-KOR-Book a consult page", "", "", "Webinar"]
+    ["2021-07-KOR-Book a consult page", "", "", "Webinar"],
+
+    // 2026-07-28 추가 — Mini/Digital SAT Practice Test 계열, leadSource가
+    // "Organic Search"(옛날 Marketo flow의 UTM-없음 기본값)여도 예외로 Content
+    ["", "WF-2023-05-KOR-MOFU-Core Mini Digital SAT Practice Test 2023", "Organic Search", "Content"],
+    ["", "WF-2023-05-KOR-MOUF-Core Mini Digital SAT Practice Test 2023", "Organic Search", "Content"],
+    ["", "WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test", "Organic Search", "Content"]
   ];
 
   let pass = true;

@@ -23,9 +23,45 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.3.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-28)
+ * - runDeleteDeadSearchOPSRows() 추가(수동 실행용). runAuditSearchSegmentIssues()
+ *   Part 1로 확인된 죽은 키 116건(전부 수동 컬럼 완전 공백 확인) 삭제 —
+ *   사용자 승인 후 실행. 24_OPSQA.js의 완전 동일 중복 삭제 함수들과 동일하게
+ *   삭제 전 전체 목록 로그 → 내림차순 deleteRow() 패턴.
+ * v1.6.0 (2026-07-28)
+ * - runAuditSearchSegmentIssues() 추가(1회성 진단, 수동 실행용). 두 문제를
+ *   한 번에 점검: (1) mergeSearchOPS_()의 합집합 병합 때문에 Business
+ *   Segment가 바뀌어도 Search_OPS에 그대로 남는 죽은 키(수동 컬럼에 실제
+ *   데이터가 있는지 여부까지 구분해서 표시), (2) 아직 Search로 분류돼
+ *   값이 있는 것 중 ebook/guide 외의 콘텐츠성 키워드(webinar/checklist/
+ *   workbook/practice test/quiz 등)가 감지되는 후보 그룹(자동 확정 아님,
+ *   검토용). buildSearchOPS() 실행 후 22개 값이 전부 0으로 표시된 것을
+ *   포함해 그 외 다수의 "_contact"/"ptc" 캠페인도 같은 죽은 키 패턴임을
+ *   사용자가 발견 — 코드 변경 없음, 순수 진단.
+ * v1.5.0 (2026-07-28)
+ * - runInvestigateSearchMisclassifiedCampaigns() 성능 개선 — v1.4.0의 행별
+ *   상세 로그 + O(N×M) 부분일치(includes) 재검색 방식이 MTA_Master(8만+행)
+ *   기준 실행 시간이 너무 길고 로그가 과다 출력됨(사용자 보고, 실행 로그
+ *   1분+ 후에도 끝 안 남) — 시트당 1회 스캔(O(N))으로 값별 총 건수/세그먼트
+ *   분포/leadSource "search" 포함 여부만 집계하는 요약 전용 방식으로 교체.
+ *   실측 결과(사용자 제공 샘플)로 가설 2(leadSource.includes("search")가
+ *   Content보다 먼저 체크됨)가 실제로 발생 중임을 확인 — 예:
+ *   detail="...Hyperlocalized ECL eBook", leadSource="Organic Search" →
+ *   recomputed도 Search(라이브 버그, 레거시 아님). 규칙 수정은 전체 요약
+ *   확인 후 별도 결정.
+ * v1.4.0 (2026-07-28)
+ * - runInvestigateSearchMisclassifiedCampaigns() 추가(1회성 진단, 수동 실행용).
+ *   사용자가 Search_OPS에서 발견한 22개 캠페인/UTM 값(전부 content류: ebook/
+ *   guide/on-demand/infographic 등)이 실제로 Business Segment=Search로 잘못
+ *   찍히고 있는지, 어떤 필드 조합(특히 First Lead Source에 "search" 포함
+ *   여부) 때문인지 Leads_Master/MTA_Master 원본 필드를 그대로 로그로 찍어
+ *   확인하기 위함. 코드(getBusinessSegment()) 변경 없음 — 순수 진단.
+ *   가설 2개: (1) Content 판정의 "on-demand"/"ondemand"/"webinar" 키워드가
+ *   detail에만 체크되고 campaign은 체크 안 함(16_TransformHelper.js), (2)
+ *   Search의 leadSource.includes("search")가 Content보다 먼저 체크됨.
  * v1.3.0 (2026-07-28)
  * - 코드 변경 없음 — Events_OPS/BOFU_OPS/Content_OPS의 #Deals/Revenue를
  *   Deal Tracker 기반으로 전환하는 2트랙 아키텍처 작업(CLAUDE.md #7) 중,
@@ -564,5 +600,399 @@ function runInvestigateSearchProgramCount() {
   keys.slice(0, 30).forEach(function (key) {
     Logger.log(key);
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Investigate Search Misclassified Campaigns (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * 사용자가 Search_OPS를 검토하다가 content류(ebook/guide/on-demand/
+ * infographic 등) 캠페인/UTM 값이 Business Segment=Search로 분류돼 있는
+ * 것 같다고 발견(2026-07-28). 코드를 바로 고치기 전에, 이 값들이 실제
+ * Leads_Master/MTA_Master에서 어떤 campaign/detail/leadSource/category
+ * 조합으로 들어와 있고 현재 저장된 Business Segment가 뭔지 원본 그대로
+ * 로그로 확인한다 — 규칙 수정은 이 결과를 보고 별도로 결정.
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 조회/로깅.
+ * ==========================================================
+ */
+function runInvestigateSearchMisclassifiedCampaigns() {
+
+  const SUSPECT_VALUES = [
+    "EM-2026-03-KOR-TOFU-Core EXPO Nurture Emails",
+    "WF-2021-09-KOR-MOFU-Core Hyperlocalized ECL eBook",
+    "WF-2023-12-KOR-MOFU-Core The Ultimate US Admissions Guide for Parents 2023",
+    "WF-2023-02-KOR-MOFU-Core 5 Ways To Build Stand-Out ECL ebook",
+    "WF-2025-03-KOR-MOFU-Core 2025 Admission Trends On-Demand",
+    "WF-2022-12-KOR-MOFU-Core College research:US Top 20 Universities 15Mins On-Demand",
+    "WF-2021-12-KOR-MOFU-Core Mini SAT practice ebook",
+    "WF-2022-06-KOR-MOFU-Core ECL On Demand (Vietname Webinar)",
+    "WF-2023-05-KOR-MOFU-Core Mini Digital SAT Practice Test 2023",
+    "WF-2022-06-KOR-MOFU-Core Hyperlocal Case Study eBook",
+    "WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test",
+    "WF-2022-12-KOR-MOFU-Core Admission Strategy for Young Students 15Mins On-Demand",
+    "WF-2022-10-KOR-MOFU-Core Hyperlocalized FAQ with FAO for US ebook",
+    "WF-2023-01-KOR-MOFU-Core US University Admissions for International School Students",
+    "WF-2022-05-KOR-MOFU-Core Hyperlocalized Korean Students US Top 5 eBook",
+    "WF-2023-02-KOR-MOFU-Core Hyperlocalized Canada eBook",
+    "WF-2022-02-KOR-MOFU-Core Major Selection On Demand",
+    "WF-2022-11-KOR-MOFU-Core Hyperlocalized Boarding School eBook",
+    "WF-2023-06-KOR-MOFU-Core Chat GPT Webinar with Veronica Schrenk On-Demand",
+    "WF-2023-05-KOR-MOUF-Core Mini Digital SAT Practice Test 2023",
+    "WF-2023-04-KOR-MOFU-Core Hyperlocalized Korean Army Infographic",
+    "WF-2022-06-KOR-MOFU-Core Supercurriculars for UK eBook"
+  ];
+
+  const summary = {};
+
+  SUSPECT_VALUES.forEach(function (v) {
+    summary[v.trim().toLowerCase()] = {
+      label: v,
+      total: 0,
+      bySegment: {},
+      searchViaLeadSource: 0,
+      searchOtherReason: 0
+    };
+  });
+
+  //----------------------------------------------------------
+  // 시트당 1회 스캔(O(N)) — campaign 또는 detail이 대상 값과
+  // 일치하는 행만 집계. 이전 버전의 O(N×M) 부분일치 재검색은
+  // 실행 시간이 너무 길어(사용자 보고) 제거.
+  //----------------------------------------------------------
+
+  function scan(sheet, campaignField, detailField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      const campaign = String(r[campaignField] || "").trim().toLowerCase();
+      const detail = String(r[detailField] || "").trim().toLowerCase();
+
+      const s = summary[campaign] || summary[detail];
+
+      if (!s) return;
+
+      s.total++;
+
+      const segment = r["Business Segment"] || "(빈값)";
+
+      s.bySegment[segment] = (s.bySegment[segment] || 0) + 1;
+
+      if (segment === "Search") {
+
+        const leadSource = String(r["First Lead Source"] || "").toLowerCase();
+
+        if (leadSource.includes("search")) {
+          s.searchViaLeadSource++;
+        } else {
+          s.searchOtherReason++;
+        }
+
+      }
+
+    });
+
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  Logger.log("======================================");
+  Logger.log("Investigate Search Misclassified Campaigns (요약)");
+  Logger.log("======================================");
+
+  scan(ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER), "First MKT UTM Campaign", "First Touch Detail");
+  scan(ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER), "MKT UTM Campaign", "Lead Source Detail");
+
+  Object.keys(summary).forEach(function (key) {
+
+    const s = summary[key];
+
+    if (s.total === 0) {
+      Logger.log("\"" + s.label + "\" — 매칭 없음 (Leads_Master/MTA_Master 어디에도 없음)");
+      return;
+    }
+
+    Logger.log(
+      "\"" + s.label + "\" — 총 " + s.total + "건 / 세그먼트별: " + JSON.stringify(s.bySegment) +
+      (s.bySegment["Search"]
+        ? "  [Search 중 leadSource에 'search' 포함=" + s.searchViaLeadSource + ", 그 외 원인=" + s.searchOtherReason + "]"
+        : "")
+    );
+
+  });
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Investigation Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Audit Search Segment Issues (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * Search_OPS 정리 작업(2026-07-28) 중 사용자가 발견한 두 가지 별개 문제를
+ * 한 번에 점검하기 위함:
+ * (1) 죽은 키 — mergeSearchOPS_()(73_Search_Merge.js)가 "현재 Engine 키 ∪
+ *     기존 Search_OPS 키"로 합치기 때문에, 한 번 Search_OPS에 들어간 키는
+ *     이후 Business Segment가 바뀌어 Search_Engine에서 사라져도 Search_OPS엔
+ *     그대로 남아 지표만 0으로 표시됨(오늘 수정한 22개 값 + 그 외 다수의
+ *     "_contact"/"ptc"/"consult" 캠페인에서 실측 확인). 수동 컬럼(PIC/
+ *     Marketo Campaign name/Channel/Impressions/Spent 등)에 실제 데이터가
+ *     있는지 여부로 "완전 공백(삭제 안전)" vs "데이터 있음(검토 필요)" 구분.
+ * (2) 아직 살아있는(값이 0이 아닌) Search 분류 중에서도, ebook/guide 외에
+ *     아직 못 잡은 콘텐츠성 키워드(webinar/checklist/workbook/practice test/
+ *     quiz 등)가 campaign/detail에 포함된 그룹을 후보로 나열 — 자동 재분류가
+ *     아니라 사람이 검토할 후보 목록.
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 진단.
+ * ==========================================================
+ */
+function runAuditSearchSegmentIssues() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  Logger.log("======================================");
+  Logger.log("Audit Search Segment Issues");
+  Logger.log("======================================");
+
+  //----------------------------------------------------------
+  // Part 1 — Search_OPS 죽은 키 (현재 Search_Engine에 없는 키)
+  //----------------------------------------------------------
+
+  const engineSheet = ss.getSheetByName(SEARCH.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(SEARCH.SHEET.OPS);
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r["Lead Source Detail"] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  Logger.log("");
+  Logger.log("---- Part 1: Search_OPS 죽은 키 (Search_Engine에 더 이상 없음) ----");
+
+  let deadCount = 0;
+  let deadWithManualData = 0;
+
+  if (opsSheet) {
+
+    const opsRows = readSearchOPS_();
+    const manualCols = SEARCH.GROUP_1_MANUAL.concat(SEARCH.GROUP_2_MANUAL).concat(SEARCH.GROUP_3_MANUAL);
+
+    opsRows.forEach(function (row) {
+
+      const key = String(row[SEARCH.KEY] || "").trim();
+
+      if (!key) return;
+      if (liveKeys[key.toLowerCase()]) return; // 살아있음 — 스킵
+
+      deadCount++;
+
+      const manualValues = {};
+      let hasManualData = false;
+
+      manualCols.forEach(function (col) {
+
+        const v = row[col];
+        manualValues[col] = v;
+
+        if (col === "Channel") return; // 신규 행 기본값(CHANNEL_DEFAULT)이 항상 채워지므로 별도 판단
+
+        if (v !== "" && v !== 0 && v !== undefined && v !== null) {
+          hasManualData = true;
+        }
+
+      });
+
+      const channelValue = String(row["Channel"] || "");
+
+      if (channelValue && channelValue !== SEARCH.CHANNEL_DEFAULT) {
+        hasManualData = true;
+      }
+
+      if (hasManualData) deadWithManualData++;
+
+      Logger.log(
+        (hasManualData ? "⚠️ [데이터 있음] " : "   [완전 공백] ") +
+        "\"" + key + "\"" +
+        (hasManualData ? "  " + JSON.stringify(manualValues) : "")
+      );
+
+    });
+
+  } else {
+    Logger.log(SEARCH.SHEET.OPS + " sheet not found — skipped.");
+  }
+
+  Logger.log("");
+  Logger.log(
+    "Part 1 요약: 죽은 키 " + deadCount + "건 " +
+    "(수동 데이터 있음=" + deadWithManualData + ", 완전 공백=" + (deadCount - deadWithManualData) + ")"
+  );
+
+  //----------------------------------------------------------
+  // Part 2 — 아직 값이 있는데 콘텐츠성으로 의심되는 Search 그룹 (후보만 나열)
+  //----------------------------------------------------------
+
+  const SUSPECT_KEYWORDS = [
+    "webinar", "checklist", "workbook", "whitepaper", "playbook",
+    "template", "toolkit", "roadmap", "practice test", "practice exam",
+    "mock test", "sample test", "quiz", "recording", "case study",
+    "on demand", "download", ".pdf", "cheat sheet"
+  ];
+
+  function containsSuspectKeyword(text) {
+    return SUSPECT_KEYWORDS.some(function (kw) { return text.includes(kw); });
+  }
+
+  const suspectGroups = {};
+
+  function scanForSuspects(sheet, campaignField, detailField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      if (r["Business Segment"] !== "Search") return;
+
+      const campaign = String(r[campaignField] || "").trim();
+      const detail = String(r[detailField] || "").trim();
+      const text = (campaign + " " + detail).toLowerCase();
+
+      if (!containsSuspectKeyword(text)) return;
+
+      const label = detail || campaign;
+      const key = label.toLowerCase();
+
+      if (!suspectGroups[key]) {
+        suspectGroups[key] = { label: label, count: 0 };
+      }
+
+      suspectGroups[key].count++;
+
+    });
+
+  }
+
+  scanForSuspects(ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER), "First MKT UTM Campaign", "First Touch Detail");
+  scanForSuspects(ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER), "MKT UTM Campaign", "Lead Source Detail");
+
+  Logger.log("");
+  Logger.log("---- Part 2: 현재 Search로 분류돼 있지만 콘텐츠성 키워드가 감지된 후보 (자동 확정 아님, 검토용) ----");
+
+  const sortedSuspects = Object.keys(suspectGroups)
+    .map(function (k) { return suspectGroups[k]; })
+    .sort(function (a, b) { return b.count - a.count; });
+
+  if (sortedSuspects.length === 0) {
+    Logger.log("후보 없음.");
+  } else {
+    sortedSuspects.forEach(function (g) {
+      Logger.log("\"" + g.label + "\" — Search로 분류된 건수: " + g.count);
+    });
+  }
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Audit Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Delete Dead Search_OPS Rows (수동 실행용)
+ *
+ * WHY
+ * runAuditSearchSegmentIssues() Part 1로 확인된 죽은 키(Search_Engine에
+ * 더 이상 없는 Search_OPS 키) 116건 전부 수동 컬럼(PIC/Impressions/Spent
+ * 등)이 완전히 비어있음을 실측 확인(2026-07-28) — mergeSearchOPS_()
+ * (73_Search_Merge.js)의 "현재 Engine 키 ∪ 기존 Search_OPS 키" 합집합
+ * 병합 때문에 Business Segment가 바뀌어도 지워지지 않고 쌓인 레거시 행을
+ * 사용자 승인 후 정리한다. 삭제 전 로그로 목록 전체 나열 — 실행 로그가
+ * 곧 감사 기록(24_OPSQA.js의 완전 동일 중복 삭제 함수들과 동일 패턴).
+ * ==========================================================
+ */
+function runDeleteDeadSearchOPSRows() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(SEARCH.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(SEARCH.SHEET.OPS);
+
+  if (!opsSheet) {
+    Logger.log(SEARCH.SHEET.OPS + " sheet not found.");
+    return;
+  }
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r["Lead Source Detail"] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  const values = opsSheet.getDataRange().getValues();
+  const headers = values[SEARCH.ROWS.HEADER - 1];
+  const keyColIndex = headers.indexOf(SEARCH.KEY);
+
+  const rowsToDelete = [];
+
+  for (let r = SEARCH.ROWS.DATA_START - 1; r < values.length; r++) {
+
+    const key = String(values[r][keyColIndex] || "").trim();
+
+    if (!key) continue;
+    if (liveKeys[key.toLowerCase()]) continue; // 살아있음 — 스킵
+
+    rowsToDelete.push(r + 1); // 1-based 시트 행 번호
+
+  }
+
+  Logger.log("======================================");
+  Logger.log("Delete Dead Search_OPS Rows");
+  Logger.log("======================================");
+  Logger.log("Search_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - SEARCH.ROWS.DATA_START + 1));
+
+  if (rowsToDelete.length === 0) {
+    Logger.log("삭제할 죽은 키 없음.");
+    return;
+  }
+
+  Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
+  Logger.log("삭제 대상 시트 행 번호(오름차순): " + rowsToDelete.join(", "));
+
+  rowsToDelete
+    .sort(function (a, b) { return b - a; }) // 내림차순 — 삭제 시 인덱스 안 밀리도록
+    .forEach(function (rowIndex) {
+      opsSheet.deleteRow(rowIndex);
+    });
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
+    "Search_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - SEARCH.ROWS.DATA_START + 1)
+  );
+
+  Logger.log("======================================");
 
 }
