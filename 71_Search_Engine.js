@@ -23,9 +23,16 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-28)
+ * - 코드 변경 없음 — Events_OPS/BOFU_OPS/Content_OPS의 #Deals/Revenue를
+ *   Deal Tracker 기반으로 전환하는 2트랙 아키텍처 작업(CLAUDE.md #7) 중,
+ *   Search_OPS는 raw UTM 그레인과 Deal Tracker의 프로그램 단위 Lead Source
+ *   Detail이 안 맞아 예외 처리하기로 사용자 확인 — computeSearchFunnelAggregates_()
+ *   상단에 사유 주석만 추가. 그대로 Leads_OPS 기준 유지. 상세: docs/Changelog.md
+ *   2026-07-28.
  * v1.2.0 (2026-07-24)
  * - Country 필터 미적용을 최종 확정 (70_Search_Config.js v1.2.0 참고).
  *   실측 결과(260개 캠페인, revenue 있는 건 25개뿐) 자동 KOR/KR 판별 +
@@ -306,6 +313,16 @@ function testComputeSearchLeadsAggregates_() {
 /**
  * ==========================================================
  * Compute Search Funnel Aggregates (IC Request/Booked/Complete/Deals/Revenue)
+ *
+ * ⚠️ 2트랙 아키텍처 예외 (2026-07-28, 사용자 확인)
+ * Events_OPS/BOFU_OPS/Content_OPS는 #Deals/Revenue를 Deal Tracker 기반으로
+ * 전환했지만(CLAUDE.md #7), Search_OPS는 이번 전환에서 **제외**한다 — 그대로
+ * Leads_OPS(Opportunity Won Date/Revenue) 기준 유지. 이유: Search_OPS는
+ * raw UTM 단위(프로그램당 수십 개 행)로 그레인이 세분화되어 있는데, Deal
+ * Tracker는 프로그램 단위 "Lead Source Detail"만 보유해 그대로 매칭하면
+ * 같은 프로그램을 공유하는 여러 UTM 행이 동일 #Deals/Revenue를 중복으로
+ * 받게 된다. Marketo 프로그램→UTM 수동 매핑이 필요한 별도 작업이라 이번
+ * 라운드에서는 예외 처리하기로 사용자가 확인함 — 코드 변경 없음.
  *
  * TEST
  * testComputeSearchFunnelAggregates_ 참고

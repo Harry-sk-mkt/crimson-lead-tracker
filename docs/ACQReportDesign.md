@@ -40,9 +40,10 @@ FY25 OCT에 각각 귀속된다 (예전엔 전부 AUG 하나로 귀속됐었음)
 | 지표 그룹 | 소스 | Segment 기준 |
 | --- | --- | --- |
 | All Leads, All P1, SAL | MTA_Master | **Per-Touch** (MKT UTM Campaign 기준, 2026-07-22 이전엔 Last Touch였음 — 아래 섹션 참고) |
-| New Leads, New P1, IC Booked, IC Complete, Revenue | Leads_OPS | **First Touch** (First MKT UTM Campaign 기준) |
+| New Leads, New P1, IC Booked, IC Complete | Leads_OPS | **First Touch** (First MKT UTM Campaign 기준) |
+| Revenue | Deal Tracker (2026-07-28부터, 2트랙 아키텍처 CLAUDE.md #7) | **딜 자체의 수동 "Segment" 컬럼**(H열, 원래 "Content Category") — `getBusinessSegment()` 키워드 매칭은 실측 검증(Search $144,265 vs 실제 ~$537,507.89) 결과 폐기, 사용자가 전체 딜을 수동 재분류한 컬럼을 그대로 읽음 (`computeACQDealRevenueFromRows_()`, `30_ACQReport.js`) |
 
-이는 `business-segment-classification.md`에 이미 정의된 원래 설계 차이(Leads_Master=First Touch, MTA_Master=Last Touch)를 그대로 반영한 결과다. **버그가 아니지만, 사용자가 "왜 지표마다 세그먼트 기준이 다르지?"라고 헷갈릴 수 있어 명시적으로 기록.**
+이는 `business-segment-classification.md`에 이미 정의된 원래 설계 차이(Leads_Master=First Touch, MTA_Master=Last Touch)를 그대로 반영한 결과다. **버그가 아니지만, 사용자가 "왜 지표마다 세그먼트 기준이 다르지?"라고 헷갈릴 수 있어 명시적으로 기록.** Revenue는 2026-07-28부터 세 번째로 다른 기준(딜 자체 필드)까지 추가됐다 — 아래 Metric Definitions 표 참고.
 
 → **보류된 결정 (2026-07-21)**: SAL을 First Touch 기준으로 통일할지 여부는 이번엔 손대지 않기로 함 — "파이프라인/리포트 단계에서 맞추면 될 것 같다"는 방향으로 추후 별도 논의.
 
@@ -98,7 +99,7 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 | New P1 | Leads_OPS | Create Date (Cohort=Event) | 유효 Priority = "Priority 1" (exact match, `Priority Override` 우선 → 없으면 `Lead Priority`, 2026-07-22부터 `NewP1_REP` 설계와 통일. `isEffectiveP1_()`, `30_ACQReport.js`) |
 | IC Booked | Leads_OPS | **IC Booked Date (Event)** | IC Booked Date가 그 달에 속함 |
 | IC Complete | Leads_OPS | **IC Completed Date (Event)** | IC Completed Date가 그 달에 속함 |
-| Revenue | Leads_OPS | **Opportunity Won Date (Event)** | 그 달에 Won된 건의 Revenue 합 |
+| Revenue | **Deal Tracker** (2026-07-28부터 — 이전엔 Leads_OPS `Opportunity Won Date`/`Revenue`, 2트랙 아키텍처 CLAUDE.md #7 참고) | **Close Date (Event, Deal Tracker 자체 필드)** | 그 달에 Close된 딜의 Revenue 합. Segment는 딜 트래커의 수동 "Segment" 컬럼(H열) 그대로 사용 — Upsell은 이 컬럼에서 이미 "Other"로 분류돼 있어 별도 제외 로직 없음 |
 
 ## ⚠️ computeMTAFunnelByLeadId_() — "가장 오래된 터치" → "가장 최근 터치"로 정정 (2026-07-25)
 - **문제**: IC Booked/Completed/Won Date/Revenue는 Lead 레벨 스냅샷(그 터치 row가 export된 시점의

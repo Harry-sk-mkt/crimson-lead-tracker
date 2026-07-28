@@ -9,9 +9,18 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-07-28)
+ * - CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS에 SEGMENT(8, H열) 추가 —
+ *   사용자가 Deal Tracker의 H열("Content Category"였던 컬럼을 "Segment"로
+ *   개명)에 전체 딜을 수동으로 Business Segment 재분류함. getBusinessSegment()
+ *   키워드 매칭이 실측 검증(Search $144,265 vs 실제 ~$537,507.89, 약 $393K
+ *   갭)으로 신뢰 불가 판정돼 이 컬럼을 Source of Truth로 전환(90_TargetEngine.js
+ *   readDealTrackerRawRows_()/classifyDealSegment_(), 30_ACQReport.js
+ *   computeACQDealRevenueFromRows_() 참고). SOURCE_CATEGORY/LEAD_SOURCE_DETAIL은
+ *   세그먼트 분류엔 더 이상 안 씀(다른 용도로 보존).
  * v1.10.0 (2026-07-27)
  * - CONFIG.TARGET.ENGINE Block B를 4컬럼→7컬럼으로 확장(코호트1 CurrentFYP1V/
  *   코호트2 PrevP1V 분리 표시), Block C/D 시작 컬럼 뒤로 이동(U열/X열).
@@ -344,18 +353,25 @@ const CONFIG = {
         SPREADSHEET_ID: "1oGCY8okaxhpHrtotUzbhyprCOVcJ9ndX5kX3m5qqxME",
         SHEET_GID: 498663095,
 
-        // 헤더 1행 기준, 24컬럼 중 실제로 쓰는 6개.
+        // 헤더 1행 기준, 24컬럼 중 실제로 쓰는 7개.
         COLUMNS: {
           FY: 1,                // A  ("FY26" 등 텍스트 — 그대로 사용, 날짜 파생 불필요)
           REVENUE: 5,            // E  (Revenue (NZD))
-          LEAD_SOURCE: 6,        // F  (Upsell/Referral/Paid Search/... — 제외 필터 + 세그먼트 분류 공용)
-          SOURCE_CATEGORY: 7,    // G  (세그먼트 분류의 category 파라미터로 사용)
+          LEAD_SOURCE: 6,        // F  (Upsell/Referral/Paid Search/... — EXCLUDE_LEAD_SOURCES 필터 전용,
+                                  //     세그먼트 분류엔 더 이상 안 씀 — 아래 SEGMENT 참고)
+          SOURCE_CATEGORY: 7,    // G  (2026-07-28부터 미사용 — getBusinessSegment() 자동 분류 폐기)
+          SEGMENT: 8,            // H  (2026-07-28 추가 — 원래 "Content Category"였던 컬럼을 사용자가
+                                  //     "Segment"로 개명 + 전체 딜 수동 재분류. getBusinessSegment()
+                                  //     키워드 매칭이 실측 검증(Search $144,265 vs 실제 ~$537,507.89,
+                                  //     약 $393K 갭) 결과 신뢰 불가로 판정돼 자동 분류 전면 폐기,
+                                  //     이 컬럼을 그대로 Source of Truth로 사용. 값: Seminar/Webinar/
+                                  //     BOFU/Search/Content/Referral/Other(Upsell 포함)/N/A(출처 불명,
+                                  //     대부분 2022년 이전 딜)
           CLOSE_DATE: 10,        // J  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
           CREATED_DATE: 11,      // K  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
-          LEAD_SOURCE_DETAIL: 23 // W  (세그먼트 분류의 campaign/detail 파라미터로 이중 사용 —
-                                  //     이 시트엔 별도 UTM Campaign 컬럼이 없어 Lead Source Detail을
-                                  //     campaign/detail 둘 다에 넣음, getBusinessSegment()가 각각
-                                  //     .includes() 체크라 안전)
+          LEAD_SOURCE_DETAIL: 23 // W  (2026-07-28부터 미사용 — 세그먼트 분류는 이제 SEGMENT 컬럼
+                                  //     직접 사용, Lead Source Detail은 더 이상 campaign/detail
+                                  //     파라미터로 안 씀)
         },
 
         // 조정 베이스 = 전체 딜 − 조정치(세일즈 레퍼럴 + 업셀) — 분모·분자 모두 제외.

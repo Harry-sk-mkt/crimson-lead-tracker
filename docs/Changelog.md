@@ -1,3 +1,307 @@
+# Changelog — 2026-07-28
+
+## 완전 동일 중복 터치(Exact Duplicate Touch Row) 자동 삭제 구현 (CLAUDE.md #8)
+
+**배경**: 2026-07-24 검출 로직(`findExactDuplicateTouchRows_()`)만 구현하고 자동 삭제는 보류.
+2026-07-25 사용자 요청으로 자동 삭제 필요성 재확인(MTA 재export 시 날짜 겹침을 신경 안 써도
+되게), 오늘 설계 검토 후 구현.
+
+**안전성 검토 결과**: 원래 우려했던 두 가지가 실제로는 문제 없음을 확인 —
+1. `MTA_LAST_ROW`(PropertiesService)는 MTA_**Raw** 처리 진행률만 추적(`07_IncrementalMasterBuild.js`
+   `appendNewMTA()`의 `allRaw.slice(lastProcessed)`)할 뿐 MTA_**Master** 행 위치/개수와 전혀
+   무관 — Master에서 행을 삭제해도 이 카운터에 영향 없음.
+2. MTA_Master는 매 append마다 어차피 `sortSheetByDate()`로 날짜순 재정렬되므로, 행 삭제로 인한
+   "정렬이 깨진다"는 우려도 해당 없음.
+
+**삭제 기준(사용자 확정)**: 5개 필드(Lead ID+MTA Created Date+MKT UTM Campaign+First Lead
+Source+Lead Source Detail) 완전 일치 그룹 중, IC Booked/Completed/Won Date·Revenue 등
+export 시점마다 달라질 수 있는 Lead 레벨 스냅샷 필드를 기준으로 **"가장 진행된 단계"의 행만
+남긴다** — Won(Opportunity Won Date 유효 또는 Revenue>0) > IC Complete > IC Booked > 아무
+것도 없음 순, 동점이면 시트상 더 나중 행을 유지. 이렇게 하면 중복 정리 과정에서 진행 정보
+손실이 최소화됨.
+
+**구현**: `24_OPSQA.js` v1.3.0 —
+- `computeTouchProgressionScore_(record)`: 진행 단계 점수(0~3) 계산 (순수 함수).
+- `readMTAMasterRowsWithIndex_()`: MTA_Master를 시트 행 번호와 함께 읽음(`sheetToObjects()`는
+  행 번호를 안 주므로 삭제 대상 지목을 위해 신규 작성).
+- `findExactDuplicateTouchRowsToDelete_(rowsWithIndex)`: 그룹별로 남길 행 1개를 정하고 나머지
+  행 번호를 **내림차순**으로 반환(삭제 시 인덱스가 밀리지 않도록) — 순수 함수, mock 데이터로
+  테스트 가능.
+- `runAutoDeleteExactDuplicateTouchRows()`: 수동 실행 진입점 — 삭제 전 대상 행 번호를 Logger에
+  전부 나열(실행 로그가 곧 감사 기록) 후 `deleteRow()` 반복 실행.
+
+**의도적으로 배선 안 함**: `runOPSQA_()`/`appendNewMTA()` 등 자동 실행 체인에는 아직 연결하지
+않음 — 실데이터로 먼저 수동 검증(어떤 행이 삭제되는지 확인)한 뒤 자동 배선 여부를 별도로
+결정하기로 함.
+
+**✅ 검증 완료 (2026-07-28, 사용자 실행 확인)**: `runAutoDeleteExactDuplicateTouchRows()` 실행 —
+294개 중복 행 삭제, MTA_Master 82,714 → 82,420행(헤더 제외), 에러 없음. 실행 시간 약 5분(9:19:33
+~9:24:19) — GAS 6분 제한에 근접하진 않았으나 향후 중복 건수가 크게 늘면 느려질 수 있어 참고용으로
+기록. 삭제 후 ACQ_Summary/Events_Engine 등 캐시된 지표(All Leads/All P1)에 반영하려면 각 Engine
+refresh 함수 재실행 필요(또는 다음 `appendNewMTA()` 때 자동 반영).
+
+## NewP1_REP Won/Revenue를 2트랙 확장 대상으로 편입 — Deal Tracker Created Date 기준 전환
+
+**배경**: 오늘 앞서 ACQ_REP/Events_OPS/BOFU_OPS/Content_OPS의 Revenue/#Deals를 Deal Tracker
+기반으로 전환하면서, NewP1_REP의 Won/Revenue는 "리드 단위 지표라 Deal Tracker로 바꾸려면
+Target_REP이 이미 폐기한 리드 단위 매칭 문제(상담 후 이메일 덮어쓰기)에 부딪힌다"고 판단해
+의도적으로 제외했었음(`docs/NewP1ReportDesign.md` 이전 버전 참고). 그런데 사용자가 다시 짚음:
+Won/Revenue는 굳이 개별 리드를 딜과 매칭하지 않아도, **딜 자체의 Created Date**(리드 Create
+Date와 같은 코호트 축 — Deal Tracker의 Lead Age 컬럼들이 리드 생성 시점 기준임을 시사)와 수동
+Segment 컬럼만으로 (FY|Month|Segment) 코호트 단위로 직접 집계할 수 있음 — ACQ_REP(Close
+Date 기준)·Events_OPS(프로그램명 기준)와 완전히 동일한 "딜 자체 필드 직접 집계" 패턴이라 리드
+단위 매칭 문제 자체가 발생하지 않음.
+
+**구현**:
+- `90_TargetEngine.js` v1.14.0: `readDealTrackerRawRows_()`가 정규화된 `createdDate`(Date,
+  타임존 보정 완료)도 반환(additive) — 기존 Target_REP 소비 함수는 새 필드를 무시하므로
+  하위호환.
+- `40_NewP1Report.js` v1.2.0: 신규 `computeNewP1DealWonRevenueFromRows_()` — Deal Tracker
+  딜을 `createdFY + "|" + getFiscalMonthLabel(createdDate) + "|" + segment`로 집계(Upsell/N/A는
+  ACQ_REP과 동일하게 "Other"로 접음). `computeNewP1Aggregates_()`는 이제 New P1/SAL/IC Booked/
+  IC Complete만 Leads_OPS에서 집계하고, Won/Revenue는 이 신규 함수 결과와 키(`fy|month|segment`)
+  기준으로 병합(union — 어느 한쪽에만 있는 키도 0으로 채워 포함).
+
+**부작용(사용자 확인·승인)**: Won%(=Won÷New P1)의 분자(Deal Tracker 딜 건수)와 분모(Leads_OPS
+New P1 리드 건수)가 서로 다른 두 집단이 됨 — "이 코호트 리드가 실제로 Won이 된 비율"이 아니라
+"이 코호트 기간의 Deal Tracker 딜 규모 대비 리드 규모"로 지표 의미가 바뀜.
+
+**결과**: NewP1_REP은 이제 완전한 Leads_OPS 예외가 아니라 **부분 2트랙 리포트**가 됨 — New P1/
+SAL/IC Booked/IC Complete(리드~세일즈 액티비티)는 Leads_OPS, Won/Revenue(Opportunity/Revenue)는
+Deal Tracker. 프로젝트 전체에서 2트랙 원칙의 완전한 예외로 남는 건 Search_OPS 하나뿐.
+
+**아직 검증 필요**: `runRefreshNewP1Engine()` 실행 후 NewP1_REP의 Won/Revenue 값이 Deal
+Tracker 실제 값과 맞는지 확인 전까지 완료로 간주하지 않는다.
+
+**⚠️ 알려진 한계 발견(실행 중, 코드 문제 아님) — Referral 딜의 Created Date 결측**: 검증 중
+사용자가 "7월 Referral Won이 1개뿐인 이유"를 물어 확인한 결과, `computeNewP1DealWonRevenueFromRows_()`
+는 Priority 필터가 아예 없고(딜트래커 딜은 P1 필터 자체를 안 씀, CLAUDE.md #7 "딜의 99%가 이미
+P1" 참고) 단지 **Referral 딜 중 상당수가 Created Date 자체가 비어있어** 코호트 집계에서 제외되고
+있었음이 원인으로 확인됨. 사용자 확인: 세일즈가 Lead 생성 과정 없이 바로 Opportunity로 등록하는
+Referral 특유의 흐름 때문으로 추정(CLAUDE.md #12에 이미 기록된 가설과 일치). 별도로 확인된
+Webinar/Seminar $244,133.68 딜 미표시 건은 버그 아님 — 그 딜의 Created Date가 단순히 7월이
+아니라서 정상적으로 다른 월 행에 집계된 것.
+
+**처리 방침(사용자 확정)**: 코드는 수정하지 않음 — Created Date 없는 딜은 그대로 제외(현재
+동작 유지), 이 문서에 알려진 한계로 기록만 한다. 사용자가 Deal Tracker에서 Referral 딜들의
+실제 Created Date를 직접 입력한 뒤 재동기화(`runRefreshNewP1Engine()`)하면 반영될 예정. 다른
+세그먼트도 Created Date 결측이 있는지는 별도 확인 안 함(Referral 특유 이슈로 추정, 필요 시
+추후 점검).
+
+## 워크북 셀 사용량 정리 — 1,000만 셀 상한 99.8% → 65.9%
+
+**배경**: Events_OPS 갭 조사용 진단 시트 생성이 `"above the limit of 10000000 cells"` 에러로 실패
+(워크북 9,984,712/10,000,000, 99.8%). Google Sheets 셀 개수는 실사용 범위가 아니라 시트에 할당된
+그리드 크기(`getMaxRows()×getMaxColumns()`) 기준이라, `93_TempQA_DealTrackerMatch.js`
+`runReportWorkbookCellUsage()`(읽기 전용 진단)로 실측한 결과 MTA_Raw(할당 123,205행 vs 사용
+82,715행)와 Leads_OPS_QA(할당 34,983행 vs 사용 281행) 두 시트가 전체 낭비(3,391,010셀)의 67.6%를
+차지하는 것으로 확인.
+
+**해결**: `94_WorkbookMaintenance.js` 신규 — `runTrimAllSheetsToUsedRange()`가 워크북의 모든
+시트를 실사용 범위(`getLastRow()`/`getLastColumn()`) 밖의 빈 행/열만 삭제(실제 데이터는 전혀
+안 건드림, frozen 행/열보다 적게 안 남김, 시트별 try/catch로 하나 실패해도 나머지 계속 진행).
+21개 시트 전체 실행 결과 92,350행/200열 삭제, 에러 없음 — **워크북 9,984,712(99.8%) →
+6,593,702(65.9%), 낭비 셀 0**으로 정리 완료(사용자 실행 확인). MTA_Raw/MTA_Master 등 증분 append
+방식 시트의 PropertiesService 카운터는 데이터 행 위치가 이동하지 않으므로 영향 없음.
+
+## Events_OPS Webinar/Seminar Revenue 갭($2.35M) 조사 — 코드 버그 아님, Deal Tracker 데이터 정리로 해소 예정
+
+**배경**: 딜트래커 기준 Webinar+Seminar 세그먼트 딜 총액($12,154,404.84)과 Events_OPS Revenue
+총액($9,806,317.55) 사이 약 $2.35M 갭 발견. `93_TempQA_DealTrackerMatch.js`에 신규 진단
+`runCheckEventsWebinarSeminarRevenueGap()`(Events_OPS의 K열 "Marketo Campaign name"/A열
+"Lead Source Detail" 둘 다와 딜트래커 캠페인명을 대조) 추가해 조사.
+
+**중간 버그(진단 스크립트 자체)**: 최초 실행 시 149개 전부 매칭 실패로 나왔으나, 이는 Events_OPS의
+실제 헤더가 1행(SUBTOTAL 수식 행)이 아니라 2행(`EVENTS.ROWS.HEADER`)이라는 걸 진단 스크립트가
+놓쳐서 K/A열 위치를 아예 못 찾은 것으로 확인(코드 버그, v2.7.0에서 수정). 수정 후 재실행 결과
+33개 콤보, $2,922,678.28로 정상화(실제 갭 규모와 근접).
+
+**분류 결과 (사용자 검토 후 처리 방향 확정)**:
+1. **구식 "KR"/"GL" 국가 표기**(2020~2021년 캠페인, 예: `WB-2020-11 KR CGA + Minerva Webinar`,
+   합계 약 $99만) — `isKoreanProgram_()`가 4번째 하이픈 토큰 "KOR"만 인식해 탈락. **처리: 무시
+   (현재 상태 유지)** — 오래된 건들이라 실익 대비 수정 비용 안 맞음(사용자 확정).
+2. WB-/EV- 프리픽스 자체가 없는 완전히 다른 포맷(`KOR_Core_...`, `KR_core_...` 등) — 1번과 유사한
+   구식 표기, 별도 처리 안 함.
+3. **WF- 프리픽스**(코드가 "이벤트 아님"으로 원래 제외하는 타입 — On-Demand 콘텐츠, Contact Us
+   Form 등)인데 Deal Tracker Segment는 Webinar/Seminar로 태그된 건들 — **처리: 그대로 제외
+   유지**(사용자 확인: On-Demand/Contact Form은 진짜 라이브 이벤트가 아님, 코드 동작이 맞음).
+4. **캠페인명 뒤에 마침표/주석(`; expo MTA`, `; 카카오`, 수정 이력 등)이 붙어 정상 캠페인과 문자열이
+   안 맞는 경우**, 두 캠페인명이 합쳐진 데이터 오류 1건 포함 — **처리: 사용자가 Deal Tracker에서
+   직접 캠페인명 정리**(건수 적어 수작업이 빠름, 코드 정규화 로직 강화는 비슷한 패턴이 계속
+   나올 위험이 있어 보류).
+5. **Lead Source Detail 공백**(2건, $254,580.08 + $86,394.53) — **처리: 사용자가 Deal Tracker에서
+   직접 확인해 채워넣을 예정**.
+
+**결론**: 이번 갭은 코드 버그가 아니라 Deal Tracker 원본 데이터의 캠페인명 정리 상태 문제로 확인됨.
+사용자의 수동 정리(카테고리 4, 5) 완료 후 재확인 필요 — 완료로 간주하지 않음.
+
+## Fixed — Deal Tracker Close Date 타임존 버그 (매달 1일 Close 딜이 전월로 잘못 집계)
+
+**발견 경위**: Segment 분류를 수동 컬럼으로 전환한 뒤에도 ACQ_REP 7월 Referral Revenue가
+Deal Tracker 실제 합계와 계속 안 맞음. 원인 추적 과정: (1) Close Date 공란인 딜 발견·수정
+($108,362.20, Lillian Kyunghee Kim), (2) 그래도 $54,891.44(Minu Kang, Close Date 2026-07-01)
+짜리 하나가 끝까지 안 잡힘, (3) Close Date 유효성(`ISNUMBER()`)/Segment 값("Referral" 정확
+일치)/Revenue 값 존재를 전부 사용자가 시트에서 직접 확인했는데도 재현 안 됨, (4) 임시 디버그
+함수(`93_TempQA_DealTrackerMatch.js` `runDumpDealTrackerRowByOppName()`, 이후 제거)로 Apps
+Script가 실제로 읽는 raw 값을 Logger로 직접 찍어본 결과 **Close Date raw value가 "Tue Jun 30
+2026 11:00:00 GMT-0400"로 확인됨** — 사용자가 입력한 "2026-07-01"이 아니라 하루 밀린 값.
+
+**원인**: 이 Apps Script 프로젝트의 타임존(`appsscript.json`: `America/New_York`)과 Deal
+Tracker 스프레드시트([KOR] Deal Tracking, 한국 관련 딜이라 실제로는 다른 지역 타임존으로 추정)
+가 다르다. Google Sheets Date 셀은 내부적으로 "그 스프레드시트 타임존 기준 자정"을 나타내는
+값을 저장하는데, Apps Script가 이걸 `getValues()`로 읽어 JS `Date` 객체를 만들 때 그 절대
+시각(instant)은 유지되지만, `getFiscalYear()`/`getFiscalMonthLabel()`(16_TransformHelper.js)이
+쓰는 `.getMonth()`/`.getFullYear()`는 **이 스크립트 자신의 타임존**(America/New_York) 기준으로
+동작한다. 두 타임존 시차(예: 한국 UTC+9 vs 미국 동부 UTC-4, 13시간 차)가 자정을 가로지르면서
+"7월 1일 00:00(한국)"이 "6월 30일 11:00(뉴욕)"로 계산돼버림 — **매달 1일에 Close된 모든 딜이
+구조적으로 전월로 잘못 집계되는 문제**(1일이 아닌 날짜는 하루 밀려도 대개 같은 달이라 증상이
+안 드러났을 뿐).
+
+**수정**: `90_TargetEngine.js`에 신규 `normalizeExternalCalendarDate_(date, sourceTimeZone)` —
+Deal Tracker 스프레드시트 자체의 `getSpreadsheetTimeZone()`을 가져와 `Utilities.formatDate()`로
+"의도된" 연/월/일을 문자열로 뽑아낸 뒤, 그 값으로 이 스크립트의 로컬 타임존에서 새 Date 객체를
+재구성 — 타임존이 뭐든 `.getMonth()`/`.getDate()`가 항상 올바른 값을 반환하게 됨.
+`readDealTrackerRawRows_()`가 Close Date/Created Date 둘 다에 이 보정을 적용하도록 수정
+(v1.13.0). `getFiscalYear()`/`getFiscalMonthLabel()` 자체는 프로젝트 전역 공용 함수라 손대지
+않음 — MTA_Master/Leads_Master 등 이 스크립트와 같은 스프레드시트에 바인딩된 데이터는 애초에
+타임존이 일치해 영향 없음.
+
+**같이 발견된 별개 이슈**: 조사 도중 사용자가 Close Date 컬럼 전체를 실수로 Plain Text 포맷으로
+바꿔 모든 Revenue가 0으로 나오는 상황을 겪음 — Plain Text 포맷의 셀은 Apps Script가 문자열로
+읽어 `instanceof Date` 체크에 전부 걸리기 때문(코드 버그 아님, 포맷을 Date로 되돌려 해결). 이후
+Close Date/Created Date 컬럼 포맷을 `yyyy-mm-dd`(명확한 날짜 표시)로 정리함.
+
+**남은 위험(참고, 이번 수정 범위 아님)**: `readChannelRawRows_()`/`readNaverRawRows_()`
+(Target_REP의 외부 채널시트/Naver 시트 벤치마크 원천)도 동일한 구조(외부 스프레드시트 Date
+직접 사용)라 같은 타임존 문제에 이론상 노출돼 있음 — 아직 실측으로 문제 보고된 적 없어 이번
+라운드에선 손대지 않음, 필요 시 별도 확인.
+
+**✅ 검증 완료 (2026-07-28, 사용자 확인)**: 수정 후 `runRefreshACQSummary()` 재실행 →
+ACQ_REP 7월 전체 Revenue가 Deal Tracker 실측 합계 $999,931.89와 정확히 일치($999,932). 5월·6월도
+추가로 대조해 전부 매칭 확인. 이 항목은 완료로 간주.
+
+## Deal Tracker Segment 분류 — getBusinessSegment() 키워드 매칭 폐기, 수동 컬럼으로 전환
+
+**배경**: 위 2트랙 전환 직후 실 데이터로 검증하던 중 Upsell 미제외 버그(아래 항목)를 고치고도
+숫자가 계속 안 맞아 조사한 결과, ACQ_REP Search 세그먼트 Revenue가 코드 기준 $144,265인데
+실제로는 ~$537,507.89(약 $393K 갭)로 확인됨. `getBusinessSegment()`(Lead Source Detail/Lead
+Source/Source Category 키워드 매칭, 원래 Salesforce 리드 데이터용으로 설계된 로직을 Deal
+Tracker에 재사용)가 Deal Tracker의 실제 데이터 형태에는 정확도가 크게 떨어진다는 게 실측으로
+확인됨.
+
+**결정**: 자동 분류 로직을 더 정교화하는 대신, 사용자가 Deal Tracker 시트에서 **H열
+("Content Category"였던 컬럼)을 "Segment"로 개명하고 전체 딜을 수동으로 재분류**함 — 값은
+Seminar/Webinar/BOFU/Search/Content/Referral/Other(Upsell 포함)/N/A(출처 불명, 대부분 2022년
+이전 딜). 이 컬럼을 그대로 Source of Truth로 사용하기로 확정.
+
+**구현**:
+- `00_Config.js`: `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS.SEGMENT = 8`(H열) 추가.
+- `90_TargetEngine.js`: `readDealTrackerRawRows_()`가 `businessSegment` 필드도 반환.
+  `classifyDealSegment_()`는 `getBusinessSegment()` 호출 없이 `deriveTargetGroup_(row.businessSegment)`
+  만 수행하도록 단순화 — Target_REP의 Deal Share/P1당 가치 계산도 자동으로 정확도 개선 혜택을 받음.
+- `30_ACQReport.js`: `computeACQDealRevenueFromRows_()`가 `getBusinessSegment()` 호출과 별도
+  Upsell 제외 로직(바로 아래 항목의 v1.9.1 수정)을 모두 제거하고 `row.businessSegment`를 그대로
+  세그먼트 키로 사용 — Upsell은 이제 이 컬럼에서 이미 "Other"로 분류돼 있어 별도 제외 불필요.
+- 관련 테스트(`testClassifyDealSegment`, `testComputeDealShareRatiosFromDealRows`,
+  `testComputeDealCohortsFromDealRows`, `testComputeACQDealRevenueFromRows_`) mock 데이터를
+  `businessSegment` 필드 기준으로 갱신.
+- `93_TempQA_DealTrackerMatch.js`에 임시로 추가했던 `computeACQOtherSegmentDealsSummary_()`/
+  `runListACQOtherSegmentDeals()`(getBusinessSegment 기준 Other/N/A 진단용)는 이번 전환으로
+  용도가 없어져 제거.
+
+**후속 수정 (같은 날)**: N/A로 태그된 딜(대부분 2022년 이전)이 `CONFIG.ACQ.SEGMENTS`(7개) 밖의
+값이라 ACQ_Summary엔 집계되지만 `buildACQEngineRows_()`가 7개 세그먼트만 조회하는 리포트 화면엔
+안 뜨는 문제를 사용자가 확인 — Upsell과 동일하게 **"Other"로 접어 넣기로 결정**.
+`computeACQDealRevenueFromRows_()`(`30_ACQReport.js` v1.9.3)에 `row.businessSegment === "N/A" ?
+"Other" : row.businessSegment` 한 줄 추가로 반영.
+
+**✅ 검증 완료 (2026-07-28)**: Search를 포함한 5·6·7월 전 세그먼트 Revenue가 Deal Tracker
+실제 값과 일치 확인(아래 타임존 버그 항목도 같이 해결된 뒤 최종 확인됨).
+
+## 2트랙 아키텍처 확정 및 프로젝트 전역 적용 — Revenue/#Deals를 Deal Tracker 기반으로 통일
+
+**배경**: `docs/OperationsLayer.md`("향후 모든 리포트는 Leads_OPS를 읽어야 한다")·
+`docs/NewP1ReportDesign.md`·`docs/ACQReportDesign.md`·`docs/EventsReportDesign.md`가 여전히
+"Leads_OPS가 유일한 소스"라는 원칙을 명시하고 있었는데, Target_REP은 이미 2026-07-27에 Deal
+Tracker를 Revenue/세그먼트 분류의 Source of Truth로 전환한 상태(CLAUDE.md #7)라 문서와 실제
+아키텍처가 모순되는 상태였음. 사용자가 이 모순을 명시적으로 해소: **"Revenue가 포함되는 모든
+레이어는 딜트래킹을 소스 기반으로. 리드~세일즈 액티비티는 Leads/MTA, Opportunity단은
+딜트래킹으로 2트랙 설계."**
+
+**조사 결과**: Leads_OPS `Opportunity Won Date`/`Revenue`(리드 단위, Salesforce 동기화 컬럼)로
+`#Deals`/`Revenue`를 계산하는 동일한 패턴이 **5개 리포트**에 존재함이 확인됨 — `30_ACQReport.js`
+(ACQ_REP), `51_Events_Engine.js`(Events_OPS), `61_BOFU_Engine.js`(BOFU_OPS),
+`71_Search_Engine.js`(Search_OPS), `81_Content_Engine.js`(Content_OPS). 사용자 확인 결과:
+
+- **NewP1_REP**(Won/Revenue, 리드 단위 코호트 지표)은 전환 대상에서 제외 — 딜 단위로 바꾸면
+  Target_REP이 이미 폐기한 것과 동일한 리드 단위 매칭 문제(상담 후 학부모 이메일 변경으로 원본
+  마케팅 터치 이메일 복구 불가)에 부딪힘. 그대로 Leads_OPS 유지.
+- **ACQ_REP**: Revenue를 Deal Tracker 기반으로 전환, Segment는 `getBusinessSegment()`를 딜
+  자체 필드(Lead Source/Source Category/Lead Source Detail)로 직접 호출해 ACQ_REP의 7개
+  Business Segment를 그대로 유지(Target_REP의 `classifyDealSegment_()`는 3개 Target 그룹으로
+  collapse하므로 그대로 재사용하지 않음).
+- **Events_OPS/BOFU_OPS/Content_OPS**: `#Deals`/`Revenue`를 Deal Tracker의 `Lead Source Detail`
+  (W열, Marketo 프로그램명 문자열 — 라이브 시트 WebFetch로 실측 확인, 예:
+  "WB-2026-05-KOR-MOFU-Core Common app Package")로 전환. 이 세 리포트는 프로그램 단위 lifetime
+  집계(월 breakdown 없음)라 리드 단위 조인이 애초에 불필요 — 딜 자체의 프로그램명만 기존과
+  동일하게 정규화(`stripRegistrationFormSuffix_`+`isKoreanProgram_`, Events는 추가로
+  `isEligibleEventType_`)해서 바로 집계.
+- **Search_OPS는 예외 처리**: raw UTM 단위(프로그램당 수십 개 행)로 그레인이 다른데, Deal
+  Tracker는 프로그램 단위 `Lead Source Detail`만 있어 그대로 매칭하면 같은 프로그램을 공유하는
+  여러 UTM 행이 동일 Revenue/#Deals를 중복으로 받게 됨. 사용자 판단: Marketo 프로그램을 UTM에
+  수동으로 매핑하는 별도 작업이 필요해 이번 라운드에서는 예외 처리, 코드 변경 없이 주석으로
+  사유만 기록.
+
+**구현**:
+- `90_TargetEngine.js`: `readDealTrackerRawRows_()`에 `closeDate`(raw Date) 필드 추가
+  (additive, 기존 Target_REP 소비 함수 영향 없음). 신규 `computeDealTrackerCountsByKey_()`
+  (순수 함수) — 도메인별 키 정규화 함수를 주입받아 `{dealsWon, revenue}`를 반환하는 프로젝트
+  공용 헬퍼.
+- `30_ACQReport.js`: `computeOPSAggregates_()`에서 Revenue 블록 제거. 신규
+  `computeACQDealRevenueFromRows_()`(Segment×Month 집계) + 테스트.
+- `31_ACQSummary.js`: `refreshACQSummary_()`가 `opsAgg.revenue` 대신
+  `computeACQDealRevenueFromRows_(readDealTrackerRawRows_())` 결과를 사용하도록 배선 교체(키
+  포맷 `fy|month|segment` 불변이라 `writeACQSummary_`/`readACQSummaryMap_`는 수정 없음).
+- `51_Events_Engine.js`/`61_BOFU_Engine.js`/`81_Content_Engine.js`: 각 `aggregate*FunnelRecords_()`
+  에서 `dealsWon`/`revenue` 누적 제거(IC Request/Booked/Complete는 그대로 유지). 신규
+  `compute{Events|BOFU|Content}DealAggregates_()`가 `computeDealTrackerCountsByKey_()`를 도메인별
+  키 정규화로 감싸 재사용.
+- `71_Search_Engine.js`: 코드 변경 없음, 예외 사유만 주석으로 기록.
+- 문서: `docs/OperationsLayer.md`(2트랙 예외 각주), `docs/ACQReportDesign.md`(Metric
+  Definitions/Attribution 표), `docs/EventsReportDesign.md`(하이브리드 소스 표 분리 +
+  BOFU/Content 동일 패턴 각주 + Search 예외), `docs/NewP1ReportDesign.md`(제외 사유 명시),
+  `CLAUDE.md`(#5/#7/#12 갱신) 전부 반영.
+
+**아직 검증 필요**: `runRefreshACQSummary()`(`31_ACQSummary.js`) 및 Events/BOFU/Content 각
+Engine 갱신 함수를 Apps Script 편집기에서 직접 실행한 뒤, (1) ACQ_Summary의 세그먼트/월별
+Revenue — 특히 Referral 세그먼트가 Deal Tracker 합계와 일치하는지(CLAUDE.md #12), (2) 각
+`*_OPS` 시트의 `#Deals`/`Revenue`가 Deal Tracker 프로그램명 매칭으로 정상 채워지는지 확인 전까지
+완료로 간주하지 않는다. 추가로 Deal Tracker `Lead Source Detail`의 일부 값(예:
+"2025-07-KOR-Naver SA Study Consultants US")이 WB-/EV-/WF- 프리픽스 없는 형태인 것도 실측
+확인됐는데, 기존 정규화 함수가 이런 값을 어떻게 처리하는지 아직 미검증 — 상세:
+`docs/OperationsLayer.md`/CLAUDE.md #7 참고.
+
+## Fixed — ACQ_REP Revenue가 Upsell 딜을 제외 없이 집계하던 버그 (실측 발견)
+
+**발견**: 위 2트랙 전환 직후 사용자가 실 데이터로 검증하던 중, "Upsell 제외 시 2026년 7월
+Revenue는 $956,560.04가 나와야 하는데 ACQ_REP은 $960,523으로 표시된다"고 보고 — 차액
+$3,962.96.
+
+**원인**: `computeACQDealRevenueFromRows_()`(`30_ACQReport.js`) 설계 당시 Target_REP의
+`EXCLUDE_LEAD_SOURCES`(upsell·referral 둘 다 제외)를 "Target 전용 조정 베이스 개념이라 ACQ_REP엔
+적용 안 함"이라고 판단했는데, 이 판단이 Referral과 Upsell을 한 묶음으로 취급하는 실수였음.
+Referral은 ACQ_REP의 정식 Business Segment라 제외하면 안 되는 게 맞지만, Upsell은 애초에
+마케팅 획득 채널이 아니라 ACQ_REP의 어떤 세그먼트에도 속하지 않는다. 제외 없이 그대로 두면
+`getBusinessSegment()`가 Upsell 딜 대부분을 "Other"로 분류해 합산해버려 Revenue가 과대집계됨.
+
+**수정**: `computeACQDealRevenueFromRows_()`에 `row.leadSource === "upsell"`인 행만 걸러내는
+필터 추가(Referral은 그대로 유지). `30_ACQReport.js` v1.9.1. 테스트에도 Upsell 케이스 추가해
+제외되는지 검증.
+
+**참고**: 이 시점의 가설(Upsell 미제외가 갭의 전부)은 이후 조사에서 부분적으로만 맞은 것으로
+드러남 — 실제로는 Segment 키워드 매칭 부정확 + 타임존 버그가 더 크게 기여(위쪽 최신 항목들
+참고). 최종적으로 5·6·7월 전 세그먼트가 실제 값과 일치 확인됨.
+
 # Changelog — 2026-07-27
 
 ## Target_REP P1당 가치(Block B) — 코호트1/2 이원화 구현

@@ -21,7 +21,19 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-07-28)
+ * - #Deals/Revenue를 Leads_OPS(Opportunity Won Date/Revenue, 리드 단위)
+ *   대신 Deal Tracker 기반으로 전환 (2트랙 아키텍처, CLAUDE.md #7).
+ *   aggregateContentFunnelRecords_()에서 dealsWon/revenue 제거. 신규
+ *   computeContentDealAggregates_() — computeDealTrackerCountsByKey_()
+ *   (90_TargetEngine.js)를 stripRegistrationFormSuffix_()+isKoreanProgram_()
+ *   (51_Events_Engine.js 재사용) 키 정규화로 감싸 재사용. refreshContentEngine_()
+ *   배선 변경. 상세: docs/Changelog.md 2026-07-28.
  * v1.0.0
+ * - 최초 구현.
  * ==========================================================
  */
 
@@ -40,6 +52,7 @@ function refreshContentEngine_() {
   const mtaAgg = computeContentMTAAggregates_();
   const leadsAgg = computeContentLeadsAggregates_();
   const funnelAgg = computeContentFunnelAggregates_(leadsAgg.leadIdToKey);
+  const dealAgg = computeContentDealAggregates_();
 
   const allKeys = {};
 
@@ -47,7 +60,7 @@ function refreshContentEngine_() {
     mtaAgg.allRegistered, mtaAgg.p1All,
     leadsAgg.newRegistered, leadsAgg.nlP1,
     funnelAgg.icRequest, funnelAgg.icBooked,
-    funnelAgg.icComplete, funnelAgg.dealsWon, funnelAgg.revenue
+    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue
   ].forEach(function (map) {
     Object.keys(map).forEach(function (key) {
       allKeys[key] = true;
@@ -65,8 +78,8 @@ function refreshContentEngine_() {
       funnelAgg.icRequest[key] || 0,
       funnelAgg.icBooked[key] || 0,
       funnelAgg.icComplete[key] || 0,
-      funnelAgg.dealsWon[key] || 0,
-      funnelAgg.revenue[key] || 0
+      dealAgg.dealsWon[key] || 0,
+      dealAgg.revenue[key] || 0
     ];
 
   });
@@ -289,7 +302,11 @@ function testComputeContentLeadsAggregates_() {
 
 /**
  * ==========================================================
- * Compute Content Funnel Aggregates (IC Request/Booked/Complete/Deals/Revenue)
+ * Compute Content Funnel Aggregates (IC Request/Booked/Complete)
+ *
+ * WHY (2026-07-28 Deals·Revenue 분리)
+ * Deals(Won)/Revenue는 2트랙 아키텍처(CLAUDE.md #7)에 따라 Deal Tracker
+ * 기반으로 전환됨 — computeContentDealAggregates_() 참고.
  *
  * TEST
  * testComputeContentFunnelAggregates_ 참고
@@ -300,21 +317,19 @@ function computeContentFunnelAggregates_(leadIdToKey) {
   const icRequest = {};
   const icBooked = {};
   const icComplete = {};
-  const dealsWon = {};
-  const revenue = {};
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OPS.SHEET.OPS);
 
-  if (!sheet) return { icRequest, icBooked, icComplete, dealsWon, revenue };
+  if (!sheet) return { icRequest, icBooked, icComplete };
 
   aggregateContentFunnelRecords_(
     sheetToObjects(sheet),
     leadIdToKey,
-    icRequest, icBooked, icComplete, dealsWon, revenue
+    icRequest, icBooked, icComplete
   );
 
-  return { icRequest, icBooked, icComplete, dealsWon, revenue };
+  return { icRequest, icBooked, icComplete };
 
 }
 
@@ -324,7 +339,7 @@ function computeContentFunnelAggregates_(leadIdToKey) {
  * Aggregate Content Funnel Records (순수 함수, 테스트용으로 분리)
  * ==========================================================
  */
-function aggregateContentFunnelRecords_(opsRecords, leadIdToKey, icRequest, icBooked, icComplete, dealsWon, revenue) {
+function aggregateContentFunnelRecords_(opsRecords, leadIdToKey, icRequest, icBooked, icComplete) {
 
   opsRecords.forEach(function (r) {
 
@@ -348,12 +363,6 @@ function aggregateContentFunnelRecords_(opsRecords, leadIdToKey, icRequest, icBo
       icComplete[key] = (icComplete[key] || 0) + 1;
     }
 
-    if (isValidDate_(r["Opportunity Won Date"])) {
-      dealsWon[key] = (dealsWon[key] || 0) + 1;
-    }
-
-    revenue[key] = (revenue[key] || 0) + (Number(r["Revenue"]) || 0);
-
   });
 
 }
@@ -369,21 +378,76 @@ function testComputeContentFunnelAggregates_() {
   const leadIdToKey = { "L1": "WF-2025-07-KOR-MOFU-Core A" };
 
   const opsRecords = [
-    { "Lead ID": "L1", "Total IC Requests": 1, "IC Booked Date": new Date(2026, 0, 1), "IC Completed Date": "", "Opportunity Won Date": "", "Revenue": 500 },
-    { "Lead ID": "L2", "Total IC Requests": 1, "IC Booked Date": new Date(2026, 0, 1), "IC Completed Date": "", "Opportunity Won Date": "", "Revenue": 999 } // leadIdToKey에 없음 → 제외
+    { "Lead ID": "L1", "Total IC Requests": 1, "IC Booked Date": new Date(2026, 0, 1), "IC Completed Date": "" },
+    { "Lead ID": "L2", "Total IC Requests": 1, "IC Booked Date": new Date(2026, 0, 1), "IC Completed Date": "" } // leadIdToKey에 없음 → 제외
   ];
 
-  const icRequest = {}, icBooked = {}, icComplete = {}, dealsWon = {}, revenue = {};
+  const icRequest = {}, icBooked = {}, icComplete = {};
 
-  aggregateContentFunnelRecords_(opsRecords, leadIdToKey, icRequest, icBooked, icComplete, dealsWon, revenue);
+  aggregateContentFunnelRecords_(opsRecords, leadIdToKey, icRequest, icBooked, icComplete);
 
   const pass =
     icRequest["WF-2025-07-KOR-MOFU-Core A"] === 1 &&
     icBooked["WF-2025-07-KOR-MOFU-Core A"] === 1 &&
-    revenue["WF-2025-07-KOR-MOFU-Core A"] === 500 &&
-    Object.keys(revenue).length === 1;
+    Object.keys(icRequest).length === 1;
 
-  Logger.log("Result: " + JSON.stringify({ icRequest, icBooked, icComplete, dealsWon, revenue }));
+  Logger.log("Result: " + JSON.stringify({ icRequest, icBooked, icComplete }));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Content Deal Tracker Aggregates (#Deals/Revenue)
+ *
+ * WHY (2026-07-28, 2트랙 아키텍처 — CLAUDE.md #7)
+ * #Deals/Revenue는 더 이상 Leads_OPS(Opportunity Won Date/Revenue, 리드
+ * 단위)로 계산하지 않는다 — Deal Tracker 자체의 Lead Source Detail(프로그램명)
+ * 을 기존 매칭 키와 동일하게 정규화(stripRegistrationFormSuffix_ +
+ * isKoreanProgram_, 51_Events_Engine.js 재사용)해서 바로 집계한다.
+ *
+ * OUTPUT
+ * { dealsWon: {utmKey: count}, revenue: {utmKey: sum} }
+ * ==========================================================
+ */
+function computeContentDealAggregates_() {
+
+  return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
+
+    const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
+
+    return (key && isKoreanProgram_(key)) ? key : null;
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeContentDealAggregates_()의 keyFn 로직
+ * ==========================================================
+ */
+function testComputeContentDealAggregates_() {
+
+  const dealRows = [
+    { leadSourceDetail: "WF-2025-07-KOR-MOFU-Core A", revenue: 500 },
+    { leadSourceDetail: "WF-2025-07-US-MOFU-Core B", revenue: 999 }  // KOR 아님, 제외
+  ];
+
+  const keyFn = function (row) {
+    const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
+    return (key && isKoreanProgram_(key)) ? key : null;
+  };
+
+  const result = computeDealTrackerCountsByKey_(dealRows, keyFn);
+
+  const pass =
+    result.revenue["WF-2025-07-KOR-MOFU-Core A"] === 500 &&
+    Object.keys(result.revenue).length === 1;
+
+  Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

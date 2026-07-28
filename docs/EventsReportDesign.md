@@ -57,9 +57,17 @@ Script의 `Range.protect()`로 처음 구현해야 함 — 편집 권한 설정�
 | --- | --- | --- |
 | All Registered | MTA_Master (프로그램 매칭) | 전체 등록(모든 터치) — ACQ_REP의 "All Leads"와 동일 패턴 |
 | New Registered | Leads_Master (프로그램 매칭) | 신규 리드만 — ACQ_REP의 "New Leads"와 동일 패턴 |
-| IC Request/Booked/Complete/Deals(Won)/Revenue | **Leads_OPS** | 이미 동기화된 값 그대로 읽음. 이중 계산 없음, 원칙 최대한 유지 |
+| IC Request/Booked/Complete | **Leads_OPS** | 이미 동기화된 값 그대로 읽음. 이중 계산 없음, 원칙 최대한 유지 |
+| Deals(Won)/Revenue | **Deal Tracker** (2026-07-28부터 — 이전엔 Leads_OPS, 아래 각주 참고) | 2트랙 아키텍처(CLAUDE.md #7) — Leads_OPS 개별 리드 매칭이 상담 후 학부모 이메일 변경으로 신뢰 불가하다는 게 확인됨. Deal Tracker의 Lead Source Detail(프로그램명)을 기존 매칭 키와 동일하게 정규화해 리드 단위 조인 없이 바로 집계 (`computeEventsDealAggregates_()`, `51_Events_Engine.js`) |
 
 리드 귀속 = First Touch Attribution 기준 (item 13, 원 설계 결정 유지).
+
+> ⚠️ **2026-07-28 추가**: `BOFU_OPS`/`Content_OPS`도 동일한 하이브리드 원칙과 Deals(Won)/
+> Revenue → Deal Tracker 전환을 그대로 따른다(별도 설계 문서 없음, `61_BOFU_Engine.js`/
+> `81_Content_Engine.js` 참고). **`Search_OPS`는 예외** — raw UTM 단위(프로그램당 수십 개
+> 행)라 Deal Tracker의 프로그램 단위 Lead Source Detail과 그대로 매칭하면 중복 집계되므로,
+> 이번 전환에서 제외하고 그대로 Leads_OPS 기준 유지 (`71_Search_Engine.js` 주석 참고).
+> 상세: `docs/Changelog.md` 2026-07-28.
 
 ### 프로그램 매칭 컬럼 (코드 확인 완료, 2026-07-24)
 - **MTA_Master** (All Registered용): `MKT UTM Campaign` — 터치 레벨 실제값 (2026-07-22에 이미

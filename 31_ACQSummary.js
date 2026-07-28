@@ -4,8 +4,9 @@
  * ACQ Summary (Aggregate Table)
  *
  * Responsibility
- * MTA_Master/Leads_OPS 전체를 스캔하여 (FY|Month|Segment)별
- * 지표를 미리 계산해 ACQ_Summary 시트에 저장한다.
+ * MTA_Master/Leads_OPS 전체를 스캔하고(Revenue는 v1.2.0부터 Deal Tracker,
+ * 2트랙 아키텍처 CLAUDE.md #7 참고) (FY|Month|Segment)별 지표를 미리 계산해
+ * ACQ_Summary 시트에 저장한다.
  * ACQ Report는 이 시트만 조회하므로 즉시(<1s) 응답 가능하다.
  *
  * 호출 시점
@@ -13,9 +14,14 @@
  * - rebuildLeadsMaster(), rebuildMTAMaster()
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-07-28)
+ * - Revenue 데이터 소스를 opsAgg(Leads_OPS Opportunity Won Date/Revenue,
+ *   리드 단위)에서 dealRevenue(Deal Tracker 기반, computeACQDealRevenueFromRows_(),
+ *   30_ACQReport.js)로 전환 — 2트랙 아키텍처(CLAUDE.md #7). 키 포맷(fy|month|segment)
+ *   불변이라 writeACQSummary_()/readACQSummaryMap_()는 수정 없음.
  * v1.1.0 (2026-07-25)
  * - SAL 데이터 소스를 mtaAgg(MTA_Master, Lead Record Type 기준 — 과집계
  *   문제 있었음)에서 opsAgg(Leads_OPS, Sales Accepted Date 이벤트 기준)로
@@ -50,10 +56,14 @@ function refreshACQSummary_(){
   const mtaAgg = computeMTAAggregates_(null, null);
   const opsAgg = computeOPSAggregates_(null, null);
 
+  // Revenue는 Leads_OPS가 아니라 Deal Tracker 기반 (2트랙 아키텍처, CLAUDE.md #7 —
+  // 30_ACQReport.js computeACQDealRevenueFromRows_() 참고)
+  const dealRevenue = computeACQDealRevenueFromRows_(readDealTrackerRawRows_());
+
   const allKeys = {};
 
   [mtaAgg.allLeads, mtaAgg.allP1,
-   opsAgg.newLeads, opsAgg.newP1, opsAgg.sal, opsAgg.icBooked, opsAgg.icComplete, opsAgg.revenue]
+   opsAgg.newLeads, opsAgg.newP1, opsAgg.sal, opsAgg.icBooked, opsAgg.icComplete, dealRevenue]
     .forEach(function(map){
       Object.keys(map).forEach(function(key){
         allKeys[key] = true;
@@ -78,7 +88,7 @@ function refreshACQSummary_(){
       opsAgg.sal[key] || 0,
       opsAgg.icBooked[key] || 0,
       opsAgg.icComplete[key] || 0,
-      opsAgg.revenue[key] || 0
+      dealRevenue[key] || 0
     ];
 
   });

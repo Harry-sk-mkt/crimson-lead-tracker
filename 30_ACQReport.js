@@ -6,19 +6,48 @@
  * Responsibility
  * Acquisition Report (Engine + Report 영역). New Leads/New P1은 Cohort
  * (Create Date) 기준, All Leads/All P1은 Touch(MTA Created Date) 기준,
- * SAL/IC Booked/IC Complete/Revenue는 각자의 이벤트 날짜(Sales Accepted
- * Date/IC Booked Date/IC Completed Date/Opportunity Won Date) 기준
- * (v1.4.0부터 IC Booked/Complete/Revenue, v1.6.0부터 SAL — 아래 Change Log
- * 참고). Cohort 관점(획득 월 기준 다운스트림 퍼널)은 추후 NewP1_REP가
- * 별도로 담당할 예정.
+ * SAL/IC Booked/IC Complete는 각자의 이벤트 날짜(Sales Accepted Date/IC
+ * Booked Date/IC Completed Date, Leads_OPS 기준) 기준 (v1.4.0부터 IC
+ * Booked/Complete, v1.6.0부터 SAL — 아래 Change Log 참고). Revenue는
+ * v1.9.0부터 Leads_OPS가 아니라 **Deal Tracker**의 Close Date/Segment 분류
+ * 기준(2트랙 아키텍처, CLAUDE.md #7) — computeACQDealRevenueFromRows_() 참고.
+ * Cohort 관점(획득 월 기준 다운스트림 퍼널)은 추후 NewP1_REP가 별도로 담당할 예정.
  *
  * Stage
  * 20 Reporting
  *
  * Version
- * v1.8.0
+ * v1.9.3
  *
  * Change Log
+ * v1.9.3 (2026-07-28)
+ * - computeACQDealRevenueFromRows_()가 "N/A"(출처 불명, 대부분 2022년 이전
+ *   딜) 세그먼트도 Upsell과 동일하게 "Other"로 접어 넣도록 수정 — 그대로
+ *   두면 CONFIG.ACQ.SEGMENTS(7개) 밖의 값이라 ACQ_Summary엔 집계돼도
+ *   buildACQEngineRows_()가 7개 세그먼트만 조회하는 리포트 화면엔 계속 안
+ *   뜨는 문제가 있었음(사용자 확인 후 Other 편입으로 결정).
+ * v1.9.2 (2026-07-28)
+ * - Segment 분류를 getBusinessSegment() 키워드 매칭에서 Deal Tracker의 수동
+ *   "Segment" 컬럼(`row.businessSegment`) 직접 참조로 교체 — 실측 검증 결과
+ *   키워드 매칭 정확도가 신뢰 불가 수준(Search $144,265 vs 실제 ~$537,507.89,
+ *   약 $393K 갭)이라 사용자가 Deal Tracker 전체 딜을 수동 재분류. v1.9.1의
+ *   Upsell 별도 제외 로직도 제거(Upsell은 이제 이 컬럼에서 "Other"로 이미
+ *   분류돼 있음). 상세: docs/Changelog.md 2026-07-28.
+ * v1.9.1 (2026-07-28)
+ * - Fixed: computeACQDealRevenueFromRows_()가 Upsell 딜을 제외 없이 집계하던
+ *   버그 수정 — Upsell은 획득 채널이 아니라 getBusinessSegment()가 대부분
+ *   "Other"로 분류해버려 ACQ_REP Revenue가 과대집계됨(사용자 실측 발견: 7월
+ *   Upsell 제외 기준 $956,560.04 vs ACQ_REP 표시 $960,523, 차액 $3,962.96).
+ *   `row.leadSource === "upsell"`인 행만 걸러냄(Referral은 정식 세그먼트라
+ *   그대로 유지).
+ * v1.9.0 (2026-07-28)
+ * - Revenue를 Leads_OPS(Opportunity Won Date/Revenue, 리드 단위) 대신 Deal
+ *   Tracker 기반으로 전환 (2트랙 아키텍처, CLAUDE.md #7). computeOPSAggregates_()
+ *   에서 Revenue 블록/wonDateCol/revenueCol 제거 — Revenue는 신규
+ *   computeACQDealRevenueFromRows_()(90_TargetEngine.js의
+ *   readDealTrackerRawRows_() 재사용, getBusinessSegment()로 7개 Segment
+ *   분류, Close Date 기준 월 귀속)가 전담. refreshACQSummary_()(31_ACQSummary.js)
+ *   배선 변경. 상세: docs/Changelog.md 2026-07-28.
  * v1.8.0 (2026-07-27)
  * - onEdit()의 Target_REP 분기 제거. Simple Trigger(onEdit)는 제한된 권한으로
  *   실행돼 Target_REP에 필요한 SpreadsheetApp.openById()(외부 채널시트 참조)를
@@ -682,8 +711,7 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
     newP1: {},
     sal: {},
     icBooked: {},
-    icComplete: {},
-    revenue: {}
+    icComplete: {}
   };
 
   if(!sheet) return result;
@@ -701,8 +729,6 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
   const salesAcceptedCol = headers.indexOf("Sales Accepted Date");
   const icBookedCol = headers.indexOf("IC Booked Date");
   const icCompleteCol = headers.indexOf("IC Completed Date");
-  const wonDateCol = headers.indexOf("Opportunity Won Date");
-  const revenueCol = headers.indexOf("Revenue");
 
   const hasRangeFilter = !!(rangeStart && rangeEndExclusive);
 
@@ -773,21 +799,93 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
       result.icComplete[key] = (result.icComplete[key] || 0) + 1;
     }
 
-    //------------------------------------------------------
-    // Revenue — Opportunity Won Date 자체가 속한 달 (이벤트 기준)
-    //------------------------------------------------------
-
-    const wonDateVal = row[wonDateCol];
-
-    if(wonDateVal instanceof Date && !isNaN(wonDateVal.getTime()) && inRange(wonDateVal)){
-      const key = keyFor(wonDateVal, segment);
-      const revenueVal = Number(row[revenueCol]) || 0;
-      result.revenue[key] = (result.revenue[key] || 0) + revenueVal;
-    }
-
   }
 
   return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute ACQ Deal Revenue From Rows (순수 함수 — 2트랙 설계, Revenue 전용)
+ *
+ * WHY (2026-07-28)
+ * Revenue는 더 이상 Leads_OPS의 Opportunity Won Date/Revenue(Salesforce
+ * 동기화 컬럼, 리드 단위)로 계산하지 않는다 — Deal Tracker를 Source of
+ * Truth로 삼는 2트랙 설계(CLAUDE.md #7)에 따라 Deal Tracker 자체의 Close
+ * Date/Revenue로 직접 계산한다.
+ *
+ * Segment 분류 — 2026-07-28 재수정: 최초 구현은 getBusinessSegment()로
+ * Lead Source Detail/Lead Source/Source Category를 키워드 매칭해 자동
+ * 분류했으나, 실측 검증 결과 정확도가 신뢰 불가 수준이었다(Search 세그먼트가
+ * 코드 기준 $144,265인데 실제로는 ~$537,507.89 — 약 $393K 갭; 별도로
+ * Upsell $3,962.96 미제외 버그도 발견). 사용자가 Deal Tracker에 전체 딜을
+ * 수동으로 재분류한 "Segment" 컬럼(H열, 원래 "Content Category")을 만들었으므로
+ * `row.businessSegment`(`readDealTrackerRawRows_()` 참고)를 그대로 Source of
+ * Truth로 쓴다 — 키워드 매칭·Upsell 별도 제외 전부 폐기(Upsell은 이 컬럼에서
+ * 이미 "Other"로 수동 분류됨). "N/A"(출처 불명, 대부분 2022년 이전 딜)는
+ * `CONFIG.ACQ.SEGMENTS`(7개) 밖의 값이라 그대로 두면 ACQ_Summary엔 집계돼도
+ * `buildACQEngineRows_()`가 7개 세그먼트만 조회하는 리포트 화면엔 안 뜨므로
+ * (사용자 확인, 2026-07-28), Upsell과 동일하게 "Other"로 접어 넣는다.
+ *
+ * INPUT
+ * dealRows : Object[]  readDealTrackerRawRows_()의 반환값(90_TargetEngine.js)
+ *
+ * OUTPUT
+ * { "fy|month|segment": revenueSum, ... }
+ *
+ * TEST
+ * testComputeACQDealRevenueFromRows_() 참고
+ * ==========================================================
+ */
+function computeACQDealRevenueFromRows_(dealRows){
+
+  const revenue = {};
+
+  dealRows.forEach(function(row){
+
+    const segment = row.businessSegment === "N/A" ? "Other" : row.businessSegment;
+
+    const key = row.closeFY + "|" + getFiscalMonthLabel(row.closeDate) + "|" + segment;
+
+    revenue[key] = (revenue[key] || 0) + (Number(row.revenue) || 0);
+
+  });
+
+  return revenue;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeACQDealRevenueFromRows_()
+ * ==========================================================
+ */
+function testComputeACQDealRevenueFromRows_(){
+
+  const dealRows = [
+    { closeFY: 26, closeDate: new Date(2025, 7, 15), revenue: 1000, businessSegment: "Webinar" },
+    { closeFY: 26, closeDate: new Date(2025, 7, 20), revenue: 500, businessSegment: "Webinar" },
+    { closeFY: 26, closeDate: new Date(2025, 7, 22), revenue: 300, businessSegment: "Referral" },
+    { closeFY: 26, closeDate: new Date(2025, 7, 25), revenue: 5000, businessSegment: "Other" }, // Upsell은 이제 Other로 수동 분류
+    { closeFY: 26, closeDate: new Date(2025, 7, 25), revenue: 700, businessSegment: "N/A" } // Other로 접혀야 함
+  ];
+
+  const result = computeACQDealRevenueFromRows_(dealRows);
+
+  const augKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 15)) + "|Webinar";
+  const referralKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 22)) + "|Referral";
+  const otherKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 25)) + "|Other";
+
+  const pass =
+    result[augKey] === 1500 &&
+    result[referralKey] === 300 &&
+    result[otherKey] === 5700; // Other(5000) + N/A(700)가 접혀 합산됨
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

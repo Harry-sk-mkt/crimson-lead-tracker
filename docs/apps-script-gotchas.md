@@ -42,3 +42,39 @@ Get-ChildItem *.js | ForEach-Object {
 `headerMap["컬럼명"]`이 `0`(즉 그 컬럼이 시트의 첫 번째 컬럼)일 때, `if(!value)` 같은 falsy 체크를 쓰면
 "컬럼이 없다"고 잘못 판단한다. 인덱스 존재 여부는 반드시 `=== undefined`로 명시적으로 체크할 것.
 `getRange()`에 넘길 때도 0-based 인덱스를 그대로 쓰면 안 되고 `+1` 해서 1-based로 변환해야 한다.
+
+## 7. 외부 스프레드시트 Date 값 — 스크립트 타임존과 다르면 날짜가 밀린다 (2026-07-28 실측)
+`SpreadsheetApp.openById()`로 **다른** 스프레드시트(이 프로젝트가 바인딩된 스프레드시트가 아닌 외부 파일,
+예: Deal Tracker)의 Date 셀을 읽을 때, 그 외부 시트의 타임존이 이 Apps Script 프로젝트의 타임존
+(`appsscript.json`의 `timeZone`)과 다르면 `.getMonth()`/`.getDate()`/`.getFullYear()`가 **의도한 날짜보다
+하루(또는 그 이상) 밀린 값**을 반환할 수 있다. 실측: 이 프로젝트 타임존은 `America/New_York`인데 Deal
+Tracker(한국 관련 딜)는 다른 타임존이라, "2026-07-01"로 입력된 Close Date가 `.getMonth()`로는 6월(JUN)로
+읽힘 — 시차가 자정을 가로지르는 날짜(특히 매달 1일)에서만 증상이 드러나 발견이 늦어짐.
+→ 외부 스프레드시트의 Date 컬럼을 다룰 땐, `SpreadsheetApp.openById(id).getSpreadsheetTimeZone()`으로
+그 시트의 타임존을 가져와 `Utilities.formatDate(date, sourceTimeZone, "yyyy-MM-dd")`로 "의도된" 연/월/일
+문자열을 먼저 뽑고, 그 값으로 로컬 Date를 재구성한 뒤에 `.getMonth()` 등을 호출할 것 (`90_TargetEngine.js`
+`normalizeExternalCalendarDate_()` 참고). 같은 스프레드시트에 바인딩된 시트(Leads_Master/MTA_Master 등)는
+타임존이 이미 일치하므로 이 문제가 없다.
+
+## 8. 워크북 전체 셀 개수 상한 (1,000만 셀) — 새 시트 생성이 조용히 막힐 수 있음 (2026-07-28 실측)
+`ss.insertSheet()`로 새 시트를 만들려는데 워크북 전체(모든 시트 합산) 셀 개수가 Google Sheets의
+1,000만 셀 상한에 근접해 있으면 `"This action would increase the number of cells in the workbook above
+the limit of 10000000 cells"` 에러로 실패한다. 대용량 Master 시트(MTA_Master 8만+ 행 등)가 누적된
+워크북에서는 임시 진단/QA용 새 시트 하나 만드는 것도 실패할 수 있음 — 실제로 이 프로젝트에서 발생.
+→ 1회성 진단 함수는 가능하면 새 시트를 만들지 말고 `Logger.log()`로만 결과를 출력할 것. 정말 시트가
+필요하면 기존 시트를 재사용(`clearContents()` 후 덮어쓰기)하거나, 먼저 불필요한 대형/임시 시트를 정리해
+여유를 확보할 것.
+
+**원인 실측(2026-07-28)**: Google Sheets의 셀 개수는 실제 데이터가 있는 셀이 아니라 시트에 할당된
+그리드 크기(`getMaxRows()×getMaxColumns()`)로 계산된다 — `getLastRow()`/`getLastColumn()`(실사용 범위)
+보다 훨씬 크게 할당된 시트가 있으면 그 차이만큼 낭비. 실측: 워크북 9,984,712/10,000,000(99.8%) 중
+MTA_Raw(할당 123,205행 vs 사용 82,715행)와 Leads_OPS_QA(할당 34,983행 vs 사용 281행) 단 2개 시트가
+전체 낭비의 67.6%를 차지.
+→ `94_WorkbookMaintenance.js`의 `runTrimAllSheetsToUsedRange()` — 모든 시트를 실사용 범위 밖의 빈
+행/열만 삭제(실제 데이터는 안 건드림, frozen 행/열보다 적게 안 남김)해 정리하는 범용 유틸리티. 실행
+전후 `93_TempQA_DealTrackerMatch.js`의 `runReportWorkbookCellUsage()`로 효과 확인 가능.
+
+**✅ 해결 완료 (2026-07-28)**: 21개 시트 전체에 `runTrimAllSheetsToUsedRange()` 실행 — 92,350행/200열
+삭제, 에러 없음. 워크북 전체 9,984,712(99.8%) → **6,593,702(65.9%)**로, 낭비 셀 0으로 정리됨. 앞으로
+비슷한 문제가 재발하면(대형 Raw/Master 시트가 다시 실사용 범위보다 크게 할당되면) 이 두 함수를
+다시 실행하면 됨.

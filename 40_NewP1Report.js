@@ -4,8 +4,11 @@
  * NewP1 Report (New P1 Cohort Funnel Report)
  *
  * Responsibility
- * Leads_OPS 단일 소스 기반, New P1 Lead의 획득 시점(Create Date)
- * 코호트 기준 다운스트림 퍼널(SAL/IC Booked/IC Complete/Won) 진행률.
+ * New P1 Lead의 획득 시점(Create Date) 코호트 기준 다운스트림 퍼널(SAL/
+ * IC Booked/IC Complete/Won) 진행률. New P1/SAL/IC Booked/IC Complete는
+ * Leads_OPS 단일 소스(리드~세일즈 액티비티 레이어), **Won/Revenue는
+ * 2026-07-28부터 Deal Tracker 기반(Opportunity/Revenue 레이어, 2트랙
+ * 아키텍처 — CLAUDE.md #7, computeNewP1DealWonRevenueFromRows_() 참고)**.
  * Engine(조합 생성) + Aggregates(지표 집계) + Report 생성을 이 파일
  * 하나에서 담당하되, 함수 단위로는 책임을 분리한다 (Article 7).
  *
@@ -13,15 +16,24 @@
  * docs/NewP1ReportDesign.md
  *
  * Must NOT
- * - Leads_Master / MTA_Master 조회 (Leads_OPS 단일 소스 원칙)
+ * - Leads_Master / MTA_Master 조회 (Leads_OPS 단일 소스 원칙 — New P1/SAL/
+ *   IC Booked/IC Complete에 한정, Won/Revenue는 Deal Tracker 예외)
  *
  * Stage
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-07-28)
+ * - Won/Revenue(K/M열)를 Leads_OPS 리드 단위(Revenue>0) 판정에서 Deal
+ *   Tracker 기반(Created Date + 수동 Segment 컬럼으로 FY|Month|Segment
+ *   코호트 직접 집계, 리드 단위 매칭 없음)으로 전환 — 2트랙 아키텍처를
+ *   NewP1_REP까지 확장(사용자 확정). 신규 computeNewP1DealWonRevenueFromRows_()
+ *   추가, computeNewP1Aggregates_()는 New P1/SAL/IC Booked/IC Complete만
+ *   Leads_OPS에서 집계하고 Won/Revenue는 병합. 상세: docs/Changelog.md
+ *   2026-07-28.
  * v1.1.0 (2026-07-22)
  * - Week(Fiscal Week) 축 제거 — 8/1 기준 7일 단위라 캘린더 주(월~일)와
  *   무관하고 매년 시작 요일이 달라져 혼동을 유발한다는 사용자 피드백.
@@ -183,13 +195,104 @@ function testComputeNewP1SortIndex(){
 
 /**
  * ==========================================================
+ * Compute NewP1 Deal Won/Revenue From Rows (순수 함수 — 2트랙 설계)
+ *
+ * WHY (2026-07-28, 사용자 확정)
+ * Won/Revenue(K/M열)는 원래 Leads_OPS 리드별 `Revenue > 0` 여부로 판정했으나
+ * (리드 단위, `Revenue`는 Opportunity Won Date 기준 Salesforce 동기화 값 —
+ * `docs/NewP1ReportDesign.md` 원 설계), Deal Tracker를 Source of Truth로
+ * 전환한다. 리드 단위 매칭(Student/Guardian Email 등)은 Target_REP에서 이미
+ * "상담 후 이메일 덮어쓰기로 시스템적 복구 불가"로 폐기됐지만, Won/Revenue는
+ * 굳이 리드 단위로 조인할 필요 없이 **딜 자체의 Created Date**(Lead Create
+ * Date와 같은 코호트 축 — Deal Tracker의 Lead Age 컬럼들이 리드 생성 시점
+ * 기준임을 시사)와 수동 Segment 컬럼으로 (FY|Month|Segment) 코호트에 직접
+ * 집계하면 된다 — ACQ_REP(Close Date 기준)·Events_OPS(프로그램명 기준)와
+ * 동일한 "딜 자체 필드 직접 집계" 패턴. Upsell/N/A는 ACQ_REP과 동일하게
+ * "Other"로 접어 넣는다.
+ *
+ * 이 전환으로 Won%(=Won÷New P1)의 분자(딜트래커 딜 건수)와 분모(Leads_OPS
+ * New P1 리드 건수)가 서로 다른 두 집단의 비율이 된다 — "이 코호트의 리드가
+ * 실제로 Won이 된 비율"이 아니라 "이 코호트 기간에 딜트래커 기준으로 발생한
+ * 딜 규모 대비 리드 규모"로 의미가 바뀜을 사용자가 확인·승인함(2026-07-28).
+ *
+ * INPUT
+ * dealRows : Object[]  readDealTrackerRawRows_()의 반환값(90_TargetEngine.js)
+ *
+ * OUTPUT
+ * { won: {"fy|month|segment": count}, revenue: {"fy|month|segment": sum} }
+ *
+ * TEST
+ * testComputeNewP1DealWonRevenueFromRows_() 참고
+ * ==========================================================
+ */
+function computeNewP1DealWonRevenueFromRows_(dealRows){
+
+  const won = {};
+  const revenue = {};
+
+  dealRows.forEach(function(row){
+
+    if(!row.createdDate) return;
+
+    const segment = row.businessSegment === "N/A" ? "Other" : row.businessSegment;
+    const key = row.createdFY + "|" + getFiscalMonthLabel(row.createdDate) + "|" + segment;
+
+    won[key] = (won[key] || 0) + 1;
+    revenue[key] = (revenue[key] || 0) + (Number(row.revenue) || 0);
+
+  });
+
+  return { won: won, revenue: revenue };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNewP1DealWonRevenueFromRows_()
+ * ==========================================================
+ */
+function testComputeNewP1DealWonRevenueFromRows_(){
+
+  const dealRows = [
+    { createdFY: 26, createdDate: new Date(2025, 7, 15), revenue: 1000, businessSegment: "Webinar" },
+    { createdFY: 26, createdDate: new Date(2025, 7, 20), revenue: 500, businessSegment: "Webinar" },
+    { createdFY: 26, createdDate: new Date(2025, 7, 22), revenue: 300, businessSegment: "Referral" },
+    { createdFY: 26, createdDate: new Date(2025, 7, 25), revenue: 700, businessSegment: "N/A" }, // Other로 접힘
+    { createdFY: 26, createdDate: null, revenue: 9999, businessSegment: "Webinar" } // createdDate 없음 — 제외
+  ];
+
+  const result = computeNewP1DealWonRevenueFromRows_(dealRows);
+
+  const augWebinarKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 15)) + "|Webinar";
+  const referralKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 22)) + "|Referral";
+  const otherKey = "26|" + getFiscalMonthLabel(new Date(2025, 7, 25)) + "|Other";
+
+  const pass =
+    result.won[augWebinarKey] === 2 &&
+    result.revenue[augWebinarKey] === 1500 &&
+    result.won[referralKey] === 1 &&
+    result.revenue[referralKey] === 300 &&
+    result.won[otherKey] === 1 &&
+    result.revenue[otherKey] === 700;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute NewP1 Aggregates
  *
  * WHY
  * Leads_OPS를 1회 스캔(Article 10: Read Once)해서 New P1 코호트별
- * (FY|Month|Segment) 지표를 메모리에서 집계한다. New Leads/SAL/
- * IC Booked/IC Complete/Won/Revenue 전부 이 코호트 필터(유효 Priority
- * = "Priority 1") 안에서만 카운트된다 (docs/NewP1ReportDesign.md §3).
+ * (FY|Month|Segment) New P1/SAL/IC Booked/IC Complete를 메모리에서
+ * 집계한다(유효 Priority = "Priority 1" 코호트 필터,
+ * docs/NewP1ReportDesign.md §3). **Won/Revenue는 2026-07-28부터 이 스캔
+ * 책임이 아니다** — Deal Tracker 기반 별도 집계(computeNewP1DealWonRevenueFromRows_())
+ * 를 이후 병합한다 (2트랙 아키텍처, CLAUDE.md #7).
  *
  * @return {Array<Object>}  각 원소: {fy, month, segment, sortIndex,
  *   newP1, sal, icBooked, icComplete, won, revenue}
@@ -200,83 +303,96 @@ function computeNewP1Aggregates_(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OPS.SHEET.OPS);
 
-  if(!sheet) return [];
-
-  const records = sheetToObjects(sheet);
-
   const groups = {};
+
+  if(sheet){
+
+    const records = sheetToObjects(sheet);
+
+    records.forEach(function(record){
+
+      if(!isEffectiveP1_(record["Lead Priority"], record["Priority Override"])) return;
+
+      const cohort = deriveNewP1Cohort_(record["Create Date"]);
+
+      if(!cohort) return;
+
+      const segment = record["Business Segment"] || "Other";
+      const key = cohort.fy + "|" + cohort.month + "|" + segment;
+
+      if(!groups[key]){
+
+        groups[key] = {
+          newP1: 0,
+          sal: 0,
+          icBooked: 0,
+          icComplete: 0
+        };
+
+      }
+
+      const g = groups[key];
+
+      g.newP1++;
+
+      const totalICRequests = Number(record["Total IC Requests"]) || 0;
+
+      if(totalICRequests > 0) g.sal++;
+
+      const icBookedDate = record["IC Booked Date"];
+
+      if(icBookedDate instanceof Date && !isNaN(icBookedDate.getTime())) g.icBooked++;
+
+      const icCompleteDate = record["IC Completed Date"];
+
+      if(icCompleteDate instanceof Date && !isNaN(icCompleteDate.getTime())) g.icComplete++;
+
+    });
+
+  }
+
+  const dealWonRevenue = computeNewP1DealWonRevenueFromRows_(readDealTrackerRawRows_());
+
+  const allKeys = {};
+
+  Object.keys(groups).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(dealWonRevenue.won).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(dealWonRevenue.revenue).forEach(function(key){ allKeys[key] = true; });
+
+  const keys = Object.keys(allKeys);
+
+  if(keys.length === 0) return [];
+
   let minFY = null;
 
-  records.forEach(function(record){
+  keys.forEach(function(key){
 
-    if(!isEffectiveP1_(record["Lead Priority"], record["Priority Override"])) return;
+    const fy = Number(key.split("|")[0]);
 
-    const cohort = deriveNewP1Cohort_(record["Create Date"]);
-
-    if(!cohort) return;
-
-    if(minFY === null || cohort.fy < minFY) minFY = cohort.fy;
-
-    const segment = record["Business Segment"] || "Other";
-    const key = cohort.fy + "|" + cohort.month + "|" + segment;
-
-    if(!groups[key]){
-
-      groups[key] = {
-        fy: cohort.fy,
-        month: cohort.month,
-        segment: segment,
-        newP1: 0,
-        sal: 0,
-        icBooked: 0,
-        icComplete: 0,
-        won: 0,
-        revenue: 0
-      };
-
-    }
-
-    const g = groups[key];
-
-    g.newP1++;
-
-    const totalICRequests = Number(record["Total IC Requests"]) || 0;
-
-    if(totalICRequests > 0) g.sal++;
-
-    const icBookedDate = record["IC Booked Date"];
-
-    if(icBookedDate instanceof Date && !isNaN(icBookedDate.getTime())) g.icBooked++;
-
-    const icCompleteDate = record["IC Completed Date"];
-
-    if(icCompleteDate instanceof Date && !isNaN(icCompleteDate.getTime())) g.icComplete++;
-
-    const revenueVal = Number(record["Revenue"]) || 0;
-
-    if(revenueVal > 0) g.won++;
-
-    g.revenue += revenueVal;
+    if(minFY === null || fy < minFY) minFY = fy;
 
   });
 
-  if(minFY === null) return [];
+  return keys.map(function(key){
 
-  return Object.keys(groups).map(function(key){
+    const parts = key.split("|");
+    const fy = Number(parts[0]);
+    const month = parts[1];
+    const segment = parts[2];
 
-    const g = groups[key];
+    const g = groups[key] || { newP1: 0, sal: 0, icBooked: 0, icComplete: 0 };
 
     return {
-      fy: g.fy,
-      month: g.month,
-      segment: g.segment,
-      sortIndex: computeNewP1SortIndex_(g.fy, g.month, g.segment, minFY),
+      fy: fy,
+      month: month,
+      segment: segment,
+      sortIndex: computeNewP1SortIndex_(fy, month, segment, minFY),
       newP1: g.newP1,
       sal: g.sal,
       icBooked: g.icBooked,
       icComplete: g.icComplete,
-      won: g.won,
-      revenue: g.revenue
+      won: dealWonRevenue.won[key] || 0,
+      revenue: dealWonRevenue.revenue[key] || 0
     };
 
   }).filter(function(row){

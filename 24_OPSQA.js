@@ -14,9 +14,19 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-28)
+ * - CLAUDE.md 미해결 항목 8(완전 동일 중복 터치 자동 삭제) 구현 — 신규
+ *   runAutoDeleteExactDuplicateTouchRows()/findExactDuplicateTouchRowsToDelete_()/
+ *   readMTAMasterRowsWithIndex_()/computeTouchProgressionScore_(). 그룹당
+ *   "가장 진행된 단계"(Won > IC Complete > IC Booked > 없음, 동점이면
+ *   시트상 더 나중 행) 행만 남기고 나머지 삭제(사용자 확정). MTA_LAST_ROW
+ *   카운터는 MTA_Raw 처리 진행률만 추적(MTA_Master 행 위치와 무관)하고
+ *   MTA_Master는 매 append마다 어차피 재정렬되므로 삭제로 인한 부작용
+ *   없음을 확인. 자동 실행 체인엔 아직 배선 안 함 — 수동 Run으로 실데이터
+ *   검증 먼저.
  * v1.2.0 (2026-07-24)
  * - findExactDuplicateTouchRows_()/checkExactDuplicateTouchRows_()의 MTA_Master
  *   필드 참조를 "First Touch Detail" → "Lead Source Detail"로 갱신
@@ -1279,6 +1289,345 @@ function testFindExactDuplicateTouchRows() {
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Touch Progression Score (순수 함수)
+ *
+ * WHY
+ * 완전 동일 중복(5개 식별 필드 일치) 행들 중 어느 걸 남길지 정하기 위한
+ * 기준. IC Booked/Completed/Won Date, Revenue는 export 시점마다 값이
+ * 바뀌는 Lead 레벨 스냅샷 필드라(비교 기준에서는 제외됐지만) 중복 행들
+ * 사이에서 서로 다를 수 있음 — 사용자 확정(2026-07-28): "가장 진행된
+ * 단계"의 행을 남긴다. Won(Opportunity Won Date 유효 또는 Revenue>0) >
+ * IC Complete > IC Booked > 아무 것도 없음 순.
+ *
+ * @param {Object} record  sheetToObjects() 스타일 레코드
+ * @return {number}  0~3 (클수록 더 진행됨)
+ *
+ * TEST
+ * testComputeTouchProgressionScore_() 참고
+ * ==========================================================
+ */
+function computeTouchProgressionScore_(record) {
+
+  const wonDate = record["Opportunity Won Date"];
+  const hasWon =
+    (wonDate instanceof Date && !isNaN(wonDate.getTime())) ||
+    (Number(record["Revenue"]) || 0) > 0;
+
+  if (hasWon) return 3;
+
+  const completeDate = record["IC Completed Date"];
+
+  if (completeDate instanceof Date && !isNaN(completeDate.getTime())) return 2;
+
+  const bookedDate = record["IC Booked Date"];
+
+  if (bookedDate instanceof Date && !isNaN(bookedDate.getTime())) return 1;
+
+  return 0;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeTouchProgressionScore_()
+ * ==========================================================
+ */
+function testComputeTouchProgressionScore_() {
+
+  const wonScore = computeTouchProgressionScore_({
+    "Opportunity Won Date": new Date(2026, 0, 1), "Revenue": 0,
+    "IC Completed Date": "", "IC Booked Date": ""
+  });
+
+  const revenueOnlyScore = computeTouchProgressionScore_({
+    "Opportunity Won Date": "", "Revenue": 500,
+    "IC Completed Date": "", "IC Booked Date": ""
+  });
+
+  const completeScore = computeTouchProgressionScore_({
+    "Opportunity Won Date": "", "Revenue": 0,
+    "IC Completed Date": new Date(2026, 0, 1), "IC Booked Date": new Date(2026, 0, 1)
+  });
+
+  const bookedScore = computeTouchProgressionScore_({
+    "Opportunity Won Date": "", "Revenue": 0,
+    "IC Completed Date": "", "IC Booked Date": new Date(2026, 0, 1)
+  });
+
+  const noneScore = computeTouchProgressionScore_({
+    "Opportunity Won Date": "", "Revenue": 0,
+    "IC Completed Date": "", "IC Booked Date": ""
+  });
+
+  const pass =
+    wonScore === 3 && revenueOnlyScore === 3 &&
+    completeScore === 2 && bookedScore === 1 && noneScore === 0;
+
+  Logger.log(
+    "won=" + wonScore + " revenueOnly=" + revenueOnlyScore +
+    " complete=" + completeScore + " booked=" + bookedScore + " none=" + noneScore
+  );
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Read MTA Master Rows With Sheet Row Index
+ *
+ * WHY
+ * sheetToObjects()는 순수 레코드 배열만 반환해 실제 시트 행 번호를 모른다
+ * (findExactDuplicateTouchRows_()가 QA 보고용으로만 쓰기엔 충분했지만,
+ * 실제 삭제 대상 행을 지목하려면 행 번호가 필요함). 이 함수는 그 둘을
+ * 함께 묶어 반환한다.
+ *
+ * @return {Array<{rowIndex:number, record:Object}>}  rowIndex는 1-based 시트 행 번호
+ * ==========================================================
+ */
+function readMTAMasterRowsWithIndex_() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+
+  if (!sheet) return [];
+
+  const values = sheet.getDataRange().getValues();
+
+  if (values.length <= 1) return [];
+
+  const headers = values[0];
+  const rows = [];
+
+  for (let r = 1; r < values.length; r++) {
+
+    const record = {};
+
+    headers.forEach(function (h, c) {
+      record[String(h).trim()] = values[r][c];
+    });
+
+    rows.push({ rowIndex: r + 1, record: record });
+
+  }
+
+  return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * Find Exact Duplicate Touch Rows To Delete (순수 함수)
+ *
+ * WHY
+ * findExactDuplicateTouchRows_()와 동일한 5개 필드(Lead ID+MTA Created
+ * Date+MKT UTM Campaign+First Lead Source+Lead Source Detail) 키로
+ * 그룹핑하되, 그룹당 하나(가장 진행된 단계, 동점이면 시트상 더 나중 행)
+ * 만 남기고 나머지의 실제 시트 행 번호를 삭제 대상으로 반환한다.
+ * 삭제 시 행 번호가 밀리지 않도록 내림차순으로 정렬해서 반환 —
+ * 호출부는 그대로 순서대로 deleteRow()하면 안전하다.
+ *
+ * @param {Array<{rowIndex:number, record:Object}>} rowsWithIndex
+ *   readMTAMasterRowsWithIndex_()의 반환값
+ * @return {number[]}  삭제할 시트 행 번호(1-based), 내림차순 정렬
+ *
+ * TEST
+ * testFindExactDuplicateTouchRowsToDelete_() 참고
+ * ==========================================================
+ */
+function findExactDuplicateTouchRowsToDelete_(rowsWithIndex) {
+
+  const groups = {};
+
+  rowsWithIndex.forEach(function (item) {
+
+    const r = item.record;
+    const leadId = String(r["Lead ID"] || "").trim();
+    const date = r["MTA Created Date"];
+
+    if (!leadId || !(date instanceof Date) || isNaN(date.getTime())) return;
+
+    const campaign = String(r["MKT UTM Campaign"] || "").trim();
+    const source = String(r["First Lead Source"] || "").trim();
+    const detail = String(r["Lead Source Detail"] || "").trim();
+
+    const key = [leadId, date.getTime(), campaign, source, detail].join("|");
+
+    if (!groups[key]) groups[key] = [];
+
+    groups[key].push(item);
+
+  });
+
+  const rowsToDelete = [];
+
+  Object.keys(groups).forEach(function (key) {
+
+    const items = groups[key];
+
+    if (items.length <= 1) return;
+
+    items.sort(function (a, b) {
+
+      const scoreA = computeTouchProgressionScore_(a.record);
+      const scoreB = computeTouchProgressionScore_(b.record);
+
+      if (scoreA !== scoreB) return scoreB - scoreA; // 높은 점수(더 진행됨) 먼저
+
+      return b.rowIndex - a.rowIndex; // 동점이면 시트상 더 나중 행을 유지 대상으로
+
+    });
+
+    for (let i = 1; i < items.length; i++) {
+      rowsToDelete.push(items[i].rowIndex);
+    }
+
+  });
+
+  rowsToDelete.sort(function (a, b) { return b - a; }); // 내림차순 — 삭제 시 인덱스 안 밀리도록
+
+  return rowsToDelete;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateTouchRowsToDelete_()
+ * ==========================================================
+ */
+function testFindExactDuplicateTouchRowsToDelete_() {
+
+  const date1 = new Date(2026, 0, 1);
+
+  const rowsWithIndex = [
+    {
+      rowIndex: 5, record: {
+        "Lead ID": "L1", "MTA Created Date": date1, "MKT UTM Campaign": "A",
+        "First Lead Source": "Web", "Lead Source Detail": "Form",
+        "IC Booked Date": new Date(2026, 0, 2), "IC Completed Date": "",
+        "Opportunity Won Date": "", "Revenue": 0
+      }
+    },
+    {
+      rowIndex: 12, record: {
+        "Lead ID": "L1", "MTA Created Date": date1, "MKT UTM Campaign": "A",
+        "First Lead Source": "Web", "Lead Source Detail": "Form",
+        "IC Booked Date": new Date(2026, 0, 2), "IC Completed Date": new Date(2026, 0, 5),
+        "Opportunity Won Date": "", "Revenue": 0
+      }
+    }, // 더 진행됨(IC Complete) — 이 행을 남겨야 함
+    {
+      rowIndex: 20, record: {
+        "Lead ID": "L2", "MTA Created Date": date1, "MKT UTM Campaign": "B",
+        "First Lead Source": "Web", "Lead Source Detail": "Form",
+        "IC Booked Date": "", "IC Completed Date": "", "Opportunity Won Date": "", "Revenue": 0
+      }
+    } // 단독 — 삭제 대상 아님
+  ];
+
+  const result = findExactDuplicateTouchRowsToDelete_(rowsWithIndex);
+
+  const pass = result.length === 1 && result[0] === 5;
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected [5])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findExactDuplicateTouchRowsToDelete_() 동점 타이브레이크
+ * ==========================================================
+ */
+function testFindExactDuplicateTouchRowsToDeleteTieBreak_() {
+
+  const date1 = new Date(2026, 0, 1);
+
+  const rowsWithIndex = [
+    { rowIndex: 3, record: { "Lead ID": "L3", "MTA Created Date": date1, "MKT UTM Campaign": "C", "First Lead Source": "Web", "Lead Source Detail": "Form" } },
+    { rowIndex: 7, record: { "Lead ID": "L3", "MTA Created Date": date1, "MKT UTM Campaign": "C", "First Lead Source": "Web", "Lead Source Detail": "Form" } }
+  ];
+
+  const result = findExactDuplicateTouchRowsToDelete_(rowsWithIndex);
+
+  const pass = result.length === 1 && result[0] === 3; // 동점 — 더 나중 행(7)을 남기고 3을 삭제
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected [3])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Auto Delete Exact Duplicate Touch Rows (수동 실행용)
+ *
+ * WHY (CLAUDE.md 미해결 항목 8 구현)
+ * 검출 로직(findExactDuplicateTouchRows_(), 2026-07-24)은 보고만 하고
+ * 자동 삭제는 보류돼 있었음. MTA_LAST_ROW 카운터는 MTA_Raw 처리 진행률만
+ * 추적할 뿐 MTA_Master 행 위치와 무관하고(07_IncrementalMasterBuild.js
+ * appendNewMTA() 참고), MTA_Master는 매 append마다 어차피 날짜순으로
+ * 재정렬되므로(sortSheetByDate) 삭제로 인한 카운터/정렬 영향은 없음을
+ * 확인(2026-07-28) — 이번에 자동 삭제까지 구현.
+ *
+ * 삭제 대상이 아닌(가장 진행된) 행만 남기므로 IC Booked/Completed/Won/
+ * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에
+ * 먼저 전부 나열한 뒤 삭제 — 실행 로그가 곧 감사 기록.
+ *
+ * ⚠️ 이 함수는 runOPSQA_()/appendNewMTA() 등 자동 실행 체인에 배선하지
+ * 않았다 — 실제 데이터로 검증 전까지는 사용자가 Apps Script 편집기에서
+ * 직접 Run할 것. 자동 배선 여부는 검증 후 별도 결정.
+ * ==========================================================
+ */
+function runAutoDeleteExactDuplicateTouchRows() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+
+  if (!sheet) {
+    Logger.log(CONFIG.SHEETS.MTA_MASTER + " sheet not found.");
+    return;
+  }
+
+  const rowsWithIndex = readMTAMasterRowsWithIndex_();
+  const rowsToDelete = findExactDuplicateTouchRowsToDelete_(rowsWithIndex);
+
+  Logger.log("======================================");
+  Logger.log("Auto Delete Exact Duplicate Touch Rows");
+  Logger.log("======================================");
+  Logger.log("MTA_Master 현재 행 수(헤더 제외): " + (sheet.getLastRow() - 1));
+
+  if (rowsToDelete.length === 0) {
+    Logger.log("삭제할 완전 동일 중복 행 없음.");
+    return;
+  }
+
+  Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
+  Logger.log("삭제 대상 시트 행 번호(내림차순): " + rowsToDelete.join(", "));
+
+  rowsToDelete.forEach(function (rowIndex) {
+    sheet.deleteRow(rowIndex);
+  });
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
+    "MTA_Master 현재 행 수(헤더 제외): " + (sheet.getLastRow() - 1)
+  );
+
+  Logger.log("======================================");
 
 }
 

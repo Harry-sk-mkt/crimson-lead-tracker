@@ -14,11 +14,14 @@ Lead **획득 시점(코호트)** 기준으로 New P1 Lead의 다운스트림 �
 - 코호트 관점("이 기간에 획득된 P1 Lead가 퍼널을 얼마나 진행했는가")은 NewP1_REP이 전담한다.
 - Marketo 프로그램 단위 코호트는 별도 리포트에서 다룬다 (이 리포트 범위 아님).
 
-## 2. Data Source — Leads_OPS 단일
+## 2. Data Source — Leads_OPS + Deal Tracker (2트랙, 2026-07-28부터)
 
-- **소스는 `Leads_OPS` 하나뿐이다.** Leads_Master / MTA_Master / 기타 시트 조회 금지.
-  - 근거: `docs/OperationsLayer.md` — "향후 모든 리포트는 Leads_Master가 아닌 Leads_OPS를 읽어야 한다."
-    Leads_Master는 append-only라 갱신된 상태(Segment 재분류, Override 등)를 반영하지 못함.
+- **New P1/SAL/IC Booked/IC Complete는 `Leads_OPS` 단일 소스.** Leads_Master / MTA_Master / 기타
+  시트 조회 금지.
+  - 근거: `docs/OperationsLayer.md` — "리드~세일즈 액티비티 레이어는 Leads_OPS/MTA_Master를
+    읽어야 한다"(2트랙 예외 각주 참고). Leads_Master는 append-only라 갱신된 상태(Segment
+    재분류, Override 등)를 반영하지 못함.
+- **Won/Revenue(K/M열)는 2026-07-28부터 `Deal Tracker` 기반** — 아래 각주 참고.
 - 컬럼 참조는 **Header-Based Mapping만 허용** (`OPS.HEADER` 기준, index 참조 금지).
 
 ### 사용 컬럼 (OPS.HEADER v2.1 기준)
@@ -32,10 +35,30 @@ Lead **획득 시점(코호트)** 기준으로 New P1 Lead의 다운스트림 �
 | `Total IC Requests` | SAL 판정 (= SAL 터치 횟수) |
 | `IC Booked Date` | IC Booked 판정 |
 | `IC Completed Date` | IC Complete 판정 |
-| `Revenue` | Won 판정 + Revenue 합산 |
 
-> `Opportunity Won Date`는 사용하지 않는다 — Won 판정은 Revenue > 0 (사용자 확정).
-> `Revenue Actual`은 사용하지 않는다 (사용자 확정: SF 동기화 `Revenue` 컬럼).
+> `Revenue`/`Revenue Actual`(Leads_OPS)과 `Opportunity Won Date`는 더 이상 Won/Revenue 판정에
+> 쓰지 않는다 — 아래 각주 참고.
+
+> ⚠️ **2026-07-28 갱신 — 2트랙 아키텍처(CLAUDE.md #7) Won/Revenue까지 확장**: 최초 결정은
+> "NewP1_REP의 Won/Revenue는 리드 단위 지표라 Deal Tracker 전환에서 제외"였으나(리드 단위
+> 매칭은 Target_REP이 이미 "이메일 덮어쓰기로 신뢰 불가" 판정), 사용자가 **리드 단위 매칭 없이도
+> 딜 자체의 Created Date(코호트 축)+수동 Segment 컬럼으로 (FY|Month|Segment) 코호트에 직접
+> 집계 가능하다는 점을 지적** — ACQ_REP(Close Date)·Events_OPS(프로그램명)와 동일한 "딜 자체
+> 필드 직접 집계" 패턴. 최종 결정: **Won(K열)/Revenue(M열)도 Deal Tracker 기반으로 전환**
+> (`computeNewP1DealWonRevenueFromRows_()`, `40_NewP1Report.js`) — Won = 그 코호트(Created
+> Date FY/Month + Segment)에 해당하는 Deal Tracker 딜 건수, Revenue = 그 딜들의 Revenue 합.
+> Upsell/N/A는 ACQ_REP과 동일하게 "Other"로 접어 넣음.
+>
+> **부작용(사용자 확인·승인)**: Won%(=Won÷New P1)의 분자(딜트래커 딜 건수)와 분모(Leads_OPS
+> New P1 리드 건수)가 서로 다른 두 집단이 됨 — "이 코호트 리드가 실제로 Won이 된 비율"이 아니라
+> "이 코호트 기간의 딜트래커 딜 규모 대비 리드 규모"로 의미가 바뀜. 상세: `docs/Changelog.md`
+> 2026-07-28.
+
+> ⚠️ **알려진 한계(2026-07-28 발견, 코드 문제 아님)**: `computeNewP1DealWonRevenueFromRows_()`는
+> Created Date가 없는 딜은 코호트 집계에서 제외한다. **Referral 딜은 상당수가 Created Date
+> 자체가 비어있어**(세일즈가 Lead 생성 없이 바로 Opportunity 등록 — CLAUDE.md #12 가설과 일치)
+> Won/Revenue가 구조적으로 과소집계됨. 처리 방침(사용자 확정): 코드 수정 없이 그대로 제외 유지,
+> Deal Tracker에서 Referral 딜의 실제 Created Date를 수동 입력 후 재동기화하면 반영됨.
 
 ## 3. Cohort Definition
 
@@ -181,11 +204,11 @@ ACQ_REP 스타일 관례 준수:
 
 | 항목 | 결정 |
 | --- | --- |
-| 소스 | Leads_OPS 단일 |
-| 코호트 | Create Date 구간 + 유효 Priority = "Priority 1" (Override 우선 → Lead Priority) |
+| 소스 | New P1/SAL/IC Booked/IC Complete = Leads_OPS, Won/Revenue = Deal Tracker(2026-07-28부터, 2트랙) |
+| 코호트 | Create Date 구간(Leads_OPS) / Won·Revenue는 Deal Tracker Created Date 구간 + 유효 Priority = "Priority 1"(New P1 판정만 해당) |
 | SAL 판정 | `Total IC Requests` > 0 (MTA 무관, OPS 기존 컬럼) |
-| Won 판정 | `Revenue` > 0 |
-| Revenue 합산 | `Revenue` (SF 동기화 컬럼) |
+| Won 판정 | ~~`Revenue` > 0~~ → **2026-07-28부터 Deal Tracker 딜 건수**(해당 코호트 FY/Month/Segment로 집계된 딜 개수) |
+| Revenue 합산 | ~~`Revenue`(SF 동기화 컬럼)~~ → **2026-07-28부터 Deal Tracker Revenue 합**(동일 코호트 매칭 딜들) |
 | Segment | `Business Segment` 그대로 (FT Override 재판정 없음) |
 | Week | ~~Fiscal Week (`getWeek()`), 월 경계 분할 허용~~ → **2026-07-22 오후 제거** (매년 시작 요일이 달라 캘린더 주로 오인되기 쉬움, FY>Month>Segment로 단순화) |
 | FY 파생 | Engine 갱신 시 코드 계산 (OPS 스키마 변경 없음) |

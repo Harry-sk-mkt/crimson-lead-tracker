@@ -21,9 +21,46 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.10.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-07-28)
+ * - readDealTrackerRawRows_()가 이제 정규화된 createdDate(Date, 타임존 보정
+ *   완료)도 반환(additive) — NewP1_REP의 Won/Revenue를 Deal Tracker Created
+ *   Date 기준으로 재정의하기 위해 필요(40_NewP1Report.js
+ *   computeNewP1DealWonRevenueFromRows_() 참고). 기존 소비자(Target_REP)는
+ *   새 필드를 그냥 무시하므로 하위호환.
+ * v1.13.0 (2026-07-28)
+ * - Fixed: Deal Tracker Close Date/Created Date 타임존 버그 — 이 스크립트
+ *   프로젝트 타임존(appsscript.json: America/New_York)과 Deal Tracker
+ *   스프레드시트 자체 타임존(KOR 딜 트래커, 다른 지역)이 달라, 매달 1일
+ *   Close된 딜이 getMonth() 계산 시 전월로 밀려 잘못 집계되던 문제(실측:
+ *   "Minu Kang" $54,891.44 Referral 딜, Close Date 2026-07-01이 스크립트에서
+ *   "Jun 30 2026 11:00 EDT"로 읽혀 6월로 잘못 집계됨). 신규
+ *   normalizeExternalCalendarDate_()가 Deal Tracker의 getSpreadsheetTimeZone()
+ *   기준으로 실제 연/월/일을 추출해 스크립트 로컬 타임존 Date로 재구성 —
+ *   readDealTrackerRawRows_()가 closeDate/createdDate 둘 다에 적용. 상세:
+ *   docs/Changelog.md 2026-07-28.
+ * v1.12.0 (2026-07-28)
+ * - Segment 분류를 getBusinessSegment() 키워드 매칭에서 Deal Tracker의 수동
+ *   "Segment" 컬럼(H열, CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS.SEGMENT)
+ *   직접 참조로 교체 — 실측 검증 결과 키워드 매칭 정확도가 신뢰 불가 수준
+ *   (Search $144,265 vs 실제 ~$537,507.89, 약 $393K 갭)이라 사용자가 Deal
+ *   Tracker 전체 딜을 수동 재분류. readDealTrackerRawRows_()가 이제
+ *   businessSegment 필드도 반환, classifyDealSegment_()는 getBusinessSegment()
+ *   호출 없이 deriveTargetGroup_(row.businessSegment)만 수행하도록 단순화.
+ *   관련 테스트(testClassifyDealSegment/testComputeDealShareRatiosFromDealRows/
+ *   testComputeDealCohortsFromDealRows) mock 데이터도 businessSegment 필드
+ *   기준으로 갱신. 상세: docs/Changelog.md 2026-07-28.
+ * v1.11.0 (2026-07-28)
+ * - 2트랙 아키텍처(CLAUDE.md #7) 확장 — Deal Tracker 접근 계층을 Target_REP
+ *   전용에서 프로젝트 공용으로 확장. readDealTrackerRawRows_()에 closeDate
+ *   (raw Date) 필드 추가(additive, 기존 Target_REP 소비 함수 영향 없음) —
+ *   ACQ_REP Revenue의 월 귀속에 필요. 신규 computeDealTrackerCountsByKey_()
+ *   (순수 함수) 추가 — Events_OPS/BOFU_OPS/Content_OPS가 각자 스캔하던
+ *   Leads_OPS Opportunity Won Date/Revenue 로직을 대체할 공용 헬퍼(도메인별
+ *   키 정규화 함수를 주입받아 Deal Tracker 프로그램명 기준으로 #Deals/Revenue
+ *   집계). 상세: docs/Changelog.md 2026-07-28.
  * v1.10.0 (2026-07-27)
  * - P1당 가치(Block B)를 코호트1/2 이원화 구조로 전면 재작성 — 사용자 확정
  *   프레임워크: CurrentFYP1V(a) = 코호트1(Created=Closed=타겟FY) Revenue ÷
@@ -825,6 +862,75 @@ function parseDealTrackerCloseDate_(value){
 
 /**
  * ==========================================================
+ * Normalize External Calendar Date (타임존 보정)
+ *
+ * WHY (2026-07-28, 실측 버그 발견 — "Minu Kang" $54,891.44 Referral 딜 누락)
+ * 이 Apps Script 프로젝트의 타임존은 `appsscript.json` 기준 America/New_York
+ * 인데, Deal Tracker는 별도 스프레드시트([KOR] Deal Tracking)라 타임존이
+ * 다르다(실측: Close Date 2026-07-01(한국 자정 기준 입력)이 Apps Script에서
+ * "Tue Jun 30 2026 11:00:00 GMT-0400"로 읽힘 — America/New_York과의 시차
+ * 때문에 하루 밀림). `getFiscalYear()`/`getFiscalMonthLabel()`은 `.getMonth()`/
+ * `.getFullYear()`(스크립트 자신의 타임존 기준 로컬 getter)를 쓰므로, 이
+ * 밀린 Date 객체를 그대로 넘기면 매달 1일에 Close된 딜이 전부 전월로
+ * 잘못 집계된다(1일이 아닌 날짜는 하루 밀려도 대개 같은 달이라 증상이
+ * 안 보였을 뿐 — 월 경계에서만 드러나는 구조적 버그).
+ *
+ * 해결: Deal Tracker 스프레드시트 자체의 타임존(`getSpreadsheetTimeZone()`)
+ * 기준으로 `Utilities.formatDate()`를 이용해 "진짜 의도된" 연/월/일을 문자열로
+ * 뽑아낸 뒤, 그 값으로 이 스크립트의 로컬 타임존에서 새 Date 객체를 만든다 —
+ * 이러면 `.getMonth()`/`.getDate()`가 어느 타임존에서 호출되든 항상 의도된
+ * 날짜를 반환한다. `getFiscalYear()`/`getFiscalMonthLabel()`(16_TransformHelper.js,
+ * 프로젝트 전역 공용 함수)은 그대로 두고, 이 함수를 Deal Tracker 등 외부
+ * 스프레드시트 날짜를 읽는 지점에서만 선제적으로 적용한다 — MTA_Master/
+ * Leads_Master 등 이 스크립트와 같은 스프레드시트에 바인딩된 데이터는
+ * 타임존이 이미 일치하므로 영향/변경 없음.
+ *
+ * INPUT
+ * date : Date  (외부 스프레드시트에서 getValues()로 읽은 원본 Date)
+ * sourceTimeZone : string  (그 스프레드시트의 getSpreadsheetTimeZone() 반환값)
+ *
+ * OUTPUT
+ * Date  (이 스크립트의 로컬 타임존에서 같은 연/월/일 자정을 나타내는 새 Date)
+ *
+ * TEST
+ * testNormalizeExternalCalendarDate_() 참고
+ * ==========================================================
+ */
+function normalizeExternalCalendarDate_(date, sourceTimeZone){
+
+  const ymd = Utilities.formatDate(date, sourceTimeZone, "yyyy-MM-dd");
+  const parts = ymd.split("-");
+
+  return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — normalizeExternalCalendarDate_()
+ * ==========================================================
+ */
+function testNormalizeExternalCalendarDate_(){
+
+  // "2026-07-01 00:00 KST(UTC+9)"는 UTC로 2026-06-30T15:00:00Z.
+  const utcInstant = new Date(Date.UTC(2026, 5, 30, 15, 0, 0));
+
+  const normalized = normalizeExternalCalendarDate_(utcInstant, "Asia/Seoul");
+
+  const pass =
+    normalized.getFullYear() === 2026 &&
+    normalized.getMonth() === 6 && // 7월 (0-indexed)
+    normalized.getDate() === 1;
+
+  Logger.log("Normalized: " + normalized + " (expected 2026-07-01 in script local time)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Read Deal Tracker Raw Rows (전체 행, FY 필터 없음 — 계산 단계에서 필터)
  *
  * WHY
@@ -832,22 +938,28 @@ function parseDealTrackerCloseDate_(value){
  * Leads_OPS 개별 리드 매칭(Student/Guardian Email/Account Name)을 전부
  * 폐기 — Sales팀 확인 결과 상담 후 이메일이 Salesforce에서 덮어써져 원본
  * 마케팅 터치 이메일이 시스템적으로 복구 불가능한 경우가 있어 매칭 자체가
- * 근본적으로 신뢰 불가. 대신 Deal Tracker를 Source of Truth로 삼아, 딜
- * 자체에 기록된 Lead Source/Source Category/Lead Source Detail로
- * getBusinessSegment()(16_TransformHelper.js)를 직접 호출해 세그먼트를
- * 분류한다 — classifyDealSegment_() 참고. P1 판정은 하지 않음(사용자 확인:
- * 딜트래커 딜의 99%가 이미 P1이라 사실상 전수 반영과 동일).
+ * 근본적으로 신뢰 불가. 대신 Deal Tracker를 Source of Truth로 삼는다.
+ * 세그먼트 분류는 2026-07-28부터 딜 자체의 Lead Source/Source
+ * Category/Lead Source Detail을 getBusinessSegment()로 키워드 매칭하던
+ * 방식을 폐기하고, 사용자가 Deal Tracker에 수동으로 재분류한 "Segment"
+ * 컬럼(H열, businessSegment 필드)을 그대로 읽는다 — 키워드 매칭 실측
+ * 검증 결과 정확도가 신뢰 불가 수준이었음(Search $144,265 vs 실제
+ * ~$537,507.89). classifyDealSegment_() 참고. P1 판정은 하지 않음(사용자
+ * 확인: 딜트래커 딜의 99%가 이미 P1이라 사실상 전수 반영과 동일).
  *
  * closeFY/createdFY는 Close Date/Created Date 컬럼(실제 Date 타입 셀로
  * 확인됨 — 더블클릭 시 캘린더 위젯 표시, 텍스트 파싱 불필요/불확실성 없음)
- * 에서 getFiscalYear()로 직접 파생한다. 2026-07-27 사용자 확정: 딜 비중은
+ * 에서 getFiscalYear()로 직접 파생한다. **2026-07-28부터 이 두 날짜는 먼저
+ * normalizeExternalCalendarDate_()로 타임존 보정을 거친다** — Deal Tracker와
+ * 이 스크립트의 타임존이 달라 매달 1일 Close 딜이 전월로 잘못 집계되던
+ * 실측 버그 수정(바로 위 함수 WHY 참고). 2026-07-27 사용자 확정: 딜 비중은
  * "코호트1"(closeFY===createdFY===타겟FY, 같은 해 생성·클로징)만 사용하고,
  * "코호트2"(closeFY===타겟FY, createdFY<타겟FY, 과거 리드가 이번 해에
  * 클로징된 파이프라인 기여분)는 P1당 가치의 PrevP1V 계산에 별도로 쓴다
  * (computeDealCohortsFromDealRows_() 참고). 예전 "FY" 텍스트 컬럼은 더 이상
  * 안 씀(Close Date에서 직접 파생하는 게 더 신뢰할 수 있음).
  *
- * @return {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>}
+ * @return {Array<{closeFY:number, createdDate:Date|null, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string, businessSegment:string}>}
  * ==========================================================
  */
 function readDealTrackerRawRows_(){
@@ -858,6 +970,9 @@ function readDealTrackerRawRows_(){
 
   if(!sheet) return [];
 
+  // 타임존 보정 (2026-07-28 실측 버그 발견) — 아래 normalizeExternalCalendarDate_() WHY 참고.
+  const sourceTimeZone = SpreadsheetApp.openById(config.SPREADSHEET_ID).getSpreadsheetTimeZone();
+
   const cols = config.COLUMNS;
   const values = sheet.getDataRange().getValues();
 
@@ -867,33 +982,123 @@ function readDealTrackerRawRows_(){
 
     const row = values[r];
 
-    const closeDate = row[cols.CLOSE_DATE - 1];
+    const closeDateRaw = row[cols.CLOSE_DATE - 1];
 
-    if(!(closeDate instanceof Date) || isNaN(closeDate.getTime())) continue;
+    if(!(closeDateRaw instanceof Date) || isNaN(closeDateRaw.getTime())) continue;
+
+    const closeDate = normalizeExternalCalendarDate_(closeDateRaw, sourceTimeZone);
 
     const closeFY = Number(getFiscalYear(closeDate).replace("FY", ""));
 
     if(!closeFY) continue;
 
-    const createdDate = row[cols.CREATED_DATE - 1];
+    const createdDateRaw = row[cols.CREATED_DATE - 1];
+    const hasValidCreatedDate = createdDateRaw instanceof Date && !isNaN(createdDateRaw.getTime());
+    const createdDate = hasValidCreatedDate
+      ? normalizeExternalCalendarDate_(createdDateRaw, sourceTimeZone)
+      : null;
 
-    const createdFY =
-      (createdDate instanceof Date && !isNaN(createdDate.getTime()))
-        ? Number(getFiscalYear(createdDate).replace("FY", ""))
-        : null;
+    const createdFY = createdDate
+      ? Number(getFiscalYear(createdDate).replace("FY", ""))
+      : null;
 
     rows.push({
+      closeDate: closeDate,
       closeFY: closeFY,
+      createdDate: createdDate,
       createdFY: createdFY || null,
       revenue: parseCurrencyValue_(row[cols.REVENUE - 1]),
       leadSource: String(row[cols.LEAD_SOURCE - 1] || "").trim().toLowerCase(),
       sourceCategory: String(row[cols.SOURCE_CATEGORY - 1] || "").trim(),
-      leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim()
+      leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim(),
+      businessSegment: String(row[cols.SEGMENT - 1] || "").trim()
     });
 
   }
 
   return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Deal Tracker Counts By Key (순수 함수 — 2트랙 설계 공용 헬퍼)
+ *
+ * WHY (2026-07-28, 2트랙 아키텍처)
+ * Events_OPS/BOFU_OPS/Content_OPS의 "#Deals"/"Revenue"는 원래 Leads_OPS를
+ * 리드 단위로 스캔해 Opportunity Won Date/Revenue(Salesforce 동기화 컬럼)로
+ * 계산했다. 그런데 Leads_OPS 개별 리드 매칭은 상담 후 학부모 이메일 변경으로
+ * 구조적으로 신뢰 불가하다는 게 이미 Target_REP에서 확인됨(CLAUDE.md #7).
+ * 사용자 확정: 리드~세일즈 액티비티(Track 1)는 그대로 Leads_OPS/MTA_Master,
+ * Opportunity/Revenue(Track 2)는 Deal Tracker를 Source of Truth로 삼는다.
+ * Deal Tracker의 Lead Source Detail(W열)은 Events/BOFU/Content가 이미 쓰던
+ * 매칭 필드(Lead Source Detail/First Touch Detail)와 같은 결의 Marketo
+ * 프로그램명 문자열이라, 리드 단위 조인 없이 딜 자체의 프로그램명만 정규화해서
+ * 바로 집계할 수 있다. readDealTrackerRawRows_()가 이미 유효한 Close Date
+ * 행만 반환하므로(90_TargetEngine.js), 반환된 행 자체가 "Won 딜" — 별도 날짜
+ * 유효성 검사 불필요.
+ *
+ * INPUT
+ * dealRows : Object[]  readDealTrackerRawRows_()의 반환값
+ * keyFn : function(row) → String|null  도메인별 정규화 규칙(null이면 제외).
+ *   예) Events: stripRegistrationFormSuffix_ + isKoreanProgram_ + isEligibleEventType_
+ *       BOFU/Content: stripRegistrationFormSuffix_ + isKoreanProgram_
+ *
+ * OUTPUT
+ * { dealsWon: {key: count}, revenue: {key: sum} }
+ *
+ * TEST
+ * testComputeDealTrackerCountsByKey_() 참고
+ * ==========================================================
+ */
+function computeDealTrackerCountsByKey_(dealRows, keyFn){
+
+  const dealsWon = {};
+  const revenue = {};
+
+  dealRows.forEach(function(row){
+
+    const key = keyFn(row);
+
+    if(!key) return;
+
+    dealsWon[key] = (dealsWon[key] || 0) + 1;
+    revenue[key] = (revenue[key] || 0) + (Number(row.revenue) || 0);
+
+  });
+
+  return { dealsWon: dealsWon, revenue: revenue };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeDealTrackerCountsByKey_()
+ * ==========================================================
+ */
+function testComputeDealTrackerCountsByKey_(){
+
+  const dealRows = [
+    { leadSourceDetail: "WB-2025-07-KOR-MOFU-Core A", revenue: 1000 },
+    { leadSourceDetail: "WB-2025-07-KOR-MOFU-Core A-RF", revenue: 500 },
+    { leadSourceDetail: "junk-not-a-program", revenue: 999 }
+  ];
+
+  const keyFn = function(row){
+    return row.leadSourceDetail.indexOf("junk") === 0 ? null : row.leadSourceDetail.replace(/-RF$/, "");
+  };
+
+  const result = computeDealTrackerCountsByKey_(dealRows, keyFn);
+
+  const pass =
+    result.dealsWon["WB-2025-07-KOR-MOFU-Core A"] === 2 &&
+    result.revenue["WB-2025-07-KOR-MOFU-Core A"] === 1500 &&
+    Object.keys(result.dealsWon).length === 1;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1340,24 +1545,24 @@ function testComputeP1ValueBlockRows(){
  * Opportunity 이메일이 그대로 덮어써져 원본 마케팅 터치 이메일이 시스템적
  * 으로 복구 불가능한 경우가 있어(Ryan Kang 등 실측 사례) 개별 리드 매칭
  * 자체가 근본적으로 신뢰할 수 없었다. Deal Tracker는 애초에 모든 Opportunity
- * 를 담고 있으므로(사용자 판단), 개별 리드 식별 없이 딜 자체에 기록된
- * Lead Source Detail(campaign/detail 이중 사용 — 이 시트엔 별도 UTM Campaign
- * 컬럼이 없음)/Lead Source/Source Category를 getBusinessSegment()
- * (16_TransformHelper.js, 프로젝트 공용 분류 로직)에 그대로 넣어 세그먼트를
- * 직접 분류한다. 93_TempQA_DealTrackerMatch.js도 동일 로직을 재사용해야
- * QA 시트와 실제 계산이 어긋나지 않는다.
+ * 를 담고 있으므로(사용자 판단), 개별 리드 식별 없이 딜 자체의 세그먼트를
+ * 직접 분류한다.
  *
- * @param {{leadSource:string, sourceCategory:string, leadSourceDetail:string}} row
+ * 2026-07-28 재수정: `getBusinessSegment()` 키워드 매칭(Lead Source Detail/
+ * Lead Source/Source Category 기반)을 실측 검증한 결과 정확도가 신뢰 불가
+ * 수준이었음(Search 세그먼트가 코드 기준 $144,265인데 실제로는 ~$537,507.89 —
+ * 약 $393K 갭). 사용자가 Deal Tracker에 수동으로 전체 딜을 재분류한 "Segment"
+ * 컬럼(원래 "Content Category"였던 H열을 개명 + 재입력)을 직접 만들었으므로,
+ * 이제 이 컬럼(`row.businessSegment`, `readDealTrackerRawRows_()` 참고)을
+ * 그대로 Source of Truth로 쓴다 — 키워드 매칭 폐기.
+ *
+ * @param {{businessSegment:string}} row
  * @return {string|null}  그룹(events/contact/content) 또는 분류 불가 시 null
  * ==========================================================
  */
 function classifyDealSegment_(row){
 
-  const segment = getBusinessSegment(
-    row.leadSourceDetail, row.leadSourceDetail, row.leadSource, row.sourceCategory
-  );
-
-  return deriveTargetGroup_(segment);
+  return deriveTargetGroup_(row.businessSegment);
 
 }
 
@@ -1380,7 +1585,7 @@ function classifyDealSegment_(row){
  * 없음) — 분류 안 되는 딜은 조정 베이스(분모)엔 포함되지만 특정 그룹(분자)
  * 엔 배분되지 않는다(분류율은 로그로 확인 가능).
  *
- * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>} dealRows
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, businessSegment:string}>} dealRows
  * @return {Object}  group -> ratio (0~1)
  *
  * TEST
@@ -1448,32 +1653,24 @@ function computeDealShareRatiosFromDealRows_(dealRows){
  */
 function testClassifyDealSegment(){
 
-  const webinarMatch = classifyDealSegment_({
-    leadSource: "Paid Social", sourceCategory: "", leadSourceDetail: "Registered for webinar session"
-  });
-
-  const searchMatch = classifyDealSegment_({
-    leadSource: "Paid Search", sourceCategory: "Naver Search", leadSourceDetail: ""
-  });
-
-  const contentMatch = classifyDealSegment_({
-    leadSource: "Organic", sourceCategory: "", leadSourceDetail: "ebook-download-2025"
-  });
-
-  const noMatch = classifyDealSegment_({
-    leadSource: "", sourceCategory: "", leadSourceDetail: ""
-  });
+  const webinarMatch = classifyDealSegment_({ businessSegment: "Webinar" });
+  const searchMatch = classifyDealSegment_({ businessSegment: "Search" });
+  const contentMatch = classifyDealSegment_({ businessSegment: "Content" });
+  const noMatch = classifyDealSegment_({ businessSegment: "N/A" });
+  const otherMatch = classifyDealSegment_({ businessSegment: "Other" });
 
   const pass =
     webinarMatch === "events" &&
     searchMatch === "contact" &&
     contentMatch === "content" &&
-    noMatch === null;
+    noMatch === null &&
+    otherMatch === null;
 
-  Logger.log("Webinar(Lead Source Detail) 분류: " + webinarMatch + " (expected events)");
-  Logger.log("Search(Lead Source) 분류: " + searchMatch + " (expected contact)");
-  Logger.log("Content(ebook) 분류: " + contentMatch + " (expected content)");
-  Logger.log("전부 공백 → 분류 불가: " + noMatch + " (expected null)");
+  Logger.log("Webinar 분류: " + webinarMatch + " (expected events)");
+  Logger.log("Search 분류: " + searchMatch + " (expected contact)");
+  Logger.log("Content 분류: " + contentMatch + " (expected content)");
+  Logger.log("N/A → 분류 불가: " + noMatch + " (expected null)");
+  Logger.log("Other → 분류 불가: " + otherMatch + " (expected null)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1483,15 +1680,15 @@ function testComputeDealShareRatiosFromDealRows(){
 
   const dealRows = [
     // 코호트1 (closeFY===createdFY===26) — Deal Share 계산에 포함되는 것들
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid search", sourceCategory: "", leadSourceDetail: "" },
-    { closeFY: 26, createdFY: 26, revenue: 200, leadSource: "organic", sourceCategory: "", leadSourceDetail: "ebook-download" },
-    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", sourceCategory: "", leadSourceDetail: "" }, // 분류 안 됨
-    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", sourceCategory: "", leadSourceDetail: "" }, // 제외 대상
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", businessSegment: "Webinar" },
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid search", businessSegment: "Search" },
+    { closeFY: 26, createdFY: 26, revenue: 200, leadSource: "organic", businessSegment: "Content" },
+    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", businessSegment: "Other" }, // 분류 안 됨
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", businessSegment: "Other" }, // 제외 대상
     // 코호트2 (closeFY=26이지만 createdFY=25) — Deal Share 계산에서 완전 제외돼야 함
-    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "webinar", businessSegment: "Webinar" },
     // closeFY가 타겟 FY(26)가 아님 — 제외
-    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" }
+    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", businessSegment: "Webinar" }
   ];
 
   const result = computeDealShareRatiosFromDealRows_(dealRows);
@@ -1523,7 +1720,7 @@ function testComputeDealShareRatiosFromDealRows(){
  * 분류 안 되는 딜(classifyDealSegment_()가 null)은 어느 그룹에도 배분하지
  * 않는다(그룹별 Revenue라 분모 개념이 없어 Deal Share처럼 별도 베이스 집계 불필요).
  *
- * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string}>} dealRows
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, businessSegment:string}>} dealRows
  * @return {Object}  group -> {cohort1Revenue, cohort2Revenue}
  * ==========================================================
  */
@@ -1578,15 +1775,15 @@ function testComputeDealCohortsFromDealRows(){
 
   const dealRows = [
     // 코호트1: closeFY===createdFY===26
-    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "webinar", businessSegment: "Webinar" },
     // 코호트2: closeFY===26이지만 createdFY===24(오래된 리드가 이번 FY 클로징)
-    { closeFY: 26, createdFY: 24, revenue: 300, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 26, createdFY: 24, revenue: 300, leadSource: "webinar", businessSegment: "Webinar" },
     // 제외 대상(Upsell)
-    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", sourceCategory: "", leadSourceDetail: "" },
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell", businessSegment: "Other" },
     // closeFY가 타겟 FY 아님 — 전부 제외
-    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", sourceCategory: "", leadSourceDetail: "registered for webinar" },
+    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "webinar", businessSegment: "Webinar" },
     // 분류 불가 — 그룹 배분에서 제외
-    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", sourceCategory: "", leadSourceDetail: "" }
+    { closeFY: 26, createdFY: 26, revenue: 50, leadSource: "organic", businessSegment: "Other" }
   ];
 
   const result = computeDealCohortsFromDealRows_(dealRows);

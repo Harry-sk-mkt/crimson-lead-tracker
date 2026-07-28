@@ -7,6 +7,17 @@ Salesforce export가 weekly라서 실무 시트와 싱크가 어긋나는 문제
 
 향후 모든 리포트(Acquisition, Conversion, Dashboard, Weekly Metrics)는 `Leads_Master`가 아닌 `Leads_OPS`를 읽어야 한다.
 
+> ⚠️ **2트랙 아키텍처 예외 (2026-07-28 추가, CLAUDE.md #7)**: 위 원칙은 **리드~세일즈
+> 액티비티 레이어**(New Leads/New P1/SAL/IC Request/IC Booked/IC Complete)에 한정된다.
+> **Opportunity/Revenue 레이어**(`#Deals`/`Revenue`)는 `Leads_OPS`가 아니라 **Deal
+> Tracker**(`[KOR] Deal Tracking`)를 Source of Truth로 삼는다 — `Leads_OPS` 개별 리드
+> 매칭이 상담 후 학부모 이메일 변경으로 구조적으로 신뢰 불가하다는 게 확인됐기 때문
+> (Target_REP 개발 중 발견). 적용 대상: ACQ_REP(Revenue), Events_OPS/BOFU_OPS/
+> Content_OPS(`#Deals`/`Revenue`), Target_REP(전체 Revenue/딜 비중). **예외의 예외**:
+> `NewP1_REP`의 Won/Revenue(리드 단위 코호트 지표)와 `Search_OPS`의 `#Deals`/`Revenue`
+> (raw UTM 그레인이 Deal Tracker의 프로그램 단위 매칭 필드와 안 맞음)는 구조적 이유로
+> 그대로 `Leads_OPS` 기준 유지. 상세: `docs/Changelog.md` 2026-07-28.
+
 `Leads_OPS`는 레거시였던 "Operational Sheets(Lead Tracker/SAL/IC/FTA)" 개념을 대체하는 현재 운영 레이어다.
 
 ## Data Flow
@@ -112,8 +123,8 @@ Duplicate Email
 | Total IC Requests | System (mergeOPS()가 자동 계산, 직접 편집 금지) |
 | IC Booked Date | Salesforce |
 | IC Completed Date | Salesforce |
-| Opportunity Won Date | Salesforce |
-| Revenue | Salesforce |
+| Opportunity Won Date | Salesforce (2026-07-28부터 ACQ_REP/Events/BOFU/Content Revenue의 소스 아님 — Deal Tracker로 대체, 위 2트랙 예외 참고. NewP1_REP/Search_OPS는 여전히 참조) |
+| Revenue | Salesforce (위와 동일) |
 | Revenue Actual | Marketing |
 | Notes | Marketing |
 
