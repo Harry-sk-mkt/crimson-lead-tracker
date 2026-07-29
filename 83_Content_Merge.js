@@ -13,7 +13,15 @@
  * 53_Events_Merge.js 정의를 재사용.
  *
  * Version
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-07-29)
+ * - compareByStartDateBlankFirstContent_() → compareByStartDateBlankLastContent_()
+ *   로 교체 — 빈 Start Date를 최상단이 아닌 최하단으로(전체 OPS 통일,
+ *   사용자 확정 — 73_Search_Merge.js 참고). 테스트 함수명 끝 "_"도 같이 제거.
  * v1.0.0
+ * - 최초 구현.
  * ==========================================================
  */
 
@@ -73,7 +81,7 @@ function mergeContentOPS_(existingOps, engineMap) {
 
   });
 
-  rowObjects.sort(compareByStartDateBlankFirstContent_);
+  rowObjects.sort(compareByStartDateBlankLastContent_);
 
   const rows = rowObjects.map(function (row) {
     return CONTENT.HEADER.map(function (col) { return row[col]; });
@@ -150,13 +158,17 @@ function applyContentDerivedDateColumns_(row) {
 
 /**
  * ==========================================================
- * Compare Rows By Start Date (빈 날짜 최상단, 나머지는 내림차순)
+ * Compare Rows By Start Date (빈 날짜 최하단, 나머지는 내림차순 — 2026-07-29)
+ *
+ * WHY
+ * 빈 날짜를 최상단 대신 최하단으로 변경(전체 OPS 통일, 사용자 확정 —
+ * 73_Search_Merge.js 참고).
  *
  * TEST
- * testCompareByStartDateBlankFirstContent_ 참고
+ * testCompareByStartDateBlankLastContent 참고
  * ==========================================================
  */
-function compareByStartDateBlankFirstContent_(a, b) {
+function compareByStartDateBlankLastContent_(a, b) {
 
   const dateA = a["Start Date"];
   const dateB = b["Start Date"];
@@ -165,8 +177,8 @@ function compareByStartDateBlankFirstContent_(a, b) {
   const validB = dateB instanceof Date && !isNaN(dateB.getTime());
 
   if (!validA && !validB) return 0;
-  if (!validA) return -1;
-  if (!validB) return 1;
+  if (!validA) return 1;
+  if (!validB) return -1;
 
   return dateB.getTime() - dateA.getTime();
 
@@ -175,10 +187,10 @@ function compareByStartDateBlankFirstContent_(a, b) {
 
 /**
  * ==========================================================
- * TEST — compareByStartDateBlankFirstContent_()
+ * TEST — compareByStartDateBlankLastContent_()
  * ==========================================================
  */
-function testCompareByStartDateBlankFirstContent_() {
+function testCompareByStartDateBlankLastContent() {
 
   const rows = [
     { "Lead Source Detail": "old", "Start Date": new Date(2026, 0, 1) },
@@ -187,13 +199,13 @@ function testCompareByStartDateBlankFirstContent_() {
     { "Lead Source Detail": "blank2", "Start Date": "" }
   ];
 
-  rows.sort(compareByStartDateBlankFirstContent_);
+  rows.sort(compareByStartDateBlankLastContent_);
 
   const order = rows.map(function (r) { return r["Lead Source Detail"]; });
 
   const pass =
-    order[0] === "blank1" && order[1] === "blank2" &&
-    order[2] === "new" && order[3] === "old";
+    order[0] === "new" && order[1] === "old" &&
+    order[2] === "blank1" && order[3] === "blank2";
 
   Logger.log("Order: " + JSON.stringify(order));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");

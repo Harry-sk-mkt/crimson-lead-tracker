@@ -9,9 +9,13 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-29)
+ * - compareByEventDateBlankFirst_() → compareByEventDateBlankLast_()로
+ *   교체 — 빈 Event Date를 최상단이 아닌 최하단으로(전체 OPS 통일, 사용자
+ *   확정 — 73_Search_Merge.js 참고). 테스트 함수명 끝 "_"도 같이 제거.
  * v1.6.0 (2026-07-24)
  * - stripRegistrationFormSuffix_()를 51_Events_Engine.js로 이관 — 매칭
  *   키 추출 단계(Engine)에서 직접 적용하도록 근본 수정됨에 따라, 여기서는
@@ -27,7 +31,7 @@
  *   비어있으면 parseProgramTypeAndDate_()(51_Events_Engine.js)로 자동
  *   추출해 채움. 신규/기존 행 모두에 적용(값이 있으면 보존). FY/Month는
  *   기존 applyDerivedDateColumns_()가 Event Date로부터 자동 파생하므로
- *   별도 로직 불필요 — 정렬(compareByEventDateBlankFirst_)도 그대로 재사용.
+ *   별도 로직 불필요 — 정렬(compareByEventDateBlankLast_)도 그대로 재사용.
  * v1.3.0 (2026-07-24)
  * - applyGroup5Derived_() 컬럼 참조를 리네임된 이름("All Registered"→
  *   "SF Reg.", "Reg."→"Mkt Reg.", "NL P1"→"SF NLP1s")으로 갱신
@@ -121,7 +125,7 @@ function mergeEventsOPS_(existingOps, engineMap) {
 
   });
 
-  rowObjects.sort(compareByEventDateBlankFirst_);
+  rowObjects.sort(compareByEventDateBlankLast_);
 
   const rows = rowObjects.map(function (row) {
     return EVENTS.HEADER.map(function (col) { return row[col]; });
@@ -373,18 +377,20 @@ function applyDerivedDateColumns_(row) {
 
 /**
  * ==========================================================
- * Compare Rows By Event Date (빈 날짜 최상단, 나머지는 내림차순)
+ * Compare Rows By Event Date (빈 날짜 최하단, 나머지는 내림차순 — 2026-07-29)
  *
  * WHY
- * "빈 날짜 신규 행은 최상단" 요구사항은 스프레드시트 기본 정렬
- * 동작(빈 값은 항상 맨 뒤)과 반대라, sortSheetByDate()(시트 레벨
- * Range.sort) 대신 쓰기 전 JS 배열 단계에서 직접 정렬한다.
+ * 원래 "빈 날짜 신규 행은 최상단" 요구사항으로 설계됐으나(스프레드시트
+ * 기본 정렬은 빈 값이 항상 맨 뒤라 sortSheetByDate() 대신 쓰기 전 JS
+ * 배열 단계에서 직접 정렬), Search_OPS에서 신규 키 대거 유입으로 빈
+ * 날짜가 최상단을 차지해 실데이터 있는 캠페인들을 밀어내는 문제 발견
+ * (사용자 확인) — 빈 날짜를 최하단으로 변경, 전체 OPS 통일(사용자 확정).
  *
  * TEST
- * testCompareByEventDateBlankFirst_ 참고
+ * testCompareByEventDateBlankLast 참고
  * ==========================================================
  */
-function compareByEventDateBlankFirst_(a, b) {
+function compareByEventDateBlankLast_(a, b) {
 
   const dateA = a["Event Date"];
   const dateB = b["Event Date"];
@@ -393,8 +399,8 @@ function compareByEventDateBlankFirst_(a, b) {
   const validB = dateB instanceof Date && !isNaN(dateB.getTime());
 
   if (!validA && !validB) return 0;
-  if (!validA) return -1;
-  if (!validB) return 1;
+  if (!validA) return 1;
+  if (!validB) return -1;
 
   return dateB.getTime() - dateA.getTime();
 
@@ -403,10 +409,10 @@ function compareByEventDateBlankFirst_(a, b) {
 
 /**
  * ==========================================================
- * TEST — compareByEventDateBlankFirst_()
+ * TEST — compareByEventDateBlankLast_()
  * ==========================================================
  */
-function testCompareByEventDateBlankFirst_() {
+function testCompareByEventDateBlankLast() {
 
   const rows = [
     { "Lead Source Detail": "old", "Event Date": new Date(2026, 0, 1) },
@@ -415,13 +421,13 @@ function testCompareByEventDateBlankFirst_() {
     { "Lead Source Detail": "blank2", "Event Date": "" }
   ];
 
-  rows.sort(compareByEventDateBlankFirst_);
+  rows.sort(compareByEventDateBlankLast_);
 
   const order = rows.map(function (r) { return r["Lead Source Detail"]; });
 
   const pass =
-    order[0] === "blank1" && order[1] === "blank2" &&
-    order[2] === "new" && order[3] === "old";
+    order[0] === "new" && order[1] === "old" &&
+    order[2] === "blank1" && order[3] === "blank2";
 
   Logger.log("Order: " + JSON.stringify(order));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");

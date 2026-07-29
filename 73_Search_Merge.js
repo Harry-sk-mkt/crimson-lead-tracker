@@ -12,7 +12,21 @@
  * 53_Events_Merge.js 정의를 재사용.
  *
  * Version
+ * v1.2.0
+ *
+ * Change Log
+ * v1.2.0 (2026-07-29)
+ * - compareByStartDateBlankFirstSearch_() → compareByStartDateBlankLastSearch_()
+ *   로 교체 — 빈 Start Date를 최상단이 아닌 최하단으로(사용자 확인: 이번
+ *   세션 신규 키들이 Start Date 미기입이라 최상단을 다 차지하던 문제).
+ *   BOFU/Events/Content/Leads_OPS도 동일하게 통일. 테스트 함수명 끝 "_"도
+ *   같이 제거(Run 드롭다운 노출).
+ * v1.1.0 (2026-07-29)
+ * - applySearchNewRowDefaults_()의 Channel 기본값을 무조건 "Meta"에서
+ *   resolveSearchChannelFromKey_()(71_Search_Engine.js) 기반으로 교체 —
+ *   신규 Naver SA/Google SA Program 키는 실제 채널로 자동 설정(사용자 요청).
  * v1.0.0
+ * - 최초 구현.
  * ==========================================================
  */
 
@@ -72,7 +86,7 @@ function mergeSearchOPS_(existingOps, engineMap) {
 
   });
 
-  rowObjects.sort(compareByStartDateBlankFirstSearch_);
+  rowObjects.sort(compareByStartDateBlankLastSearch_);
 
   const rows = rowObjects.map(function (row) {
     return SEARCH.HEADER.map(function (col) { return row[col]; });
@@ -86,6 +100,11 @@ function mergeSearchOPS_(existingOps, engineMap) {
 /**
  * ==========================================================
  * Apply Search New Row Defaults (신규 발견 Lead Source Detail)
+ *
+ * 2026-07-29: Channel 기본값을 무조건 "Meta"로 두던 걸 resolveSearchChannel
+ * FromKey_()(71_Search_Engine.js)로 교체 — key가 Naver/Google SA Program명
+ * 또는 "Google UTM" placeholder면 실제 채널(Naver Search/Google Search)로
+ * 설정, 그 외는 기존처럼 "Meta" 유지(사용자 확정).
  * ==========================================================
  */
 function applySearchNewRowDefaults_(row, key) {
@@ -95,7 +114,7 @@ function applySearchNewRowDefaults_(row, key) {
   SEARCH.GROUP_3_MANUAL.forEach(function (col) { row[col] = ""; });
 
   row["Marketo Campaign name"] = key;
-  row["Channel"] = SEARCH.CHANNEL_DEFAULT;
+  row["Channel"] = resolveSearchChannelFromKey_(key);
 
 }
 
@@ -149,13 +168,20 @@ function applySearchDerivedDateColumns_(row) {
 
 /**
  * ==========================================================
- * Compare Rows By Start Date (빈 날짜 최상단, 나머지는 내림차순)
+ * Compare Rows By Start Date (빈 날짜 최하단, 나머지는 내림차순 — 2026-07-29)
+ *
+ * WHY
+ * 원래 빈 날짜가 최상단이었으나(Events 최초 패턴 그대로 상속), 이번 세션에
+ * 신규 생성된 키(Naver SA/Google UTM/Organic Search 등 Start Date 미기입)
+ * 가 대거 최상단을 차지해 실제 데이터 있는 캠페인들을 밀어내는 문제 발견
+ * (사용자 확인) — 빈 날짜를 최하단으로 이동. 다른 OPS(BOFU/Events/Content/
+ * Leads)도 동일하게 통일(사용자 확정, 일관성).
  *
  * TEST
- * testCompareByStartDateBlankFirstSearch_ 참고
+ * testCompareByStartDateBlankLastSearch 참고
  * ==========================================================
  */
-function compareByStartDateBlankFirstSearch_(a, b) {
+function compareByStartDateBlankLastSearch_(a, b) {
 
   const dateA = a["Start Date"];
   const dateB = b["Start Date"];
@@ -164,8 +190,8 @@ function compareByStartDateBlankFirstSearch_(a, b) {
   const validB = dateB instanceof Date && !isNaN(dateB.getTime());
 
   if (!validA && !validB) return 0;
-  if (!validA) return -1;
-  if (!validB) return 1;
+  if (!validA) return 1;
+  if (!validB) return -1;
 
   return dateB.getTime() - dateA.getTime();
 
@@ -174,10 +200,10 @@ function compareByStartDateBlankFirstSearch_(a, b) {
 
 /**
  * ==========================================================
- * TEST — compareByStartDateBlankFirstSearch_()
+ * TEST — compareByStartDateBlankLastSearch_()
  * ==========================================================
  */
-function testCompareByStartDateBlankFirstSearch_() {
+function testCompareByStartDateBlankLastSearch() {
 
   const rows = [
     { "Lead Source Detail": "old", "Start Date": new Date(2026, 0, 1) },
@@ -186,13 +212,13 @@ function testCompareByStartDateBlankFirstSearch_() {
     { "Lead Source Detail": "blank2", "Start Date": "" }
   ];
 
-  rows.sort(compareByStartDateBlankFirstSearch_);
+  rows.sort(compareByStartDateBlankLastSearch_);
 
   const order = rows.map(function (r) { return r["Lead Source Detail"]; });
 
   const pass =
-    order[0] === "blank1" && order[1] === "blank2" &&
-    order[2] === "new" && order[3] === "old";
+    order[0] === "new" && order[1] === "old" &&
+    order[2] === "blank1" && order[3] === "blank2";
 
   Logger.log("Order: " + JSON.stringify(order));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");

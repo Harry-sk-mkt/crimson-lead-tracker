@@ -16,6 +16,7 @@ Google Apps Script 기반 마케팅 리드 ETL 파이프라인 프로젝트입�
   - 이 함수가 **왜 필요한지**(WHY) 함수 상단 주석에 명시
   - 구현 완료 후 **기대값과 실제값을 비교 확인할 수 있는 테스트 함수**(`testXXXX()` 형태, `docs/NamingConvention.md` 참고)를 같은 파일 또는 관련 파일에 함께 추가
   - 테스트가 통과하기 전까지 해당 함수를 "완료"로 간주하지 않는다 (`docs/EngineeringConstitutionalRULES.md` Article 3, Article 6 참고)
+- **Test/Run 함수명은 절대 `_`로 끝내지 않는다**: Apps Script는 이름 끝에 `_`가 붙은 함수를 private로 간주해 편집기 Run 드롭다운에서 숨긴다(`docs/apps-script-gotchas.md` #2). `testXXXX()`처럼 사용자가 Apps Script 편집기에서 직접 Run 해야 하는 함수(테스트 함수, `runXXXX()` 진입점)는 이름 끝에 `_`를 붙이면 안 된다 — 내부 헬퍼 함수(`xxxx_()`)와 헷갈려서 반복적으로 실수가 나온 항목이므로 새 테스트/진입점 함수를 작성할 때마다 이름 끝을 확인한다.
 - **File Versioning**: 파일 내용을 수정할 때마다(새 함수 추가/기존 함수 수정 등) 파일 상단 헤더의 `Version`/`Change Log`를 함께 갱신한다. 자세한 형식: `docs/NamingConvention.md` "File Versioning" 섹션.
 - **Manual Execution Instructions**: `clasp run-function` 미도입 상태라 Apps Script 함수는 사용자가 Apps Script 편집기에서 직접 Run 해야 한다. 사용자에게 함수 실행을 요청할 때는 **반드시 파일명 + 함수명을 함께 명시**한다 (예: "`09_MTAFunnelSync.js`의 `runSyncMTAFunnelToOPS()` 실행해주세요" — 함수명만 말하지 않는다).
 - **Session-End Auto Log & Commit**: 사용자가 "오늘은 여기까지" 류의 종료멘트를 하면, 별도 요청 없이 그 세션에서 실제로 변경된 내용을 `docs/Changelog.md`에 날짜별 항목으로 기록하고 커밋까지 진행한다 (단, 실제 파일 변경이 있었을 때만 — 순수 Q&A만 오간 세션은 커밋할 게 없으므로 skip). Push는 별도로 명시 요청받았을 때만 한다. (배경: 2026-07-22 env 전환 과정에서 완료된 구현 사항이 문서에 반영되지 않고 누락된 사고가 있었음 — 재발 방지 목적, 2026-07-24 도입.)

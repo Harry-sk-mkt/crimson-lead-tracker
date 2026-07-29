@@ -9,14 +9,18 @@
  * mergeEventsOPS_() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 +
  * 전체 재작성).
  *
- * ⚠️ divideGuard_()/compareByEventDateBlankFirst_() 같은 범용 헬퍼는
+ * ⚠️ divideGuard_()/compareByEventDateBlankLast_() 같은 범용 헬퍼는
  * 재정의하지 않고 53_Events_Merge.js 정의를 재사용 (divideGuard_는
  * 그대로, 정렬 비교 함수는 "Start Date" 기준이라 이름이 달라 새로 작성).
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-07-29)
+ * - compareByStartDateBlankFirst_() → compareByStartDateBlankLast_()로 교체
+ *   — 빈 Start Date를 최상단이 아닌 최하단으로(전체 OPS 통일, 사용자 확정
+ *   — 73_Search_Merge.js 참고). 테스트 함수명 끝 "_"도 같이 제거.
  * v1.1.0 (2026-07-24)
  * - applyBOFUGroup5Derived_() 필드명 갱신: "Amount spent"→"Spent",
  *   "Click to Lead CvR"→"CvR", "Cost per result" 계산 제거
@@ -82,7 +86,7 @@ function mergeBOFUOPS_(existingOps, engineMap) {
 
   });
 
-  rowObjects.sort(compareByStartDateBlankFirst_);
+  rowObjects.sort(compareByStartDateBlankLast_);
 
   const rows = rowObjects.map(function (row) {
     return BOFU.HEADER.map(function (col) { return row[col]; });
@@ -180,18 +184,21 @@ function applyBOFUDerivedDateColumns_(row) {
 
 /**
  * ==========================================================
- * Compare Rows By Start Date (빈 날짜 최상단, 나머지는 내림차순)
+ * Compare Rows By Start Date (빈 날짜 최하단, 나머지는 내림차순 — 2026-07-29)
  *
  * WHY
- * compareByEventDateBlankFirst_()(53_Events_Merge.js)와 동일 로직,
+ * compareByEventDateBlankLast_()(53_Events_Merge.js)와 동일 로직,
  * 비교 대상 필드만 "Event Date" → "Start Date"로 다름 — 필드명이
  * 하드코딩되어 있어 함수 자체는 재사용 불가, 새로 작성.
+ * 2026-07-29: 빈 날짜를 최상단 대신 최하단으로 변경(Search_OPS에서 신규
+ * 키 대거 유입으로 빈 Start Date가 최상단을 차지하는 문제 발견 후 전체
+ * OPS 통일, 사용자 확정 — 73_Search_Merge.js 참고).
  *
  * TEST
- * testCompareByStartDateBlankFirst_ 참고
+ * testCompareByStartDateBlankLast 참고
  * ==========================================================
  */
-function compareByStartDateBlankFirst_(a, b) {
+function compareByStartDateBlankLast_(a, b) {
 
   const dateA = a["Start Date"];
   const dateB = b["Start Date"];
@@ -200,8 +207,8 @@ function compareByStartDateBlankFirst_(a, b) {
   const validB = dateB instanceof Date && !isNaN(dateB.getTime());
 
   if (!validA && !validB) return 0;
-  if (!validA) return -1;
-  if (!validB) return 1;
+  if (!validA) return 1;
+  if (!validB) return -1;
 
   return dateB.getTime() - dateA.getTime();
 
@@ -210,10 +217,10 @@ function compareByStartDateBlankFirst_(a, b) {
 
 /**
  * ==========================================================
- * TEST — compareByStartDateBlankFirst_()
+ * TEST — compareByStartDateBlankLast_()
  * ==========================================================
  */
-function testCompareByStartDateBlankFirst_() {
+function testCompareByStartDateBlankLast() {
 
   const rows = [
     { "Lead Source Detail": "old", "Start Date": new Date(2026, 0, 1) },
@@ -222,13 +229,13 @@ function testCompareByStartDateBlankFirst_() {
     { "Lead Source Detail": "blank2", "Start Date": "" }
   ];
 
-  rows.sort(compareByStartDateBlankFirst_);
+  rows.sort(compareByStartDateBlankLast_);
 
   const order = rows.map(function (r) { return r["Lead Source Detail"]; });
 
   const pass =
-    order[0] === "blank1" && order[1] === "blank2" &&
-    order[2] === "new" && order[3] === "old";
+    order[0] === "new" && order[1] === "old" &&
+    order[2] === "blank1" && order[3] === "blank2";
 
   Logger.log("Order: " + JSON.stringify(order));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");

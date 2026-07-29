@@ -23,9 +23,89 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.7.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-07-29)
+ * - runClearSearchOPSMetaChannel() 추가(수동 실행용, 1회성) — 70_Search_
+ *   Config.js v1.3.0의 CHANNEL_DEFAULT 공란화에 맞춰 Search_OPS에 이미
+ *   있는 "Meta" 값을 일괄 공란 처리(신규 행에만 적용되는 기본값 변경으로는
+ *   기존 행이 안 바뀌므로).
+ * v1.13.0 (2026-07-29)
+ * - resolveSearchEngineKey_()에 우선순위 0/0.5 추가: SEARCH_UTM_TO_PROGRAM_
+ *   OVERRIDE(raw UTM→Marketo Program 정확 매핑, detail이 비어있는 터치라
+ *   detail 기반 매칭이 안 걸리던 Naver SA 리드 7건 구제) + SEARCH_MERGE_
+ *   INTO_ORGANIC_SEARCH("chatgpt.com"/"website-consultation-booking" 같은
+ *   비정보성 UTM을 "Organic Search" 버킷으로 강제 병합). 사용자가 Search_OPS
+ *   전체를 육안으로 재검토해 확정. 테스트 케이스 추가.
+ * v1.12.0 (2026-07-29)
+ * - resolveSearchEngineKey_() 재설계(Marketo Program 우선) + 신규
+ *   resolveSearchChannelFromKey_() 추가 — Search_OPS에 raw UTM 대신 Naver
+ *   SA/Google SA Marketo Program명을 표시하고 Channel도 Naver Search/
+ *   Google Search로 구분(사용자 요청, "보여지는게 Marketo Program 이름이
+ *   아니야" + "채널도 지금 전부 Meta인데 구분해야"). Lead Source Detail에
+ *   "Naver SA"/"Google SA" 포함 시 그 값을 그대로 키로 사용 — 문자열 패턴
+ *   매칭이라 향후 신규 프로그램도 하드코딩 없이 자동 포착(사용자 확인:
+ *   어제부터 개별 프로그램으로 분류 시작, 향후 리드는 실제 Program명을
+ *   달고 들어옴). raw UTM도 없고 Lead Source Category="Google Search Ads"
+ *   면 "Google UTM" placeholder(과거 데이터용, 전용 프로그램이 없었던 시절
+ *   대응). "2025-12-KOR-Naver SA & Google Ivy League"는 이름에 "Naver SA"가
+ *   있지만 실제 채널은 Google이라고 사용자가 확인 — 예외 처리. 신규 테스트:
+ *   testResolveSearchChannelFromKey(), testResolveSearchEngineKey() 케이스
+ *   확장. aggregateSearchMTATouchRecords_/aggregateSearchLeadsRecords_ 호출
+ *   시그니처 변경(campaign/leadSource 2개 → campaign/leadSource/detail/
+ *   category 4개).
+ * v1.11.1 (2026-07-29)
+ * - testResolveSearchEngineKey_() → testResolveSearchEngineKey()로 리네임
+ *   (끝에 "_" 있으면 Apps Script Run 드롭다운에 안 보이는 문제,
+ *   docs/apps-script-gotchas.md #2 — 사용자가 즉시 발견해 수정).
+ * v1.11.0 (2026-07-29)
+ * - resolveSearchEngineKey_() 신규 — aggregateSearchMTATouchRecords_/
+ *   aggregateSearchLeadsRecords_가 raw UTM Campaign이 비어있으면 그냥
+ *   `if (!key) return`으로 행을 스킵해버려, Organic Search 542건(대부분
+ *   campaign/detail 둘 다 없음, Revenue $4M+ 포함)이 Search_Engine/
+ *   Search_OPS에 전혀 집계되지 않고 조용히 누락되고 있었음(사용자 발견,
+ *   runInvestigateSearchBlankSignalRows() 실측 중 인지) — campaign이
+ *   비어있으면 First Lead Source 값(예: "Organic Search"/"Paid Search")을
+ *   임의 Marketo Campaign name으로 대체 사용하도록 수정(사용자 확정: 향후
+ *   유사 신호-없음 케이스도 leadSource 값 그대로 자동 버킷화). 신규 테스트:
+ *   testResolveSearchEngineKey().
+ * v1.10.1 (2026-07-29)
+ * - runInvestigateSearchGroupCLeadSourceCategory()에 UTM Campaign 유무
+ *   집계(campaignPresentCount/campaignBlankCount) 추가 — 사용자 질문("이
+ *   그룹이 다 Lead Source Detail/UTM이 없는 거지?") 확인용. Lead Source
+ *   Detail은 이미 있음(범용 "Contact Us form" 값이라 문제)을 전제로, UTM
+ *   Campaign은 카테고리별로 있음/없음 비율이 얼마나 되는지 로그에 추가.
+ * v1.10.0 (2026-07-29)
+ * - runInvestigateSearchGroupCLeadSourceCategory() 추가(1회성 진단, 수동
+ *   실행용). 16_TransformHelper.js v1.9.0의 Content/nurture 재분류 적용 후
+ *   여전히 Search로 남는 (c) 그룹(범용 "Contact Us form" 등 캐치올 폼, 신호
+ *   없음)에 대해 사용자 질문(Lead Source Category에 "Naver Search"/"Google
+ *   Search"가 있는지) 확인 — First Lead Source Category(Leads_Master)
+ *   /Lead Source Category(MTA_Master)별 분포 + Revenue>0 여부 집계. 코드
+ *   변경 없음, 순수 진단.
+ * v1.9.0 (2026-07-29)
+ * - runInvestigateSearchContentMisroute()/runInvestigateSearchBlankSignalRows()
+ *   추가(1회성 진단, 수동 실행용). runInvestigateSearchProgramGrouping() 결과를
+ *   보고 사용자가 지시한 3가지 확인 사항 대응: (1) "Crimson Education Contact
+ *   Us form" 등 범용 캐치올 폼 때문에 nurture 이메일/ebook 캠페인까지 Search로
+ *   뭉개지는 문제 — Content 키워드 기존 매칭분(순서만 바꾸면 해결)과
+ *   "nurture" 신규 키워드 후보를 분리해서 진단, (2) 파트너십 프로그램은
+ *   현재도 Other로 분류 중인 것 확인(코드 변경 없음, 사용자 확인용), (3)
+ *   campaign/detail 둘 다 없는 Search 행(837건)의 First Lead Source 값 분포와
+ *   Revenue 발생 여부 확인. 전부 코드 변경 없음(getBusinessSegment() 등 기존
+ *   로직 그대로), 순수 진단.
+ * v1.8.0 (2026-07-29)
+ * - runInvestigateSearchProgramGrouping() 추가(1회성 진단, 수동 실행용).
+ *   Search를 raw UTM 그레인에서 Marketo Program(Lead Source Detail) 그레인
+ *   으로 전환하는 작업의 사전 조사 — 사용자가 Search_OPS에 search/sitelink가
+ *   아닌 raw UTM이 너무 많다고 재확인(2026-07-29)하면서 2026-07-24의 raw UTM
+ *   선택 결정을 재검토하기로 함. Business Segment=Search 행을 스캔해 (1)
+ *   Lead Source Detail이 있는 그룹은 Program명 -> 매핑되는 raw UTM Campaign
+ *   목록(건수 포함)을, (2) Lead Source Detail이 없는(직접 광고/상담폼) 행은
+ *   raw UTM Campaign만 별도로 나열 — 그룹핑 로직 설계 전 실데이터 패턴 파악
+ *   목적(사용자 지시). 코드 변경 없음(MATCH_FIELD/getBusinessSegment() 등
+ *   기존 로직 그대로), 순수 진단.
  * v1.7.0 (2026-07-28)
  * - runDeleteDeadSearchOPSRows() 추가(수동 실행용). runAuditSearchSegmentIssues()
  *   Part 1로 확인된 죽은 키 116건(전부 수동 컬럼 완전 공백 확인) 삭제 —
@@ -180,6 +260,185 @@ function testIsEffectiveSearchP1_() {
 
 /**
  * ==========================================================
+ * Search UTM → Marketo Program Override Map (2026-07-29)
+ *
+ * WHY
+ * Naver SA 프로그램으로 재분류된 리드 중 일부는 MTA 터치 자체엔 Lead
+ * Source Detail이 비어있어(같은 사람의 다른 터치에만 Program명이 찍힘)
+ * detail 기반 매칭(resolveSearchEngineKey_ 우선순위 1)이 안 걸림 —
+ * 사용자가 Search_OPS를 육안 검토해 "이 raw UTM은 사실 이 Program"이라고
+ * 직접 확인해준 매핑을 정확 매칭으로 반영.
+ * ==========================================================
+ */
+const SEARCH_UTM_TO_PROGRAM_OVERRIDE = {
+  "kr_core_2021-04-01_search-kr_tier1-college-specific_contact": "2025-12-KOR-Naver SA & Google Ivy League",
+  "kr_core_transfer-gap-year-kr": "2025-11-KOR-Naver SA Transfer and Gap Year",
+  "kr_core_2025-07-03_brand": "2025-07-KOR-Naver SA Brand",
+  "{kr_core_brand_contact}": "2025-07-KOR-Naver SA Brand",
+  "{kr_core_ecl-consult_contact}": "2025-07-KOR-Naver SA ECL",
+  "{kr_core_competitors_contact}": "2025-07-KOR-Naver SA Competitor",
+  "kr_core_study-abroad_contact": "2025-07-KOR-Naver SA Study Consultants US"
+};
+
+/**
+ * ==========================================================
+ * Search Non-Informative UTM → Organic Search Bucket (2026-07-29)
+ *
+ * WHY
+ * "chatgpt.com"(AI 검색 리퍼러 도메인이 UTM 자리에 그대로 들어온 것),
+ * "website-consultation-booking"(자체 웹사이트 상담 예약 폼) — 둘 다
+ * 실제 캠페인 슬러그가 아니라 raw UTM 자리에 우연히 들어간 비정보성
+ * 값이라, 개별 키로 남기지 말고 "Organic Search" 버킷으로 합치기로
+ * 사용자 확정.
+ * ==========================================================
+ */
+const SEARCH_MERGE_INTO_ORGANIC_SEARCH = ["chatgpt.com", "website-consultation-booking"];
+
+/**
+ * ==========================================================
+ * Resolve Search Engine Key (Marketo Program 우선, 2026-07-29 재설계)
+ *
+ * WHY
+ * 2026-07-29: Search를 raw UTM 그레인에서 부분적으로 프로그램화 — 사용자가
+ * Marketo에 Naver SA/Google SA 개별 프로그램을 신설(어제부터 개별 프로그램
+ * 으로 분류 시작, 향후 리드는 실제 Program명을 달고 들어옴). Lead Source
+ * Detail에 "Naver SA"/"Google SA"가 포함되면 raw UTM 대신 그 Program명을
+ * 그대로 키로 사용 — 문자열 패턴 매칭이라 향후 신규 프로그램도 하드코딩
+ * 없이 자동으로 잡힘.
+ *
+ * 우선순위:
+ * 0) raw UTM Campaign이 SEARCH_UTM_TO_PROGRAM_OVERRIDE에 있음 → 매핑된
+ *    Program명(사용자 육안 검토로 확정, detail이 비어있는 터치 구제)
+ * 0.5) raw UTM Campaign이 SEARCH_MERGE_INTO_ORGANIC_SEARCH에 있음(예:
+ *    "chatgpt.com") → "Organic Search" 버킷으로 강제 병합
+ * 1) Lead Source Detail에 "Naver SA"/"Google SA" 포함 → Program명 그대로
+ * 2) raw UTM Campaign 있음 → 기존처럼 그대로 사용(stripRegistrationFormSuffix_)
+ * 3) UTM도 없고 Lead Source Category="Google Search Ads" → "Google UTM"
+ *    placeholder(사용자 확정 — Google Search Ads는 전용 프로그램이 없던
+ *    과거 데이터용 임시 버킷)
+ * 4) 그 외 — First Lead Source 값으로 fallback(2026-07-29 최초 도입분,
+ *    "Organic Search"/"Paid Search" 등). raw UTM Campaign이 비어있는 Search
+ *    리드(예: campaign/detail 둘 다 없는 542건)가 기존엔 key가 빈 값이라
+ *    aggregateSearchMTATouchRecords_/aggregateSearchLeadsRecords_의
+ *    `if (!key) return;`에서 스킵돼 Search_Engine/Search_OPS에 전혀
+ *    집계되지 않고 있었음(사용자 발견, Revenue $4M+ 포함) — 이 fallback으로
+ *    해결.
+ * ==========================================================
+ */
+function resolveSearchEngineKey_(campaignRaw, leadSourceRaw, detailRaw, categoryRaw) {
+
+  const campaignLower = String(campaignRaw || "").trim().toLowerCase();
+
+  if (SEARCH_UTM_TO_PROGRAM_OVERRIDE[campaignLower]) {
+    return SEARCH_UTM_TO_PROGRAM_OVERRIDE[campaignLower];
+  }
+
+  if (SEARCH_MERGE_INTO_ORGANIC_SEARCH.indexOf(campaignLower) !== -1) {
+    return "Organic Search";
+  }
+
+  const detail = String(detailRaw || "").trim();
+  const detailLower = detail.toLowerCase();
+
+  if (detailLower.includes("naver sa") || detailLower.includes("google sa")) {
+    return detail;
+  }
+
+  const campaignKey = stripRegistrationFormSuffix_(campaignRaw);
+
+  if (campaignKey) return campaignKey;
+
+  const category = String(categoryRaw || "").trim().toLowerCase();
+
+  if (category === "google search ads") return "Google UTM";
+
+  return String(leadSourceRaw || "").trim();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveSearchEngineKey_()
+ * ==========================================================
+ */
+function testResolveSearchEngineKey() {
+
+  const pass =
+    resolveSearchEngineKey_("{KR_core_brand_contact}", "Organic Search", "2025-07-KOR-Naver SA Brand", "Naver Search Ads") === "2025-07-KOR-Naver SA Brand" &&
+    resolveSearchEngineKey_("search-kr_tier1-college-specific_contact", "Paid Search", "2025-12-KOR-Naver SA & Google Ivy League", "Naver Search Ads") === "2025-12-KOR-Naver SA & Google Ivy League" &&
+    resolveSearchEngineKey_("2025-07-KOR-Naver SA Brand", "Organic Search", "", "") === "2025-07-KOR-Naver SA Brand" &&
+    resolveSearchEngineKey_("", "Paid Search", "", "Google Search Ads") === "Google UTM" &&
+    resolveSearchEngineKey_("", "Organic Search", "", "") === "Organic Search" &&
+    resolveSearchEngineKey_(null, "Paid Search", "", "") === "Paid Search" &&
+    resolveSearchEngineKey_("", "", "", "") === "" &&
+
+    // 2026-07-29 추가 — UTM→Program override(detail 비어있는 터치 구제)
+    resolveSearchEngineKey_("KR_core_2025-07-03_brand", "Organic Search", "", "") === "2025-07-KOR-Naver SA Brand" &&
+    resolveSearchEngineKey_("{KR_core_ecl-consult_contact}", "", "", "") === "2025-07-KOR-Naver SA ECL" &&
+    resolveSearchEngineKey_("KR_core_transfer-gap-year-kr", "", "", "") === "2025-11-KOR-Naver SA Transfer and Gap Year" &&
+
+    // 2026-07-29 추가 — 비정보성 UTM → Organic Search 병합
+    resolveSearchEngineKey_("chatgpt.com", "", "", "") === "Organic Search" &&
+    resolveSearchEngineKey_("website-consultation-booking", "Organic Search", "", "") === "Organic Search";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Search Channel From Key (2026-07-29)
+ *
+ * WHY
+ * resolveSearchEngineKey_()가 만든 키(Naver/Google SA Program명 또는
+ * "Google UTM" placeholder)로부터 Channel을 결정 — 신규 Search_OPS 행
+ * 생성 시(73_Search_Merge.js applySearchNewRowDefaults_) 무조건 "Meta"
+ * 기본값을 쓰던 걸 실제 채널로 교체(사용자 확정). "2025-12-KOR-Naver SA &
+ * Google Ivy League"는 이름에 "Naver SA"가 들어있지만 실제로는 Google
+ * 채널이라고 사용자가 확인(예외 처리).
+ * ==========================================================
+ */
+function resolveSearchChannelFromKey_(key) {
+
+  const k = String(key || "").trim().toLowerCase();
+
+  if (!k) return SEARCH.CHANNEL_DEFAULT;
+
+  if (k === "2025-12-kor-naver sa & google ivy league") return "Google Search";
+  if (k.includes("google sa")) return "Google Search";
+  if (k.includes("naver sa")) return "Naver Search";
+  if (k === "google utm") return "Google Search";
+
+  return SEARCH.CHANNEL_DEFAULT;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveSearchChannelFromKey_()
+ * ==========================================================
+ */
+function testResolveSearchChannelFromKey() {
+
+  const pass =
+    resolveSearchChannelFromKey_("2025-07-KOR-Naver SA Brand") === "Naver Search" &&
+    resolveSearchChannelFromKey_("2025-11-KOR-Naver SA Transfer and Gap Year") === "Naver Search" &&
+    resolveSearchChannelFromKey_("2025-12-KOR-Naver SA & Google Ivy League") === "Google Search" &&
+    resolveSearchChannelFromKey_("Google UTM") === "Google Search" &&
+    resolveSearchChannelFromKey_("KR_core_2021-04-01_search-kr_tier1-college-specific_contact") === SEARCH.CHANNEL_DEFAULT &&
+    resolveSearchChannelFromKey_("Organic Search") === SEARCH.CHANNEL_DEFAULT &&
+    resolveSearchChannelFromKey_("") === SEARCH.CHANNEL_DEFAULT;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Search MTA Aggregates (SF Reg. / SF P1s)
  *
  * TEST
@@ -214,7 +473,9 @@ function aggregateSearchMTATouchRecords_(records, allRegistered, p1All) {
 
     if (SEARCH.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripRegistrationFormSuffix_(r[SEARCH.MATCH_FIELD.MTA]);
+    const key = resolveSearchEngineKey_(
+      r[SEARCH.MATCH_FIELD.MTA], r["First Lead Source"], r["Lead Source Detail"], r["Lead Source Category"]
+    );
 
     if (!key) return;
 
@@ -295,7 +556,9 @@ function aggregateSearchLeadsRecords_(records, newRegistered, nlP1, leadIdToKey)
 
     if (SEARCH.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripRegistrationFormSuffix_(r[SEARCH.MATCH_FIELD.LEADS]);
+    const key = resolveSearchEngineKey_(
+      r[SEARCH.MATCH_FIELD.LEADS], r["First Lead Source"], r["First Touch Detail"], r["First Lead Source Category"]
+    );
 
     if (!key) return;
 
@@ -993,6 +1256,573 @@ function runDeleteDeadSearchOPSRows() {
     "Search_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - SEARCH.ROWS.DATA_START + 1)
   );
 
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Investigate Search Program Grouping (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * Search를 raw UTM Campaign 그레인에서 Marketo Program(Lead Source
+ * Detail) 그레인으로 전환하는 작업(2026-07-29, 사용자 요청)의 사전 조사.
+ * 2026-07-24엔 "Search 리드 대부분이 Marketo Program 없이 직접 캡처되는
+ * 광고/상담 신청"이라는 판단으로 raw UTM을 매칭 키로 선택했었으나,
+ * 사용자가 실제 Search_OPS를 보니 search/sitelink가 아닌 raw UTM이 너무
+ * 많다고 재확인 — 프로그램화 전에 "UTM Campaign별로 실제 Lead Source
+ * Detail 값이 뭔지"를 먼저 원본 그대로 확인해서 그루핑 가능한 패턴이
+ * 있는지 파악한다(사용자 지시: "utm과 lead source detail을 같이 표시해서
+ * 그룹핑 가능한것들 먼저 파악"). 코드(getBusinessSegment()/MATCH_FIELD)
+ * 변경 없음 — 순수 조회/로깅.
+ * ==========================================================
+ */
+function runInvestigateSearchProgramGrouping() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const detailGroups = {}; // key: lowercased Lead Source Detail (비어있지 않음)
+  const noDetailCampaigns = {}; // key: lowercased raw UTM Campaign (Lead Source Detail 비어있음)
+
+  let totalScanned = 0;
+  let totalWithDetail = 0;
+  let totalWithoutDetail = 0;
+
+  function scan(sheet, campaignField, detailField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      if (r["Business Segment"] !== "Search") return;
+
+      const campaign = String(r[campaignField] || "").trim();
+      const detail = String(r[detailField] || "").trim();
+
+      totalScanned++;
+
+      if (detail) {
+
+        totalWithDetail++;
+
+        const detailKey = detail.toLowerCase();
+
+        if (!detailGroups[detailKey]) {
+          detailGroups[detailKey] = { label: detail, total: 0, campaigns: {} };
+        }
+
+        detailGroups[detailKey].total++;
+
+        const campaignLabel = campaign || "(빈값)";
+        const campaignKey = campaignLabel.toLowerCase();
+
+        if (!detailGroups[detailKey].campaigns[campaignKey]) {
+          detailGroups[detailKey].campaigns[campaignKey] = { label: campaignLabel, count: 0 };
+        }
+
+        detailGroups[detailKey].campaigns[campaignKey].count++;
+
+      } else {
+
+        totalWithoutDetail++;
+
+        const campaignLabel = campaign || "(빈값)";
+        const campaignKey = campaignLabel.toLowerCase();
+
+        if (!noDetailCampaigns[campaignKey]) {
+          noDetailCampaigns[campaignKey] = { label: campaignLabel, count: 0 };
+        }
+
+        noDetailCampaigns[campaignKey].count++;
+
+      }
+
+    });
+
+  }
+
+  scan(ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER), SEARCH.MATCH_FIELD.LEADS, "First Touch Detail");
+  scan(ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER), SEARCH.MATCH_FIELD.MTA, "Lead Source Detail");
+
+  Logger.log("======================================");
+  Logger.log("Investigate Search Program Grouping");
+  Logger.log("======================================");
+  Logger.log("Business Segment=Search 총 스캔 행 수: " + totalScanned);
+  Logger.log(
+    "Lead Source Detail 있음: " + totalWithDetail +
+    " (" + (totalScanned ? Math.round(totalWithDetail / totalScanned * 1000) / 10 : 0) + "%)"
+  );
+  Logger.log(
+    "Lead Source Detail 없음(직접 광고/상담폼 등): " + totalWithoutDetail +
+    " (" + (totalScanned ? Math.round(totalWithoutDetail / totalScanned * 1000) / 10 : 0) + "%)"
+  );
+
+  Logger.log("");
+  Logger.log("---- Part A: Lead Source Detail 있음 — Program별 raw UTM Campaign 매핑 (건수 내림차순) ----");
+
+  const sortedDetailGroups = Object.keys(detailGroups)
+    .map(function (k) { return detailGroups[k]; })
+    .sort(function (a, b) { return b.total - a.total; });
+
+  sortedDetailGroups.forEach(function (g) {
+
+    const campaignList = Object.keys(g.campaigns)
+      .map(function (k) { return g.campaigns[k]; })
+      .sort(function (a, b) { return b.count - a.count; });
+
+    Logger.log(
+      "[" + g.total + "건, UTM " + campaignList.length + "종] Lead Source Detail = \"" + g.label + "\""
+    );
+
+    campaignList.forEach(function (c) {
+      Logger.log("    - (" + c.count + "건) " + c.label);
+    });
+
+  });
+
+  Logger.log("");
+  Logger.log("---- Part B: Lead Source Detail 없음 — raw UTM Campaign만 존재 (건수 내림차순) ----");
+
+  const sortedNoDetail = Object.keys(noDetailCampaigns)
+    .map(function (k) { return noDetailCampaigns[k]; })
+    .sort(function (a, b) { return b.count - a.count; });
+
+  sortedNoDetail.forEach(function (c) {
+    Logger.log("(" + c.count + "건) " + c.label);
+  });
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Investigation Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Investigate Search Content Misroute (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * runInvestigateSearchProgramGrouping() 결과, "Crimson Education Contact Us
+ * form" 등 범용 캐치올 폼(Lead Source Detail)이 nurture 이메일/ebook 캠페인
+ * 까지 Search로 뭉개고 있음이 확인됨(2026-07-29, 사용자 발견) — 원인은
+ * getBusinessSegment()(16_TransformHelper.js)의 Search 확정 신호 블록에
+ * 있는 detail.includes("contact")가 Content 판정보다 먼저 체크돼, campaign에
+ * ebook/guide 등 Content 키워드가 있어도 detail이 범용 "Contact Us form"
+ * 이면 무조건 Search로 먼저 확정돼 버리기 때문(2026-07-28 v1.7.0 change log
+ * 의 "Content 오탐 사례가 발견되지 않음" 가정이 이번에 깨진 것).
+ *
+ * campaign이 "search"/"sitelink"를 포함하지 않는데 detail에 "contact"가
+ * 있어 Search로 분류된 행만 스캔해서 3그룹으로 분류:
+ * (a) campaign이 기존 Content 키워드(ebook/guide/curriculum 등)와 이미
+ *     겹침 — 단순히 검사 순서만 바꾸면(Content를 Search보다 먼저) 해결
+ * (b) campaign에 "nurture"가 포함 — 기존 키워드로는 못 잡음, 신규 키워드
+ *     후보(이메일 nurture 시퀀스로 추정)
+ * (c) 그 외 — 자동 분류 후보 아님, 사람이 개별 검토
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 진단.
+ * ==========================================================
+ */
+function runInvestigateSearchContentMisroute() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 16_TransformHelper.js getBusinessSegment() Content 블록과 동일한 키워드
+  // 목록을 진단 전용으로 복제(로직 변경 없이 매칭만 확인하기 위함).
+  const CONTENT_KEYWORDS = [
+    "ebook", "planner", "guide", "prospectus", "booklet", "curriculum",
+    "parent ebook", "infographic", "download", "case study", "quiz",
+    "on-demand", "ondemand", "on demand"
+  ];
+
+  function matchesContentKeyword(campaign) {
+    return CONTENT_KEYWORDS.some(function (kw) { return campaign.includes(kw); })
+      || /_lead(?![a-z])/.test(campaign);
+  }
+
+  const groupA = {}; // 이미 Content 키워드와 겹침
+  const groupB = {}; // "nurture" 포함
+  const groupC = {}; // 그 외(수동 검토)
+
+  function addTo(bucket, campaignLabel, detailLabel) {
+
+    const key = campaignLabel.toLowerCase() + "||" + detailLabel.toLowerCase();
+
+    if (!bucket[key]) {
+      bucket[key] = { campaign: campaignLabel, detail: detailLabel, count: 0 };
+    }
+
+    bucket[key].count++;
+
+  }
+
+  function scan(sheet, campaignField, detailField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      if (r["Business Segment"] !== "Search") return;
+
+      const campaignRaw = String(r[campaignField] || "").trim();
+      const detailRaw = String(r[detailField] || "").trim();
+
+      const campaign = campaignRaw.toLowerCase();
+      const detail = detailRaw.toLowerCase();
+
+      if (!detail.includes("contact")) return; // 이번 진단 대상 아님
+      if (campaign.includes("search") || campaign.includes("sitelink")) return; // 이미 확정 Search — 대상 아님
+
+      if (matchesContentKeyword(campaign)) {
+        addTo(groupA, campaignRaw || "(빈값)", detailRaw);
+      } else if (campaign.includes("nurture")) {
+        addTo(groupB, campaignRaw || "(빈값)", detailRaw);
+      } else {
+        addTo(groupC, campaignRaw || "(빈값)", detailRaw);
+      }
+
+    });
+
+  }
+
+  scan(ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER), SEARCH.MATCH_FIELD.LEADS, "First Touch Detail");
+  scan(ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER), SEARCH.MATCH_FIELD.MTA, "Lead Source Detail");
+
+  function logBucket(title, bucket) {
+
+    Logger.log("");
+    Logger.log("---- " + title + " ----");
+
+    const rows = Object.keys(bucket)
+      .map(function (k) { return bucket[k]; })
+      .sort(function (a, b) { return b.count - a.count; });
+
+    if (rows.length === 0) {
+      Logger.log("해당 없음.");
+      return;
+    }
+
+    let total = 0;
+
+    rows.forEach(function (row) {
+      total += row.count;
+      Logger.log("(" + row.count + "건) campaign=\"" + row.campaign + "\"  detail=\"" + row.detail + "\"");
+    });
+
+    Logger.log("소계: " + total + "건 / " + rows.length + "개 조합");
+
+  }
+
+  Logger.log("======================================");
+  Logger.log("Investigate Search Content Misroute");
+  Logger.log("======================================");
+
+  logBucket("(a) 기존 Content 키워드와 겹침 — 순서 변경만으로 해결 가능", groupA);
+  logBucket("(b) campaign에 \"nurture\" 포함 — 신규 키워드 후보", groupB);
+  logBucket("(c) 그 외 — 자동 분류 후보 아님, 수동 검토 필요", groupC);
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Investigation Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Investigate Search Blank Signal Rows (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * runInvestigateSearchProgramGrouping() Part B에서 raw UTM Campaign도 Lead
+ * Source Detail도 둘 다 비어있는 Search 행이 837건 확인됨(2026-07-29) —
+ * getBusinessSegment()의 최종 fallback(leadSource.includes("search"))으로만
+ * Search 판정된 행들로 추정. 사용자 질문: 이 837건의 실제 First Lead Source
+ * 값이 정확히 "Naver Search"/"Google Search"뿐인지, 그 외 값(예: 레거시
+ * "Organic Search" 기본값 — CLAUDE.md #14 참고)이 섞여 있는지, 그리고 이
+ * 행들 중 Revenue가 발생한 케이스가 있는지 확인.
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 조회/로깅.
+ * ==========================================================
+ */
+function runInvestigateSearchBlankSignalRows() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const bySource = {};
+
+  function scan(sheet, campaignField, detailField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      if (r["Business Segment"] !== "Search") return;
+
+      const campaign = String(r[campaignField] || "").trim();
+      const detail = String(r[detailField] || "").trim();
+
+      if (campaign || detail) return; // 둘 중 하나라도 있으면 이번 진단 대상 아님
+
+      const leadSourceRaw = String(r["First Lead Source"] || "").trim();
+      const leadSourceLabel = leadSourceRaw || "(빈값)";
+      const key = leadSourceLabel.toLowerCase();
+
+      if (!bySource[key]) {
+        bySource[key] = { label: leadSourceLabel, count: 0, revenueCount: 0, revenueSum: 0 };
+      }
+
+      bySource[key].count++;
+
+      const revenue = Number(r["Revenue"]) || 0;
+
+      if (revenue > 0) {
+        bySource[key].revenueCount++;
+        bySource[key].revenueSum += revenue;
+      }
+
+    });
+
+  }
+
+  scan(ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER), SEARCH.MATCH_FIELD.LEADS, "First Touch Detail");
+  scan(ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER), SEARCH.MATCH_FIELD.MTA, "Lead Source Detail");
+
+  Logger.log("======================================");
+  Logger.log("Investigate Search Blank Signal Rows");
+  Logger.log("======================================");
+  Logger.log("(campaign/detail 둘 다 비어있고 Business Segment=Search인 행 — First Lead Source별 분포)");
+  Logger.log("");
+
+  const rows = Object.keys(bySource)
+    .map(function (k) { return bySource[k]; })
+    .sort(function (a, b) { return b.count - a.count; });
+
+  let total = 0;
+  let totalRevenueCount = 0;
+  let totalRevenueSum = 0;
+
+  rows.forEach(function (r) {
+
+    total += r.count;
+    totalRevenueCount += r.revenueCount;
+    totalRevenueSum += r.revenueSum;
+
+    Logger.log(
+      "(" + r.count + "건) First Lead Source = \"" + r.label + "\"" +
+      (r.revenueCount > 0
+        ? "  ⚠️ Revenue>0 " + r.revenueCount + "건 (합계 " + r.revenueSum + ")"
+        : "")
+    );
+
+  });
+
+  Logger.log("");
+  Logger.log("총 " + total + "건 / Revenue>0 " + totalRevenueCount + "건 (합계 " + totalRevenueSum + ")");
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Investigation Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Investigate Search Group C Lead Source Category (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * runInvestigateSearchContentMisroute() (c) 그룹(821건 — 범용 "Contact Us
+ * form" 등 캐치올 폼이라 campaign에 Content/nurture 키워드도, search/
+ * sitelink 확정 신호도 없어 자동 재분류 후보가 아니었던 나머지)에 대해,
+ * 사용자가 First Lead Source보다 더 구체적인 "Lead Source Category" 필드에
+ * "Naver Search"/"Google Search" 같은 값이 있는지 질문(2026-07-29) — 있다면
+ * (c) 그룹 중 일부를 추가로 구제할 여지가 있는지 확인하기 위한 사전 조사.
+ *
+ * (a)/(b)와 동일한 기준으로 (c) 그룹만 다시 스캔해서 "First Lead Source /
+ * Lead Source Category" 조합별 건수 + Revenue>0 여부를 집계한다.
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 조회/로깅.
+ * ==========================================================
+ */
+function runInvestigateSearchGroupCLeadSourceCategory() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const CONTENT_KEYWORDS = [
+    "ebook", "planner", "guide", "prospectus", "booklet", "curriculum",
+    "parent ebook", "infographic", "download", "case study", "quiz",
+    "on-demand", "ondemand", "on demand", "nurture"
+  ];
+
+  function matchesContentKeyword(campaign) {
+    return CONTENT_KEYWORDS.some(function (kw) { return campaign.includes(kw); })
+      || /_lead(?![a-z])/.test(campaign);
+  }
+
+  const bySourceCategory = {};
+
+  function scan(sheet, campaignField, detailField, categoryField) {
+
+    if (!sheet) return;
+
+    sheetToObjects(sheet).forEach(function (r) {
+
+      if (r["Business Segment"] !== "Search") return;
+
+      const campaignRaw = String(r[campaignField] || "").trim();
+      const detailRaw = String(r[detailField] || "").trim();
+
+      const campaign = campaignRaw.toLowerCase();
+      const detail = detailRaw.toLowerCase();
+
+      if (!detail.includes("contact")) return; // (a)/(b)/(c) 대상 자체가 아님
+      if (campaign.includes("search") || campaign.includes("sitelink")) return; // 이미 확정 Search
+      if (matchesContentKeyword(campaign)) return; // (a) — 이제 Content
+      if (campaign.includes("nurture")) return; // (b) — 이제 Content (matchesContentKeyword에 이미 포함되지만 명시)
+
+      // 여기부터 (c) 그룹
+      const leadSourceLabel = String(r["First Lead Source"] || "").trim() || "(빈값)";
+      const categoryLabel = String(r[categoryField] || "").trim() || "(빈값)";
+      const key = leadSourceLabel.toLowerCase() + "||" + categoryLabel.toLowerCase();
+
+      if (!bySourceCategory[key]) {
+        bySourceCategory[key] = {
+          leadSource: leadSourceLabel, category: categoryLabel,
+          count: 0, revenueCount: 0, revenueSum: 0,
+          campaignPresentCount: 0, campaignBlankCount: 0
+        };
+      }
+
+      bySourceCategory[key].count++;
+
+      if (campaignRaw) {
+        bySourceCategory[key].campaignPresentCount++;
+      } else {
+        bySourceCategory[key].campaignBlankCount++;
+      }
+
+      const revenue = Number(r["Revenue"]) || 0;
+
+      if (revenue > 0) {
+        bySourceCategory[key].revenueCount++;
+        bySourceCategory[key].revenueSum += revenue;
+      }
+
+    });
+
+  }
+
+  scan(
+    ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER),
+    SEARCH.MATCH_FIELD.LEADS, "First Touch Detail", "First Lead Source Category"
+  );
+  scan(
+    ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER),
+    SEARCH.MATCH_FIELD.MTA, "Lead Source Detail", "Lead Source Category"
+  );
+
+  Logger.log("======================================");
+  Logger.log("Investigate Search Group C Lead Source Category");
+  Logger.log("======================================");
+  Logger.log("(범용 폼이라 (a)/(b)에 안 걸린 (c) 그룹 — First Lead Source / Lead Source Category 조합별 분포)");
+  Logger.log("");
+
+  const rows = Object.keys(bySourceCategory)
+    .map(function (k) { return bySourceCategory[k]; })
+    .sort(function (a, b) { return b.count - a.count; });
+
+  let total = 0;
+  let totalRevenueCount = 0;
+  let totalRevenueSum = 0;
+
+  rows.forEach(function (r) {
+
+    total += r.count;
+    totalRevenueCount += r.revenueCount;
+    totalRevenueSum += r.revenueSum;
+
+    Logger.log(
+      "(" + r.count + "건) First Lead Source = \"" + r.leadSource + "\"  /  Lead Source Category = \"" + r.category + "\"" +
+      "  [UTM 있음 " + r.campaignPresentCount + " / UTM 없음 " + r.campaignBlankCount + "]" +
+      (r.revenueCount > 0
+        ? "  ⚠️ Revenue>0 " + r.revenueCount + "건 (합계 " + r.revenueSum + ")"
+        : "")
+    );
+
+  });
+
+  Logger.log("");
+  Logger.log("총 " + total + "건 / Revenue>0 " + totalRevenueCount + "건 (합계 " + totalRevenueSum + ")");
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Investigation Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Clear Search_OPS Meta Channel (수동 실행용, 1회성)
+ *
+ * WHY
+ * SEARCH.CHANNEL_DEFAULT를 "Meta"에서 빈 값으로 바꿨지만(70_Search_Config.js
+ * v1.3.0), 이건 앞으로 새로 생기는 행에만 적용됨 — 이미 Search_OPS에 있는
+ * 기존 행들의 Channel="Meta"는 과거 기본값이 그대로 박제된 것일 뿐 실제
+ * 검증된 값이 아니므로(사용자 확인), 전부 지워서 사용자가 캠페인명 패턴을
+ * 보고 직접 채워 넣을 수 있게 한다. Naver SA/Google SA로 이미 정확히 채워진
+ * 행은 "Meta"가 아니므로 영향 없음.
+ * ==========================================================
+ */
+function runClearSearchOPSMetaChannel() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SEARCH.SHEET.OPS);
+
+  if (!sheet) {
+    Logger.log(SEARCH.SHEET.OPS + " sheet not found.");
+    return;
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[SEARCH.ROWS.HEADER - 1];
+  const keyColIndex = headers.indexOf(SEARCH.KEY);
+  const channelColIndex = headers.indexOf("Channel");
+
+  if (channelColIndex === -1) {
+    Logger.log("Channel 컬럼을 찾을 수 없습니다.");
+    return;
+  }
+
+  let clearedCount = 0;
+
+  Logger.log("======================================");
+  Logger.log("Clear Search_OPS Meta Channel");
+  Logger.log("======================================");
+
+  for (let r = SEARCH.ROWS.DATA_START - 1; r < values.length; r++) {
+
+    if (String(values[r][channelColIndex] || "").trim() !== "Meta") continue;
+
+    const key = values[r][keyColIndex];
+
+    sheet.getRange(r + 1, channelColIndex + 1).setValue("");
+
+    clearedCount++;
+
+    Logger.log("Cleared — \"" + key + "\"");
+
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log("");
+  Logger.log("총 " + clearedCount + "건 Channel 공란 처리 완료.");
   Logger.log("======================================");
 
 }

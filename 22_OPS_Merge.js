@@ -7,10 +7,24 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.1.0
+ * v3.2.2
  *
  * Change Log
- * v3.0.0 (2026-07-21)
+ * v3.2.2 (2026-07-29)
+ * - compareByCreateDateBlankFirstOPS_() → compareByCreateDateBlankLastOPS_()
+ *   로 교체 — 빈 Create Date를 최상단이 아닌 최하단으로(전체 OPS 통일,
+ *   사용자 확정 — 73_Search_Merge.js 참고). 테스트도 이름/기대값 갱신.
+ * v3.2.1 (2026-07-29)
+ * - testCompareByCreateDateBlankFirstOPS_() → testCompareByCreateDateBlankFirstOPS()
+ *   로 리네임(끝에 "_" 있으면 Apps Script Run 드롭다운에 안 보이는 문제,
+ *   docs/apps-script-gotchas.md #2 — 같은 세션에서 두 번째로 반복한 실수).
+ * v3.2.0 (2026-07-29)
+ * - Leads_OPS 최종 행에 Create Date 기준 정렬 추가(compareByCreateDate
+ *   BlankFirstOPS_) — 다른 OPS(BOFU/Events/Content/Search)는 전부 Start/
+ *   Event Date로 이미 정렬 중이었는데 Leads_OPS만 없었음(사용자 확인).
+ *   빈 날짜 최상단 + 나머지는 최신순(내림차순), 다른 OPS와 동일 스타일.
+ *   신규 테스트: testCompareByCreateDateBlankFirstOPS().
+ * v3.1.0 (2026-07-22)
  * - 중복 이메일 처리 로직 변경: 기존엔 시트 순서상 "첫 번째로 만난 행"을 정상 merge
  *   했으나, Master가 Create Date 내림차순 정렬되어 있어 이게 사실상 "가장 최근" 레코드였음.
  * - 이제 이메일별로 그룹핑 후 실제 Create Date를 비교하여 "가장 오래된(True First Touch)"
@@ -174,6 +188,8 @@ function mergeOPS(master, ops) {
   // 3) 최종 확정된 레코드만 기존 OPS와 Merge
   //----------------------------------------
 
+  const finalRowObjects = [];
+
   resolvedRows.forEach(masterRow => {
 
     const email = String(
@@ -230,13 +246,21 @@ function mergeOPS(master, ops) {
 
     }
 
+    finalRowObjects.push(row);
+
+    summary.merged++;
+
+  });
+
+  finalRowObjects.sort(compareByCreateDateBlankLastOPS_);
+
+  finalRowObjects.forEach(row => {
+
     rows.push(
 
       OPS.HEADER.map(col => row[col])
 
     );
-
-    summary.merged++;
 
   });
 
@@ -249,6 +273,68 @@ function mergeOPS(master, ops) {
     qa: []      // TODO — 프로토타입 검증 후 구현 (의도적 보류)
 
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * Compare Rows By Create Date (빈 날짜 최하단, 나머지는 내림차순 — 2026-07-29)
+ *
+ * WHY
+ * BOFU/Events/Content/Search_OPS는 전부 Start/Event Date 기준으로 이
+ * 정렬 스타일을 이미 쓰고 있었는데 Leads_OPS만 정렬 로직이 없었음(사용자
+ * 확인). 20_OPS_Config.js의 OPS.BUILD.SORT_BY/SORT_ASC는 어디서도 읽히지
+ * 않는 죽은 설정이었음 — 실제 구현은 다른 OPS들과 동일한 "빈 날짜 최하단 +
+ * 최신순" 스타일로 통일(사용자 확정, Leads_OPS는 "Start Date"가 없어
+ * "Create Date" 사용). 최초 구현은 빈 날짜 최상단이었으나, Search_OPS에서
+ * 신규 키 대거 유입으로 문제가 발견돼 전체 OPS를 최하단으로 통일 변경.
+ *
+ * TEST
+ * testCompareByCreateDateBlankLastOPS 참고
+ * ==========================================================
+ */
+function compareByCreateDateBlankLastOPS_(a, b) {
+
+  const dateA = a["Create Date"];
+  const dateB = b["Create Date"];
+
+  const validA = dateA instanceof Date && !isNaN(dateA.getTime());
+  const validB = dateB instanceof Date && !isNaN(dateB.getTime());
+
+  if (!validA && !validB) return 0;
+  if (!validA) return 1;
+  if (!validB) return -1;
+
+  return dateB.getTime() - dateA.getTime();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — compareByCreateDateBlankLastOPS_()
+ * ==========================================================
+ */
+function testCompareByCreateDateBlankLastOPS() {
+
+  const rows = [
+    { "Lead ID": "old", "Create Date": new Date(2026, 0, 1) },
+    { "Lead ID": "blank1", "Create Date": "" },
+    { "Lead ID": "new", "Create Date": new Date(2026, 5, 1) },
+    { "Lead ID": "blank2", "Create Date": "" }
+  ];
+
+  rows.sort(compareByCreateDateBlankLastOPS_);
+
+  const order = rows.map(r => r["Lead ID"]);
+
+  const pass =
+    order[0] === "new" && order[1] === "old" &&
+    order[2] === "blank1" && order[3] === "blank2";
+
+  Logger.log("Order: " + JSON.stringify(order));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

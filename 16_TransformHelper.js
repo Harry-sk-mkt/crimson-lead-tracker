@@ -8,9 +8,64 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.8.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-07-29)
+ * - getBusinessSegment() campaign "search" 확정 신호 버그 수정 — "research"
+ *   (리서치)에 포함된 "search" 부분 문자열이 오탐돼 "college-research-ebook",
+ *   "research-and-work-experience..." 등 명백한 Content/Webinar/Seminar
+ *   캠페인이 전부 강제로 Search가 되고 있었음(사용자가 Search_OPS 전체를
+ *   육안으로 재검토하다가 발견). `/(?<!re)search/` 정규식으로 교체 — "re"
+ *   바로 뒤에 오는 "search"만 제외, 진짜 "search-kr_..."류는 영향 없음.
+ * - SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES 신규 — Search 캐치올 leadSource
+ *   기반 재분류(Organic Content→Content, Paid Social/Affiliate Organization/
+ *   Offline Outreach→Other), Content 키워드 체크 뒤·detail-contact 확정
+ *   신호 앞에 배치.
+ * - BUSINESS_SEGMENT_EXCEPTIONS에 Search_OPS 육안 재검토 배치 50여 건 추가
+ *   (파트너십 프로그램/숫자만 있는 캠페인 ID/MedView/CGA 등 — 사용자가
+ *   Search_OPS 전체를 훑어보고 개별 지정, 다수는 위 research 버그 영향).
+ *   신규 테스트: testGetBusinessSegmentResearchSubstringFix().
+ * v1.11.0 (2026-07-29)
+ * - BUSINESS_SEGMENT_EXCEPTIONS에 Search 잔존 콘텐츠성 키워드 14건 추가 —
+ *   CLAUDE.md #14 원래 미해결 항목(SAT Practice Test 변형 문구 등이 기존
+ *   하드코딩 예외 3건과 정확히 안 맞아 Search로 남아있던 문제). 91개 캠페인
+ *   재분류(v1.10.0) 후 runAuditSearchSegmentIssues() Part 2로 재확인한
+ *   14건 전부 Content로 처리(사용자 확정).
+ * v1.10.0 (2026-07-29)
+ * - BUSINESS_SEGMENT_EXCEPTIONS에 Search 캐치올 재분류 91개 캠페인 추가.
+ *   Search_CatchAll_QA 시트(76_TempQA_SearchCatchAll.js)에서 사용자가
+ *   Marketo 로그 대조로 직접 검증한 결과 — 같은 Lead Source Category(예:
+ *   "Naver online cafe")가 Content/Webinar/Seminar로 캠페인마다 다르게
+ *   갈려 자동 키워드 규칙으로는 재현 불가능함을 확인(runAnalyzeSearchCatch
+ *   AllQA()), 대신 캠페인 단위로는 일관됨을 확인(runExportSearchCatchAllQA
+ *   Mapping(), 91개 중 89개 즉시 일관, 충돌 2건은 사용자 최종 판정: "...
+ *   youtube-shorts_book-a-consult-bofu_contact" -> BOFU, "...pmax-
+ *   consolidated-tier2_contact" -> Other) — exact-match 캠페인 override로
+ *   반영(SAT Practice Test 하드코딩 예외와 동일 패턴). 신규 테스트 8건
+ *   추가(testGetBusinessSegmentHardcodedExceptions()).
+ * v1.9.0 (2026-07-29)
+ * - getBusinessSegment() Content vs Search 우선순위 재설계 — detail의
+ *   "contact"/"paid search"/"organic search" 확정 신호를 Content 판정 뒤로
+ *   이동(campaign의 "search"/"sitelink" 확정 신호는 기존처럼 Content보다
+ *   먼저 유지, 2026-07-28 확정 그대로). "Crimson Education Contact Us
+ *   form" 등 범용 캐치올 폼이 Lead Source Detail로 찍힌 ebook/guide/
+ *   curriculum 캠페인(119건) + nurture 이메일 캠페인(70건, 신규 "nurture"
+ *   키워드로 포착)이 Search로 뭉개지던 문제 해결(사용자 발견 및 지시,
+ *   runInvestigateSearchProgramGrouping()/runInvestigateSearchContentMisroute(),
+ *   71_Search_Engine.js 실측). 신호가 전혀 없는 나머지(campaign 빈값 등,
+ *   821건 중 다수)는 여전히 Search로 유지 — 2026-07-25 확정(temp_QA 43건
+ *   구제 목적)을 건드리지 않음. 신규 테스트:
+ *   testGetBusinessSegmentContentBeatsGenericContactForm().
+ * v1.8.1 (2026-07-29)
+ * - getBusinessSegment() Content 판정 버그 수정: `campaign.includes("_lead")`가
+ *   "_lead"를 단순 부분 문자열로 매칭해 "_leads-school"처럼 "leads"(복수형)를
+ *   포함한 캠페인까지 Content로 잘못 분류시킴(실측: "US_core_2025-12-12_leads-
+ *   school_contact-fbiglg" → testGetBusinessSegmentContactFallbackToBOFU() 실행
+ *   중 FAIL로 발견, Content로 잘못 걸려 BOFU/Search fallback에 도달조차 못함).
+ *   `/_lead(?![a-z])/` 정규식으로 교체 — "_lead" 뒤에 알파벳이 이어지면(leads/
+ *   leadership 등) 매칭 안 함, "_lead"로 끝나거나 구분자/숫자가 이어지는 경우만
+ *   매칭(기존 콘텐츠 리드마그넷 슬러그 태그 의도 그대로 유지).
  * v1.8.0 (2026-07-28)
  * - Content 키워드에 "download"/"case study"/"quiz"/"on demand"(공백형) 추가
  *   (campaign/detail 양쪽, 사용자 확정) — "Downloaded Top 50 NZ High Schools",
@@ -503,8 +558,216 @@ const BUSINESS_SEGMENT_EXCEPTIONS = {
   "wf-2022-11-kor-mofu-core new digital mini sat practice test": "Content",
 
   // Webinar — 명시적 확인
-  "2021-07-kor-book a consult page": "Webinar"
+  "2021-07-kor-book a consult page": "Webinar",
 
+  // ------------------------------------------------------
+  // Search 캐치올 재분류 (2026-07-29, Search_CatchAll_QA 시트 수동 검토)
+  //
+  // "Crimson Education Contact Us form" 등 범용 Lead Source Detail 폼이라
+  // detail.includes("contact") fallback으로만 Search가 됐던 91개 캠페인 —
+  // Lead Source Category만으로는 같은 카테고리("Naver online cafe" 등)가
+  // Content/Webinar/Seminar로 제각각 갈려 자동 규칙화가 불가능해(사용자
+  // 확인), 사람이 Marketo 로그와 캠페인명을 직접 대조해 캠페인 단위로
+  // 검증(76_TempQA_SearchCatchAll.js, Search_CatchAll_QA 시트 "Final
+  // Segment"/"Evidence" 컬럼). 91개 전부 캠페인 단위로 일관됨을
+  // runExportSearchCatchAllQAMapping()으로 확인 후 반영(충돌 2건은
+  // 사용자가 직접 최종 판정: "youtube-shorts_book-a-consult-bofu_contact"
+  // -> BOFU("book-a-consult" 우선), "pmax-consolidated-tier2_contact"
+  // -> Other(pmax는 content/bofu 둘 다 쓰여 애매 + 근거 로그 없음)).
+  // ------------------------------------------------------
+  "kr_core_2023-03-_rise-2-0-checklist-digital-campaign": "Content",
+  "nsc_core_2022-07-13_gl-contactus": "Content",
+  "nsc_core_2024-08-13_contact_us": "Other",
+  "nsc_core_2024-02-01_gl-accepted2024-bc": "Content",
+  "kr_core_2022-06-15_youtube-acquisition-tofu_traffic": "Content",
+  "kr_cga_2021-06-14_whycga": "Other",
+  "kr_core_2021-09-01_contactus": "Other",
+  "kr_core_2022-10-26_crimson-careers-consult": "Content",
+  "kr_core_2023-03-14_google-perfmax-acquisition-consult-bofu_contact": "BOFU",
+  "kr_core_2025-02-04_daniel-seminar-ty-msg": "Seminar",
+  "nsc_core_2021-01-28_youtube-cac": "Content",
+  "kr_core_2023-10-20_naver-blog-choosing-major": "Content",
+  "nsc_core_2022-11-15_satvsact2022": "Content",
+  "nsc_core_2023-01-09_crimson-chronicle": "Content",
+  "the student registration": "Other",
+  "us_cga_2022-05-26_niche-marketing-referral": "Other",
+  "kr_cgahq_2022-11-24_online-high-school-niche-ranking-tofu_traffic": "Content",
+  "kr_core_2022-02-18_naver-blog-book-a-consult": "Content",
+  "kr_core_2022-10-_hyperlocalized-faq-with-fao-for-uk": "Content",
+  "kr_core_2022-10-_hyperlocalized-faq-with-fao-for-us": "Content",
+  "kr_core_2022-10-_us-faq-with-fao": "Content",
+  "kr_core_2023-01-01_us-univeristy-admissions-for-international-school-students": "Content",
+  "kr_core_2023-02-_5-ways-to-build-stand-out-ecl": "Content",
+  "nsc_core_2023-07-24_gl-personal-essay-2023-eb": "Content",
+  "kr_core_2023-04-08_transfer-gap-year-strategy": "Webinar",
+  "kr_core_2023-06-_breaking-down-the-ivy-league-2023-update": "Content",
+  "kr_core_2023-10-19_crimson-brand-marketing-weeklyhk": "Content",
+  "kr_core_2023-12-_rise-7-day-bootcamp-typ": "Content",
+  "kr_core_2024-01-12_naver-blog-year-in-review": "Content",
+  "kr_core_2024-09-07_consult-page-admissions-simulation-with-josephine-9-7": "Webinar",
+  "kr_core_2024-10-17_wall-street-journal-korea-localize-consult-email": "BOFU",
+  "kz_core_2025-02-12_ig-highlights-consultation": "Content",
+  "kz_medview_2025-10-31_contact-bio": "Other",
+  "nsc_core_2020-07-20_cta-ambitious-webinar-page": "Content",
+  "nsc_core_2020-08-10_eu-pdf": "Content",
+  "nsc_core_2022-01-10_crimson-chronicle": "Content",
+  "nsc_core_2022-02-25_content-awareness": "Content",
+  "nsc_core_2024-01-01_crimson-chronicle": "Content",
+  "nsc_core_2025-06-01_dm_request_crimson_core_ig": "Other",
+  "nsc_core_2026-05-27_messenger-request-crimson-core-fb": "Other",
+  "sg_core_2026-05-22_epsom-college-malaysia": "Other",
+  "us_core_2023-08-23_usn-ace-your-extracurriculars": "Webinar",
+  "id_core_2023-06-09_june9-edm-webinar-promo": "Other",
+  "kr_cga_2022-03-04_naver-blog-book-a-consult": "Content",
+  "kr_cga_2022-12-04_apac-open-day-dec-2022": "Seminar",
+  "kr_core_2022-02-11_naver-blog-book-a-consult": "Content",
+  "kr_core_2022-06-18_nail-us-essay-w-jessebaek-kuk": "Seminar",
+  "kr_core_2022-07-02_journey-to-siliconvalley-stem": "Content",
+  "kr_core_2022-08-13_step-by-step-us-application-system-kuk": "Seminar",
+  "kr_core_2022-09-17_major-selection": "Content",
+  "kr_core_2022-11-_new-digital-mini-sat-practice-test": "Content",
+  "kr_core_2022-11-19_admission-programs-for-young-students-kuk": "Webinar",
+  "kr_core_2022-12-21_ecl-projects-forthisnewyear-youthimpact": "Webinar",
+  "kr_core_2023-01-12_naver-blog-year-in-review": "Content",
+  "au_ath_2025-02-04_sport-scholarships-au_contact": "BOFU",
+  "kr_core_2023-02-03_youtube_early-around-admissions-results-bofu_contact": "BOFU",
+  "kr_core_2023-02-13_major-selection-law-social-sicence-humanities": "Content",
+  "kr_core_2023-03-04_plans-for-productive-summer-break-webinar-kuk": "Webinar",
+  "kr_core_2023-05-13_california-dreaming-uc-fao": "Webinar",
+  "kr_core_2023-07-22_major-strategy-part-2-liberal-arts-and-humanities": "Webinar",
+  "kr_core_2023-08-30_uk-admission-trend": "Webinar",
+  "kr_core_2023-10-20_overseas-nurturing-email-3-consult": "Content",
+  "kr_core_2023-12-04_rise-7-day-bootcamp": "Content",
+  "kr_core_2024-10-28_non-ivy-league": "Webinar",
+  "kr_core_2024-12-14_admissions-roadmap-for-10-11": "Webinar",
+  "kr_core_2025-02-15_us-top-10-transfer-webinar": "Webinar",
+  "nsc_core_2020-08-05_website-ms": "Content",
+  "nsc_core_2020-12-11_college-admissions-calculator": "Content",
+  "nsc_core_2021-09-02_the-perfect-personal-statement-vol2": "Content",
+  "nsc_core_2022-07-15_canadauniadmissions": "Content",
+  "nsc_core_2023-01-04_5waystobuildstandoutextracurriculars": "Content",
+  "nsc_core_2023-04-03_getting-in-the-us-uk-admissions-series": "Content",
+  "nsc_core_2024-09-01_crimson-chronicle": "Content",
+  "nsc_core_2024-10-01_crimson-chronicle": "Content",
+  "sg_core_2022-01-15_sg-jan15webinar-inwebinar-consult": "Webinar",
+  "nsc_core_2022-11-11_gl-ourwebsite": "Content",
+  "nsc_core_2021-03-23_gl-unirank5-eb": "Content",
+  "us_core_2023-03-21_admissons-roadmap-for-sophomores-and-juniors-with-mason-hill": "Webinar",
+  "us_core_2023-08-03_application-strategy": "Webinar",
+  "us_core_2023-08-08_5-ways-to-build-outstanding-extracurriulars": "Webinar",
+  "us_core_2024-12-19_usn-planning-your-2025-application-roadmap": "Webinar",
+  "us_core_2025-01-01_instagram-bio": "Other",
+  "us_core_2025-06-03_welcome-capstone": "Content",
+  "nsc_core_2021-02-15_global-ig-bio-blog": "Content",
+  "us_core_2025-06-10_faq-webinar-reg-ic": "Webinar",
+  "us_core_2025-09-04_retargeting-tofu-video_videoviews": "Content",
+  "nsc_core_2021-06-23_gl-buildecprofile-eb": "Content",
+  "us_core_2025-12-12_leads-tier1-large_contact": "BOFU",
+  "us_core-gtb_2025-10-13_perfmax-eng_cscrvstrpmaxconvalue2025-test-vip-messaging-v2_contact": "BOFU",
+  "kr_core_2022-12-16_youtube-shorts_book-a-consult-bofu_contact": "BOFU",
+  "us_core_2025-10-06_pmax-consolidated-tier2_contact": "Other",
+
+  // ------------------------------------------------------
+  // Search 잔존 콘텐츠성 키워드 재분류 (2026-07-29, runAuditSearchSegmentIssues()
+  // Part 2 — CLAUDE.md #14 원래 미해결 항목이던 SAT Practice Test 변형 문구
+  // 등, 기존 하드코딩 예외 3건과 정확히 안 맞아 여전히 Search로 남아있던
+  // 15건. 사용자 확정: 전부 Content로 처리.
+  // ------------------------------------------------------
+  "core sat practice test": "Content",
+  "filled out form for mini digital sat practice test 2023": "Content",
+  "filled out form for digital mini sat practice test": "Content",
+  "wf-2025-11-sgp-mofu-core us admissions quiz": "Content",
+  "wf-2022-02-kor-mofu-core major selection on demand": "Content",
+  "wf-2022-06-kor-mofu-core hyperlocal case study ebook": "Content",
+  "filled out form for mini sat practice test": "Content",
+  "wf-2025-09-usa-tofu-2025-new-private-school-ebook | downloaded ebook": "Content",
+  "wf-2024-12-nzl-mofu-cga prospectus download :downloaded nz prospectus": "Content",
+  "downloaded top 50 nz high schools 2024": "Content",
+  "filled in form to download cga prospectus": "Content",
+  "download ib ebook": "Content",
+  "mini sat practice test (rus-ru)": "Content",
+  "nz_core_2021-06-10_email-au-webinar-research": "Content",
+
+  // ------------------------------------------------------
+  // Search_OPS 육안 재검토 배치 (2026-07-29, 사용자가 Search_OPS 전체를
+  // 직접 훑어보고 지정) — "research"가 "search"로 오탐되던 버그(아래
+  // getBusinessSegment() 본문 참고)의 영향을 받은 캠페인도 확실성을 위해
+  // 함께 하드코딩. 파트너십 프로그램(LG-/LI- Individual Registrations 등)
+  // 다수가 왜 Search로 잡혔는지는 근본 원인 미상 — 우선 개별 예외로 처리.
+  // ------------------------------------------------------
+  "kr_core_2025-12-15_top-college-research-ebook_lead-fbiglg": "Content",
+  "li-2026-06-gbl-tofu-partnerships research comp 2026 individual registrations": "Other",
+  "lg-2026-02-gbl-tofu-partnerships essay comp 2026 individual registrations": "Other",
+  "lg-2025-10-gbl-tofu-partnerships case comp 2025 individual registrations": "Other",
+  "kr_core_2025-11-15_3-successful-capstone-projects-research-and-profiles": "Webinar",
+  "kr_core_2025-10-18_college-research-1-hypsm-ivy": "Webinar",
+  "530733732": "Other",
+  "22928477519": "Other",
+  "12507371022": "Other",
+  "20755808534": "Other",
+  "12553491798": "Other",
+  "16633113721": "Other",
+  "type-form-website": "Other",
+  "crimson-careers-typeform": "Content",
+  "lg-2025-05-gbl-tofu-partnerships sarc 2025 individual registrations": "Other",
+  "us_core-ltb_2025-04-11_cspmaxsearch2025-aigpt-bau-pmax-ebook-consolidated-tier1-tier2-tier3_lead": "Content",
+  "kr_core_2025_01_15_sitelink-ext-bookconsultworkshops_lead": "Content",
+  "br_core_2024-04-03_search-esp_latam_mini-test-prep-content_lead": "Content",
+  "nsc_core_2022-07-08_pitch-comp-2022-form-request": "Other",
+  "us_core_2025-03-04_research-and-work-experience-leveling-up-your-extracurricular-profile": "Webinar",
+  "asia_cgahq_2024-12-10_search-korea-private-school_contact": "Other",
+  "lg-2024-11-gbl-tofu-partnerships case comp 2024 individual registrations": "Other",
+  "lg-2024-11-gbl-tofu-partnerships crimson 18u18 2024 applications": "Other",
+  "lg-2024-08-gbl-tofu-partnerships pitch comp 2024 individual registrations": "Other",
+  "10 research opportunities": "Other",
+  "lg-2024-05-gbl-tofu-partnerships sarc 2024 individual registrations": "Other",
+  "us_core_2024-03-25_research-and-work-experience-leveling-up-your-extracurricular-profile-for-top-colleges": "Webinar",
+  "lg-2024-03-gbl-tofu-partnerships essay comp 2024 individual registration": "Other",
+  "lg-2023-10-gbl-tofu-partnerships case comp 2023 individual registration": "Other",
+  "lg-2023-10-gbl-tofu-partnerships global hackathon 2023 individual registration": "Other",
+  "sg_core_2023-07-17_search-eng_consolidated-ebooks_lead": "Content",
+  "us_cgahq_2023-03-21_ap-courses_contact": "Other",
+  "lg-2022-06-mv-eid32 exit intent: videos au": "Content",
+  "nsc_core_2022-06-08_uber-comp-2022-regular-registration": "Other",
+  "kr_core_2022-12-15_collegeresearch-us-top20-15mins-on-demand": "Content",
+  "kz_core_2023-05-18_search-sat_content": "Content",
+  "lg-2023-05-gbl-tofu-partnerships research comp 2023 typeform": "Other",
+  "lg-2023-01-gbl-tofu-partnerships essay comp 2023 typeform": "Other",
+  "kr_cgahq_2021-06-01_search-kr_brand-cga_contact": "Other",
+  "kr_core_2023-02-18_stem-ecl-capstone-research-project-jeju": "Seminar",
+  "lg-2022-12-gbl-tofu-core pgcc typeform": "Other",
+  "kr_core_2022-09-24_college-research-part-2-us-top20-jeju": "Seminar",
+  "kr_core_2022-08-27_fy23-aug-27-college-research-part-1-hyps-kook": "Webinar",
+  "us_core_2022-06-09_wb-2022-06-usa-tofu-core-cracking-the-common-app-with-martin": "Webinar",
+  "au|nb|medview|schools": "Other",
+  "nsc_partnershipstgcc_2021-07-29_tgcc-mtj-sesa": "Other",
+  "br|usa|crimson": "Other",
+  "cga-website-ap-course-expression-of-interest": "Other",
+  "medview - contact form": "Other",
+  "filled in medview contact us form": "Other",
+  "{_campaign}": "Other",
+  "{campaign.name}": "Other"
+
+};
+
+
+/**
+ * ==========================================================
+ * Search 캐치올 leadSource 기반 재분류 (2026-07-29)
+ *
+ * WHY
+ * Search_CatchAll_QA 시트에서 "신호 없음"으로 제외됐던 잔여 leadSource-
+ * fallback 합성 키(resolveSearchEngineKey_(), 71_Search_Engine.js)들이
+ * 실제로는 leadSource 자체가 이미 명확한 신호였음이 확인됨(사용자 확인,
+ * Search_OPS 육안 재검토) — Organic Content는 Content, 나머지(Paid
+ * Social/Affiliate Organization/Offline Outreach)는 Other.
+ * ==========================================================
+ */
+const SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES = {
+  "organic content": "Content",
+  "paid social": "Other",
+  "affiliate organization": "Other",
+  "offline outreach": "Other"
 };
 
 
@@ -689,7 +952,7 @@ function getBusinessSegment(
   }
 
   //----------------------------------------------------------
-  // Search — 확정 신호(Content보다 먼저, 2026-07-28 재설계)
+  // Search — campaign 확정 신호(Content보다 먼저, 2026-07-28 재설계)
   //
   // 사용자 확정 기준: campaign에 "search" 또는 "sitelink"가 있으면(organic/
   // paid 무관) 무조건 Search — 실제 사용자가 "명확한 Search" 49개 캠페인을
@@ -697,9 +960,7 @@ function getBusinessSegment(
   // 키워드) 등을 우연히 포함하고 있어 이 확정 신호가 Content보다 먼저
   // 와야 함(예: "search-ap-curriculum-courses_contact"). "sitelink-ext-..._lead"
   // 처럼 "_lead"(Content 키워드)로 끝나는 캠페인도 있어 "sitelink" 역시
-  // 동일하게 최우선 확정 신호로 취급. detail의 "contact"/"paid search"/
-  // "organic search"는 기존처럼 여기 유지(더 구체적인 폼 제출 신호라 Content
-  // 오탐 사례가 발견되지 않음).
+  // 동일하게 최우선 확정 신호로 취급.
   //
   // ⚠️ campaign.includes("_contact")/"contact"/"consult")는 여기서 제거하고
   // Content 판정 뒤 fallback으로 이동(아래 참고) — 이 계정의 거의 모든 Meta
@@ -707,24 +968,37 @@ function getBusinessSegment(
   // 있어서, ebook/prospectus/case study/webinar/SAT practice test 등 명백한
   // 콘텐츠 캠페인까지 이 조건 하나로 Search가 돼버리는 문제 발견
   // (runAuditSearchSegmentIssues(), 71_Search_Engine.js 실측).
+  //
+  // detail의 "contact"/"paid search"/"organic search" 신호는 2026-07-29부터
+  // Content 판정 뒤로 이동(아래 참고) — 같은 이유로 여기 유지하지 않는다.
   //----------------------------------------------------------
 
+  // ⚠️ 2026-07-29: "search"가 "research"(리서치) 안에 숨어서 오탐되는 문제
+  // 발견 — "college-research-ebook", "research-and-work-experience..." 등
+  // 명백한 Content/Webinar 캠페인이 "research"에 포함된 "search" 때문에
+  // 전부 강제로 Search가 되고 있었음(사용자 발견, Search_OPS 육안 검토).
+  // "re" 바로 뒤에 오는 "search"만 제외(negative lookbehind) — 진짜
+  // "search-kr_..." 등은 앞에 "re"가 없어 정상적으로 매칭됨.
   if (
-    campaign.includes("search") ||
-    campaign.includes("sitelink") ||
-    detail.includes("contact") ||
-    detail.includes("paid search") ||
-    detail.includes("organic search")
+    /(?<!re)search/.test(campaign) ||
+    campaign.includes("sitelink")
   ) {
     return "Search";
   }
 
   //----------------------------------------------------------
   // Content
+  //
+  // 2026-07-29: "nurture" 키워드 추가(campaign 전용) — "Crimson Education
+  // Contact Us form" 같은 범용 캐치올 폼이 Lead Source Detail로 찍히면서
+  // nurture 이메일 캠페인(예: "crimson-awareness-nurture", "kr-master
+  // nurturedrip")까지 아래 detail.includes("contact") 신호에 걸려 Search로
+  // 뭉개지고 있었음(runInvestigateSearchContentMisroute(), 71_Search_Engine.js
+  // 실측, 사용자 확인) — Content가 그 신호보다 먼저 오도록 재배치.
   //----------------------------------------------------------
 
   if (
-    campaign.includes("_lead") ||
+    /_lead(?![a-z])/.test(campaign) ||
     campaign.includes("ebook") ||
     campaign.includes("planner") ||
     campaign.includes("guide") ||
@@ -739,6 +1013,7 @@ function getBusinessSegment(
     campaign.includes("on-demand") ||
     campaign.includes("ondemand") ||
     campaign.includes("on demand") ||
+    campaign.includes("nurture") ||
     detail.includes("ebook") ||
     detail.includes("planner") ||
     detail.includes("guide") ||
@@ -752,9 +1027,45 @@ function getBusinessSegment(
     detail.includes("quiz") ||
     detail.includes("on-demand") ||
     detail.includes("ondemand") ||
-    detail.includes("on demand")
+    detail.includes("on demand") ||
+    detail.includes("nurture")
   ) {
     return "Content";
+  }
+
+  //----------------------------------------------------------
+  // leadSource 기반 재분류 (2026-07-29, Search 캐치올 후속 QA)
+  //
+  // 아래 detail 확정 신호(무조건 Search)에 도달하기 전에, First Lead
+  // Source 자체가 이미 명확한 신호인 경우 그걸 우선 사용 — 예:
+  // leadSource="Organic Content"인데 detail이 범용 "Contact Us form"이라는
+  // 이유만으로 Search가 되는 건 말이 안 됨(사용자 확인). BOFU/Seminar/
+  // Webinar/campaign 확정신호/Content 키워드 등 더 구체적인 신호가 이미
+  // 위에서 전부 먼저 체크됐으므로, 여기 도달했다는 건 그런 신호가 전혀
+  // 없다는 뜻 — 이 경우 leadSource를 신뢰하는 게 안전.
+  //----------------------------------------------------------
+
+  if (SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES[leadSource]) {
+    return SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES[leadSource];
+  }
+
+  //----------------------------------------------------------
+  // Search — detail 확정 신호(Content 판정 뒤로 이동, 2026-07-29)
+  //
+  // campaign에 "search"/"sitelink"가 없고 Content 키워드에도 안 걸리는
+  // 경우에만 도달 — 위 Content 재배치로 nurture/ebook 캠페인은 이미
+  // 걸러졌으므로, 여기 남는 건 진짜 신호 없는 범용 "Contact Us form"류
+  // (예: campaign 빈값)로 확인됨(사용자 확인, 2026-07-29). 기존 동작
+  // (leadSource 무관하게 무조건 Search) 그대로 유지 — 2026-07-25 확정
+  // 사항(temp_QA 43건 구제)을 건드리지 않기 위함.
+  //----------------------------------------------------------
+
+  if (
+    detail.includes("contact") ||
+    detail.includes("paid search") ||
+    detail.includes("organic search")
+  ) {
+    return "Search";
   }
 
   //----------------------------------------------------------
@@ -1035,6 +1346,73 @@ function testGetBusinessSegmentContentBeatsLeadSourceSearch(){
 
 /**
  * ==========================================================
+ * TEST — getBusinessSegment() Content vs detail "contact" 범용 캐치올 폼
+ * 우선순위 재설계 + "nurture" 키워드 추가 (2026-07-29)
+ *
+ * WHY
+ * runInvestigateSearchProgramGrouping()/runInvestigateSearchContentMisroute()
+ * (71_Search_Engine.js) 실측 결과, Lead Source Detail이 "Crimson Education
+ * Contact Us form" 같은 범용 캐치올 폼인 리드 중 campaign에 ebook/guide/
+ * curriculum/_lead 등 Content 키워드가 있는 119건과, "nurture"(이메일 넛처
+ * 시퀀스, 기존 키워드로 미포착) 70건이 detail.includes("contact") 확정
+ * 신호에 먼저 걸려 Search로 잘못 분류되고 있었음(사용자 발견, 2026-07-29).
+ * detail의 "contact"/"paid search"/"organic search" 신호를 Content 판정
+ * 뒤로 이동 + "nurture"를 신규 Content 키워드로 추가해 해결. 단, campaign에
+ * "search"/"sitelink"가 있는 경우는 여전히 Content보다 우선(2026-07-28
+ * 확정 그대로) — 이 테스트로 회귀 확인. 신호가 전혀 없는 나머지 다수
+ * (campaign 빈값 등)는 여전히 Search로 유지(2026-07-25 확정, temp_QA 43건
+ * 구제 목적 보존) — leadSource 무관하게 무조건 Search임을 회귀 확인.
+ * ==========================================================
+ */
+function testGetBusinessSegmentContentBeatsGenericContactForm(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+
+    // (a) 기존 Content 키워드와 겹침 — 실데이터 사례
+    ["KR_core_2023-06-20_hyperlocal-parents-guide-v4", "Crimson Education Contact Us form", "", "Content"],
+    ["KR_core_2023-03-14_perfmax-ebook-mofu_lead", "Crimson Education Contact Us form", "", "Content"],
+    ["KR_core_2022-11-17_hyperlocal-boarding-school-ebook", "Crimson Education Contact Us form", "", "Content"],
+
+    // (b) 신규 "nurture" 키워드 — 실데이터 사례
+    ["NSC_core_2021-07-01_crimson-awareness-nurture", "Crimson Education Contact Us form", "", "Content"],
+    ["KR_core_2020-12-16_kr-masternurturedrip", "Crimson Education Contact Us form", "", "Content"],
+    ["AU_core_2021-09-16_content-awareness-nurture", "Crimson Education Contact Us form", "", "Content"],
+
+    // 회귀 — campaign "search"/"sitelink"는 여전히 Content보다 우선(2026-07-28 확정 유지)
+    ["US_cgahq_2025-04-01_search-ap-curriculum-courses_contact", "", "", "Search"],
+    ["KR_core_2025-01-15_sitelink-ext-bookconsultukoxbridge_lead", "", "", "Search"],
+
+    // 회귀 — 신호 전혀 없는 범용 폼(campaign 빈값)은 leadSource 무관하게 여전히 Search
+    // (2026-07-25 확정, temp_QA 43건 구제 목적 — 이번 재배치로 건드리지 않음)
+    ["", "Crimson Education Contact Us form", "", "Search"],
+    ["", "Filled in CGA Contact Enquiry form", "", "Search"],
+    ["", "Crimson Education Contact Us form", "Paid Social", "Search"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * TEST — getBusinessSegment() campaign "search"/"sitelink" 확정 신호 vs
  * "_contact"/"consult" fallback 재설계 (2026-07-28)
  *
@@ -1274,7 +1652,91 @@ function testGetBusinessSegmentHardcodedExceptions(){
     // "Organic Search"(옛날 Marketo flow의 UTM-없음 기본값)여도 예외로 Content
     ["", "WF-2023-05-KOR-MOFU-Core Mini Digital SAT Practice Test 2023", "Organic Search", "Content"],
     ["", "WF-2023-05-KOR-MOUF-Core Mini Digital SAT Practice Test 2023", "Organic Search", "Content"],
-    ["", "WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test", "Organic Search", "Content"]
+    ["", "WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test", "Organic Search", "Content"],
+
+    // 2026-07-29 추가 — Search 캐치올 재분류(Search_CatchAll_QA 시트 수동 검토,
+    // 91개 캠페인 중 세그먼트별 대표 샘플 + 사용자가 직접 최종 판정한 충돌 2건)
+    ["KR_core_2022-06-15_youtube-acquisition-tofu_traffic", "Crimson Education Contact Us form", "", "Content"],
+    ["KR_cga_2021-06-14_whycga", "Filled in CGA Contact Enquiry form", "Email", "Other"],
+    ["KR_core_2023-03-14_google-perfmax-acquisition-consult-bofu_contact", "Crimson Education Contact Us form", "", "BOFU"],
+    ["KR_core_2025-02-04_daniel-seminar-ty-msg", "Crimson Education Contact Us form", "", "Seminar"],
+    ["KR_core_2023-04-08_transfer-gap-year-strategy", "Crimson Education Contact Us form", "", "Webinar"],
+    ["KR_core_2022-06-18_nail-us-essay-w-jessebaek-kuk", "Crimson Education Contact Us form", "", "Seminar"],
+
+    // 충돌 2건 — 사용자 최종 판정(campaign에 두 신호가 섞여 자동 규칙으로 불가)
+    ["KR_core_2022-12-16_youtube-shorts_book-a-consult-bofu_contact", "Crimson Education Contact Us form", "", "BOFU"],
+    ["US_core_2025-10-06_pmax-consolidated-tier2_contact", "Crimson Education Contact Us form", "", "Other"],
+
+    // 2026-07-29 추가 — Search 잔존 콘텐츠성 키워드 재분류(CLAUDE.md #14
+    // 원래 미해결 항목, runAuditSearchSegmentIssues() Part 2 15건 전부 Content)
+    ["", "Core SAT practice test", "", "Content"],
+    ["", "Filled out form for Mini Digital SAT Practice Test 2023", "", "Content"],
+    ["", "WF-2025-11-SGP-MOFU-Core US Admissions Quiz", "", "Content"],
+    ["", "WF-2022-02-KOR-MOFU-Core Major Selection On Demand", "", "Content"],
+    ["", "Mini SAT Practice Test (RUS-RU)", "", "Content"],
+    ["NZ_core_2021-06-10_email-au-webinar-research", "", "", "Content"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() "search" in "research" 오탐 수정 +
+ * leadSource 캐치올 재분류 (2026-07-29)
+ *
+ * WHY
+ * "college-research-ebook", "research-and-work-experience..." 등 campaign에
+ * "research"가 포함된 경우 그 안의 "search" 부분 문자열이 campaign 확정
+ * Search 신호로 오탐돼, ebook/webinar/seminar여야 할 캠페인이 전부 강제로
+ * Search가 되고 있었음(사용자가 Search_OPS 육안 검토로 발견). "re" 바로
+ * 뒤에 오는 "search"만 제외하도록 수정 — 진짜 "search-kr_..."류는 영향
+ * 없음(회귀 확인 포함). SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES(leadSource
+ * 기반 재분류)도 함께 검증.
+ * ==========================================================
+ */
+function testGetBusinessSegmentResearchSubstringFix(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+
+    // "research" 오탐 수정 — BUSINESS_SEGMENT_EXCEPTIONS로 이미 덮이지 않는
+    // 새 캠페인으로 회귀 확인(하드코딩 예외가 아니라 규칙 자체가 고쳐졌는지 확인)
+    ["KR_core_2026-01-01_some-research-project-ebook", "", "", "Content"],
+
+    // 회귀 — 진짜 "search"는 여전히 Search 우선(campaign에 "re" 없이 시작)
+    ["KR_core_2021-04-01_search-kr_brand-crimson_contact", "", "", "Search"],
+
+    // leadSource 캐치올 재분류
+    ["", "Crimson Education Contact Us form", "Organic Content", "Content"],
+    ["", "Crimson Education Contact Us form", "Paid Social", "Other"],
+    ["", "Crimson Education Contact Us form", "Affiliate Organization", "Other"],
+    ["", "Crimson Education Contact Us form", "Offline Outreach", "Other"],
+
+    // 신규 예외 배치 샘플(campaign 키)
+    ["530733732", "", "", "Other"],
+    ["type-form-website", "", "", "Other"],
+    ["crimson-careers-typeform", "", "", "Content"],
+    ["MedView - Contact Form", "", "", "Other"],
+    ["{campaign.name}", "", "", "Other"]
   ];
 
   let pass = true;
