@@ -21,9 +21,15 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.17.0
+ * v1.18.0
  *
  * Change Log
+ * v1.18.0 (2026-07-30)
+ * - refreshTargetEngine_() 끝에서 신규 applyTargetEngineBlockStyles_()
+ *   (92_TargetStyles.js) 호출 — Block A~D에 숫자 서식(천단위 콤마, $/%는
+ *   소수점 2자리) 적용. 이전 라운드(v1.16.0~v1.17.0)에서 Block 0에만 서식을
+ *   넣고 Block A~D는 빠뜨렸던 걸 사용자가 실 시트에서 지적(Seasonality %가
+ *   서식 없이 그대로 표시됨).
  * v1.17.0 (2026-07-30)
  * - `buildCombinedWeeklySpentByDateKey_()` 제거 — Actual CPNP1 원천이
  *   91_TargetReport.js의 신규 `computeTargetActualCPNP1ByGroupMonth_()`(Block 0
@@ -2838,6 +2844,8 @@ function refreshTargetEngine_(){
     sheet, CONFIG.TARGET.ENGINE.BLOCK_D_START_COL,
     buildTargetDerivationHeaders_(), targetDerivationRowsToMatrix_(derivationRows)
   );
+
+  applyTargetEngineBlockStyles_(sheet); // 92_TargetStyles.js — Block A~D 숫자 서식(천단위 콤마, $/%는 소수점 2자리)
 
   SpreadsheetApp.flush();
 

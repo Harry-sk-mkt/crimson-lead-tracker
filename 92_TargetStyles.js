@@ -13,9 +13,16 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-07-30)
+ * - 신규 applyTargetEngineBlockStyles_() — v1.4.0에서 Block 0에만 숫자 서식을
+ *   넣고 Block A~D(벤치마크/P1당 가치/딜비중/목표전개)는 빠뜨렸던 걸 사용자가
+ *   지적(실 시트 확인: Seasonality %가 "0.07478545157"처럼 그대로, CPNP1
+ *   Benchmark도 서식 없이 표시됨) — Block A~D 전체에도 동일 규칙(숫자는
+ *   천단위 콤마, $/%는 소수점 2자리) 적용. 90_TargetEngine.js refreshTargetEngine_()
+ *   끝에서 호출.
  * v1.4.0 (2026-07-30)
  * - 신규 applyTargetEngineInputStyles_() — Target_Engine Block 0(스칼라+CPNP1
  *   벤치마크 수동입력+월별 회사 Revenue Target/Budget+세그먼트별 월별 Spent)에
@@ -197,5 +204,89 @@ function applyTargetEngineInputStyles_(sheet){
 
   sheet.getRange(input.MANUAL_SEGMENT_SPENT.DATA_START_ROW, monthStartCol, groupCount, monthCount)
     .setNumberFormat("$#,##0.00");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply Target Engine Block Styles (Block A~D 숫자 서식 — 2026-07-30 신규)
+ *
+ * WHY
+ * applyTargetEngineInputStyles_()가 Block 0(수동 입력 영역)만 서식을 적용하고
+ * Block A~D(계산 결과)는 빠뜨렸음 — 사용자가 실 시트에서 Seasonality %가
+ * "0.07478545157"처럼 서식 없이 그대로 표시되는 걸 확인하고 지적(2026-07-30).
+ * "숫자는 천단위 콤마, $/%는 소수점 2자리" 규칙을 Block A~D 전체에도 동일 적용.
+ * 각 블록은 매번 clear() 후 다시 쓰이므로(refreshTargetEngine_() wide-clear가
+ * 서식까지 지움) 매 refresh마다 다시 적용해야 한다 — writeTargetEngineBlock_()
+ * 호출 전부가 끝난 뒤 이 함수를 호출한다. 실제 데이터 행 수를 매번 정확히
+ * 알 필요 없이 넉넉한 행 수(2000, wide-clear와 동일 관례)에 적용 — 빈 셀에
+ * 서식만 있는 건 무해하다.
+ *
+ * @param {Sheet} sheet  Target_Engine 시트
+ * ==========================================================
+ */
+function applyTargetEngineBlockStyles_(sheet){
+
+  const engine = CONFIG.TARGET.ENGINE;
+  const MAX_ROWS = 2000;
+  const DATA_START_ROW = 2; // 헤더가 1행, 데이터는 2행부터 (writeTargetEngineBlock_ 관례)
+  const numDataRows = MAX_ROWS - DATA_START_ROW + 1;
+
+  const fmt = function(startCol, colOffset, numCols, numberFormat){
+    sheet.getRange(DATA_START_ROW, startCol + colOffset, numDataRows, numCols)
+      .setNumberFormat(numberFormat);
+  };
+
+  /*
+  ==========================================================
+  Block A — Group, Month, FY24/25/26 New P1(#,##0), Weighted Avg(#,##0.00),
+  Seasonality %(0.00%), CPNP1 Benchmark($#,##0.00)
+  ==========================================================
+  */
+
+  const newP1FYCount = CONFIG.TARGET.BENCHMARK.NEWP1_FYS.length;
+
+  fmt(engine.BLOCK_A_START_COL, 2, newP1FYCount, "#,##0");                 // FY New P1 (그룹당 FY 수만큼)
+  fmt(engine.BLOCK_A_START_COL, 2 + newP1FYCount, 1, "#,##0.00");          // Weighted Avg New P1
+  fmt(engine.BLOCK_A_START_COL, 2 + newP1FYCount + 1, 1, "0.00%");         // Seasonality %
+  fmt(engine.BLOCK_A_START_COL, 2 + newP1FYCount + 2, 1, "$#,##0.00");     // CPNP1 Benchmark
+
+  /*
+  ==========================================================
+  Block B — Group, New P1 Count(#,##0), Cohort1 Revenue($), CurrentFYP1V($),
+  Prev P1 Count(#,##0), Cohort2 Revenue($), PrevP1V($)
+  ==========================================================
+  */
+
+  fmt(engine.BLOCK_B_START_COL, 1, 1, "#,##0");       // FY New P1 Count
+  fmt(engine.BLOCK_B_START_COL, 2, 1, "$#,##0.00");   // Cohort1 Revenue (R1)
+  fmt(engine.BLOCK_B_START_COL, 3, 1, "$#,##0.00");   // CurrentFYP1V (a)
+  fmt(engine.BLOCK_B_START_COL, 4, 1, "#,##0");       // Prev P1 Count
+  fmt(engine.BLOCK_B_START_COL, 5, 1, "$#,##0.00");   // Cohort2 Revenue (R2)
+  fmt(engine.BLOCK_B_START_COL, 6, 1, "$#,##0.00");   // PrevP1V (b)
+
+  /*
+  ==========================================================
+  Block C — Group, Deal Share(%), Pipeline Share(%), FY New/Pipeline/Total
+  P1 Target(#,##0)
+  ==========================================================
+  */
+
+  fmt(engine.BLOCK_C_START_COL, 1, 1, "0.00%");  // Deal Share (R1)
+  fmt(engine.BLOCK_C_START_COL, 2, 1, "0.00%");  // Pipeline Share (R2)
+  fmt(engine.BLOCK_C_START_COL, 3, 3, "#,##0");  // FY New/Pipeline/Total P1 Target (연속 3컬럼)
+
+  /*
+  ==========================================================
+  Block D — Week Start/End(날짜), Month/Group(텍스트), Month/Week New·Pipeline·
+  Total P1 Target(#,##0), Month/Week CPNP1($)
+  ==========================================================
+  */
+
+  fmt(engine.BLOCK_D_START_COL, 0, 1, "yyyy-mm-dd");  // Week Start
+  fmt(engine.BLOCK_D_START_COL, 1, 1, "yyyy-mm-dd");  // Week End
+  fmt(engine.BLOCK_D_START_COL, 4, 6, "#,##0");        // Month/Week New·Pipeline·Total P1 Target (연속 6컬럼)
+  fmt(engine.BLOCK_D_START_COL, 10, 2, "$#,##0.00");   // Month/Week CPNP1
 
 }
