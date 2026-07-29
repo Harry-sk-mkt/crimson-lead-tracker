@@ -51,4 +51,8 @@ fi
 
 echo ""
 echo "clasp push 실행..."
-clasp push "$@"
+# --force: TTY가 없는 환경(이 harness 등)에서 clasp가 자체 확인 프롬프트를
+# 렌더링하지 못하고 "Skipping push."로 조용히 아무것도 안 하고 종료되는 것을
+# 실측 확인(2026-07-30, clasp 3.3.0) — 이 래퍼 자체가 이미 위에서 worktree
+# 확인/y-n 게이트를 거치므로, clasp의 중복 확인은 안전하게 건너뛴다.
+clasp push --force "$@"
