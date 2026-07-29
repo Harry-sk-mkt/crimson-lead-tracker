@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.13.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-07-30)
+ * - CONFIG.TARGET.ENGINE Block A~D 시작 컬럼을 전부 +10 이동(4/13/21/28 →
+ *   14/23/31/38) — Block 0의 신규 월별 그리드 섹션(B~M열, 12개월)이 기존
+ *   BLOCK_A_START_COL(D열=4)과 정확히 겹쳐 실제 시트에서 두 블록 데이터가
+ *   같은 행/컬럼에서 서로 덮어쓰던 버그 발견·수정(사용자 실측 리포트). 상세:
+ *   docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
  * v1.13.0 (2026-07-30)
  * - CONFIG.TARGET 세그먼트 구조 전면 분해: GROUP_ORDER/SEGMENT_GROUPS를 3그룹
  *   (events/contact/content)에서 5개 실제 Business Segment(Seminar/Webinar/
@@ -489,9 +495,19 @@ const CONFIG = {
     },
 
     // Engine 시트 Block A~D 시작 컬럼 (Block 0 오른쪽부터 좌→우 배치)
+    //
+    // 2026-07-30 전면 이동(D→N열, +10컬럼): Block 0에 월별 그리드 섹션(MONTHLY_COMPANY_INPUTS/
+    // MANUAL_SEGMENT_SPENT, MONTH_START_COL=2부터 12개월 = B~M열)이 추가되면서, 원래
+    // BLOCK_A_START_COL=4(D열)이 그 그리드 한복판(D열은 그리드의 3번째 달 OCT 컬럼)과
+    // 정확히 겹치는 버그가 실제 시트에서 발견됨(사용자 리포트: "Monthly Company-wide Inputs
+    // 행에 AUG/SEP 다음 Webinar MAR... 행이 이어짐" — 두 블록이 같은 행에서 서로 다른 컬럼을
+    // 쓰고 있었을 뿐인데 시각적으로 뒤섞여 보였던 것, 실제로는 Block 0가 쓴 값을 Block A가
+    // 그대로 덮어쓰고 있었음). Block 0 그리드가 M열(13)까지 쓰므로 Block A~D를 전부 N열(14)
+    // 이후로 이동(기존 간격 패턴 그대로 +10 이동: 4/13/21/28 → 14/23/31/38).
+    // 상세: docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
     ENGINE: {
 
-      BLOCK_A_START_COL: 4,   // D열 — 벤치마크
+      BLOCK_A_START_COL: 14,  // N열 — 벤치마크 (Block 0 월별 그리드가 M열까지 쓰므로 그 다음부터)
       BLOCK_A_COLUMNS: 8,     // Group, Month, FY24, FY25, FY26, Weighted Avg, Seasonality%, CPNP1 Benchmark
 
       // P1당 가치 — 2026-07-27 사용자 확정으로 코호트1(CurrentFYP1V)/코호트2(PrevP1V)
@@ -499,7 +515,7 @@ const CONFIG = {
       // 코호트1 = Create Date·Close Date 둘 다 FY26인 딜(같은 해 생성·클로징),
       // 코호트2 = Close Date는 FY26인데 Create Date는 이전 FY(과거 리드가 이번
       // 해에 클로징된 파이프라인 기여분, content처럼 nurturing 긴 채널 대응).
-      BLOCK_B_START_COL: 13,  // M열 — P1당 가치
+      BLOCK_B_START_COL: 23,  // W열 — P1당 가치
       BLOCK_B_COLUMNS: 7,     // Group, NewP1(FY26) 수, 코호트1 Revenue(R1), CurrentFYP1V,
                                 // PrevP1 수, 코호트2 Revenue(R2), PrevP1V
 
@@ -508,13 +524,13 @@ const CONFIG = {
       // 트랙(코호트2 비율÷b)으로 나눠 계산 후 합산. 2컬럼→6컬럼으로 확장되며
       // Block D 시작 컬럼이 뒤로 밀림(refreshTargetEngine_()의 wide-clear로
       // 예전 위치 잔재 처리).
-      BLOCK_C_START_COL: 21,  // U열 — 딜 비중(코호트1/2) + New/Pipeline FY 목표
+      BLOCK_C_START_COL: 31,  // AE열 — 딜 비중(코호트1/2) + New/Pipeline FY 목표
       BLOCK_C_COLUMNS: 6,     // Group, Deal Share(R1), Pipeline Share(R2),
                                 // FY New P1 Target, FY Pipeline P1 Target, FY Total P1 Target
 
       // 2026-07-27 사용자 요청: Target_REP에서 New/Pipeline P1 목표가 분리 표시돼야
       // 해서, 합계(Total)로 뭉쳐 전개하던 걸 New/Pipeline 각각 전개하도록 확장.
-      BLOCK_D_START_COL: 28,  // AB열 — 목표 전개 (주 캘린더 전체 나열)
+      BLOCK_D_START_COL: 38,  // AL열 — 목표 전개 (주 캘린더 전체 나열)
       BLOCK_D_COLUMNS: 12     // Week Start, Week End, Month(라벨만, 예 "AUG"), Group,
                                 // Month/Week New P1 Target, Month/Week Pipeline P1 Target,
                                 // Month/Week Target P1(합계), Month CPNP1 Benchmark, Week Target CPNP1
