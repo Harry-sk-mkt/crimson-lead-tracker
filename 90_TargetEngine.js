@@ -21,9 +21,40 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.15.0
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-07-30)
+ * - 세그먼트 구조 전면 분해(3그룹 events/contact/content → 5세그먼트 Seminar/
+ *   Webinar/BOFU/Search/Content, CONFIG.TARGET.GROUP_ORDER 변경) 대응.
+ *   deriveTargetGroup_()/computeBenchmarkBlockRows_()/computeP1ValueBlockRows_()
+ *   등 이미 GROUP_ORDER를 동적으로 순회하던 함수는 코드 변경 없음(설정만 반영).
+ *   반면 `{events:0,contact:0,content:0}`처럼 3그룹을 리터럴로 하드코딩했던
+ *   computeDealShareRatiosFromDealRows_()/computeDealShareRatiosCohort2FromDealRows_()/
+ *   computeDealCohortsFromDealRows_()는 GROUP_ORDER 기반 동적 초기화로 수정(그렇지
+ *   않으면 새 그룹명에 대해 byGroup[group]이 undefined라 NaN 누적되는 버그 발생).
+ *   readTargetEngineInputs_()/setupTargetEngineInputDefaults_()는 개별 named row
+ *   (IMPROVEMENT_FACTOR_EVENTS 등)에서 START행+GROUP_ORDER 인덱스 방식으로 전면
+ *   재작성, Block 0에 신규 섹션 3개 추가(세그먼트별 FY26 CPNP1 벤치마크 수동입력/
+ *   월별 회사 전체 Revenue Target·Budget/세그먼트별 월별 실제 Spent 수동취합) —
+ *   신규 setupTargetEngineMonthlyGridDefaults_() 헬퍼. computeDealShareBlockRows_()/
+ *   computeTargetDerivationRows_()는 inputs.dealShareEvents 등 named property 대신
+ *   inputs.dealShareByGroup/improvementFactorByGroup(동적 객체)을 직접 소비하도록
+ *   변경. CONFIG.TARGET.BENCHMARK.CPNP1_FYS를 빈 배열로 전환(채널시트가 3그룹
+ *   단위라 5세그먼트 자동 분해 불가)하면서 computeCombinedSpentByGroupFYMonth_()에
+ *   조기 반환 추가(불필요한 외부 스프레드시트 호출 방지), computeCPNP1RatioByFYMonth_()는
+ *   "지출 데이터 없음"과 "지출 0원"을 구분 못 하던 기존 버그를 hasOwnProperty
+ *   체크로 수정. testComputeDealShareRatiosCohort2FromDealRows()가 존재하지도
+ *   않는 `contentCategory` 필드를 픽스처로 쓰고 있어(2026-07-28 Segment 컬럼
+ *   전환 이후 방치된 버그, 실질적으로 항상 unclassified라 우연히 통과하던 상태)
+ *   `businessSegment`로 교정. 그 외 3그룹을 픽스처로 쓰던 테스트 전부(testDeriveTargetGroup/
+ *   testClassifyDealSegment/testComputeDealShareRatiosFromDealRows/
+ *   testComputeDealCohortsFromDealRows/testComputeBenchmarkBlockRows/
+ *   testComputeP1ValueBlockRows/testComputeDealShareBlockRows/
+ *   testComputeTargetDerivationRows)를 5세그먼트 실제 이름으로 갱신. **Report/Styles
+ *   레이어(91_TargetReport.js/92_TargetStyles.js, 그룹당 컬럼 반복 구조)는 이번
+ *   라운드에서 미변경 — 다음 단계 필요, 상세: docs/exec-plans/active/
+ *   2026-07-30-target-rep-segment-breakdown.md
  * v1.15.0 (2026-07-29)
  * - 별도 git worktree(worktree-clever-seeking-dolphin)에 있던 New/Pipeline
  *   2트랙 Block C/D 확장 작업(2026-07-27, 아래 병합된 v1.13.0/v1.12.2/
@@ -265,12 +296,13 @@ function deriveTargetGroup_(businessSegment){
  */
 function testDeriveTargetGroup(){
 
+  // 2026-07-30 세그먼트 분해 — 그룹명이 세그먼트명 그대로(1:1 매핑)로 변경.
   const cases = [
-    ["Webinar", "events"],
-    ["Seminar", "events"],
-    ["BOFU", "contact"],
-    ["Search", "contact"],
-    ["Content", "content"],
+    ["Webinar", "Webinar"],
+    ["Seminar", "Seminar"],
+    ["BOFU", "BOFU"],
+    ["Search", "Search"],
+    ["Content", "Content"],
     ["Referral", null],
     ["Other", null],
     ["", null]
@@ -1165,6 +1197,13 @@ function testComputeDealTrackerCountsByKey_(){
  * roughMonthlySum — 각 행의 Start Date가 속한 (fy, month)로 귀속시켜 합산
  * (구방식 일~토/신방식 월~일 무관, docs/TargetReportDesign.md §7).
  *
+ * WHY (2026-07-30 조기 반환 추가)
+ * CONFIG.TARGET.BENCHMARK.CPNP1_FYS가 세그먼트 분해로 빈 배열이 되면서(채널시트가
+ * 3그룹 단위라 5세그먼트 자동 분해 불가 — exec-plan 참고) 이 함수의 결과는 항상
+ * 빈 객체가 된다. 그 결과를 얻으려고 매번 외부 스프레드시트를 2개(채널시트/Naver)
+ * 여는 왕복 호출을 하는 건 낭비이므로, CPNP1_FYS가 비어있으면 외부 호출 자체를
+ * 건너뛴다(Article 10: Read Once/불필요한 호출 배제).
+ *
  * @return {Object}  group -> fy -> month -> spentSum(NZD)
  * ==========================================================
  */
@@ -1172,6 +1211,8 @@ function computeCombinedSpentByGroupFYMonth_(){
 
   const result = {};
   const cpnp1FYs = CONFIG.TARGET.BENCHMARK.CPNP1_FYS;
+
+  if(cpnp1FYs.length === 0) return result;
 
   const addToResult = function(group, startDate, spent){
 
@@ -1346,10 +1387,18 @@ function computeTargetLeadsOPSAggregates_(){
  * ==========================================================
  * Compute CPNP1 Ratio By FY/Month (분모=New P1이 0이면 그 셀은 결측)
  *
+ * WHY (2026-07-30 hasOwnProperty 수정)
+ * 원래 `spentMonths[month] || 0`는 "그 달 지출 데이터가 없음"과 "그 달 지출이
+ * 정확히 0원"을 구분하지 못해, 데이터가 아예 없는 달도 CPNP1 $0으로 잘못
+ * 계산됐다. 세그먼트 분해로 CPNP1 벤치마크가 당분간 공란(빈 배열, 위
+ * computeCombinedSpentByGroupFYMonth_() 참고)이 되면서 이 구분이 다시 중요해질
+ * 수 있어(Phase 1 캠페인 데이터 연동 후 재활성화 시 일부 달만 데이터가 있을
+ * 가능성) hasOwnProperty로 명시적 결측 처리를 추가.
+ *
  * @param {Object} spentByFYMonth       fy -> month -> spent
  * @param {Object} newP1CountsByFYMonth fy -> month -> count
  * @param {Array<number>} fys
- * @return {Object}  fy -> month -> ratio (count===0이면 그 month 키 없음)
+ * @return {Object}  fy -> month -> ratio (count===0이거나 지출 데이터 자체가 없으면 그 month 키 없음)
  * ==========================================================
  */
 function computeCPNP1RatioByFYMonth_(spentByFYMonth, newP1CountsByFYMonth, fys){
@@ -1367,9 +1416,9 @@ function computeCPNP1RatioByFYMonth_(spentByFYMonth, newP1CountsByFYMonth, fys){
 
       const count = countMonths[month] || 0;
 
-      if(count > 0){
+      if(count > 0 && Object.prototype.hasOwnProperty.call(spentMonths, month)){
 
-        ratios[fy][month] = (spentMonths[month] || 0) / count;
+        ratios[fy][month] = spentMonths[month] / count;
 
       }
 
@@ -1473,8 +1522,9 @@ function computeBenchmarkBlockRows_(newP1CountsByGroupFYMonth, spentByGroupFYMon
  */
 function testComputeBenchmarkBlockRows(){
 
+  // 2026-07-30 세그먼트 분해 — CONFIG.TARGET.GROUP_ORDER 실제 세그먼트명 사용(첫 항목 Seminar).
   const counts = {
-    events: {
+    Seminar: {
       24: { AUG: 10 },
       25: { AUG: 20 },
       26: { AUG: 30 }
@@ -1482,7 +1532,7 @@ function testComputeBenchmarkBlockRows(){
   };
 
   const spent = {
-    events: {
+    Seminar: {
       25: { AUG: 2000 },
       26: { AUG: 3000 }
     }
@@ -1490,20 +1540,24 @@ function testComputeBenchmarkBlockRows(){
 
   const rows = computeBenchmarkBlockRows_(counts, spent);
 
-  const augRow = rows.filter(function(r){ return r.group === "events" && r.month === "AUG"; })[0];
+  const augRow = rows.filter(function(r){ return r.group === "Seminar" && r.month === "AUG"; })[0];
 
   const expectedWeightedAvg = (1 * 10 + 2 * 20 + 3 * 30) / 6; // 23.333...
-  const expectedCPNP1 = (2 * (2000 / 20) + 3 * (3000 / 30)) / 5; // (2*100+3*100)/5 = 100
 
+  // 2026-07-30: CONFIG.TARGET.BENCHMARK.CPNP1_FYS가 빈 배열로 잠정 중단돼(세그먼트
+  // 분해로 채널시트 자동집계 폐기, exec-plan 참고) cpnp1Benchmark는 이제 입력한
+  // spent 픽스처와 무관하게 항상 0이 되는 게 올바른 동작 — computeWeightedAverage_()가
+  // keys=[]일 때 0을 반환하기 때문(denominator 0 방어). New P1 가중평균 로직 자체는
+  // 이 중단과 무관하게 그대로 검증한다.
   const pass =
     rows.length === CONFIG.TARGET.GROUP_ORDER.length * 12 &&
     Math.abs(augRow.weightedAvgNewP1 - expectedWeightedAvg) < 1e-6 &&
-    Math.abs(augRow.cpnp1Benchmark - expectedCPNP1) < 1e-6 &&
+    augRow.cpnp1Benchmark === 0 &&
     augRow.seasonalityPct > 0;
 
   Logger.log("Row count: " + rows.length + " (expected " + (CONFIG.TARGET.GROUP_ORDER.length * 12) + ")");
   Logger.log("AUG weightedAvgNewP1: " + augRow.weightedAvgNewP1 + " (expected " + expectedWeightedAvg + ")");
-  Logger.log("AUG cpnp1Benchmark: " + augRow.cpnp1Benchmark + " (expected " + expectedCPNP1 + ")");
+  Logger.log("AUG cpnp1Benchmark: " + augRow.cpnp1Benchmark + " (expected 0 — CPNP1_FYS 잠정 중단)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1562,28 +1616,29 @@ function computeP1ValueBlockRows_(dealCohortsByGroup, newP1CountByGroup, totalP1
  */
 function testComputeP1ValueBlockRows(){
 
+  // 2026-07-30 세그먼트 분해 — CONFIG.TARGET.GROUP_ORDER 실제 세그먼트명 사용.
   const dealCohortsByGroup = {
-    events: { cohort1Revenue: 100000, cohort2Revenue: 20000 }
+    Seminar: { cohort1Revenue: 100000, cohort2Revenue: 20000 }
   };
 
-  const newP1CountByGroup = { events: 100 };
-  const totalP1CountByGroup = { events: 300 };
+  const newP1CountByGroup = { Seminar: 100 };
+  const totalP1CountByGroup = { Seminar: 300 };
 
   const rows = computeP1ValueBlockRows_(dealCohortsByGroup, newP1CountByGroup, totalP1CountByGroup);
 
-  const eventsRow = rows.filter(function(r){ return r.group === "events"; })[0];
-  const otherRow = rows.filter(function(r){ return r.group === "contact"; })[0];
+  const seminarRow = rows.filter(function(r){ return r.group === "Seminar"; })[0];
+  const otherRow = rows.filter(function(r){ return r.group === "BOFU"; })[0];
 
   const pass =
-    eventsRow.prevP1Count === 200 && // 300 - 100
-    Math.abs(eventsRow.currentFYP1V - 1000) < 1e-6 && // 100000 / 100
-    Math.abs(eventsRow.prevP1V - 100) < 1e-6 && // 20000 / 200
+    seminarRow.prevP1Count === 200 && // 300 - 100
+    Math.abs(seminarRow.currentFYP1V - 1000) < 1e-6 && // 100000 / 100
+    Math.abs(seminarRow.prevP1V - 100) < 1e-6 && // 20000 / 200
     otherRow.currentFYP1V === 0 &&
     otherRow.prevP1V === 0;
 
-  Logger.log("events CurrentFYP1V(a): " + eventsRow.currentFYP1V + " (expected 1000)");
-  Logger.log("events PrevP1V(b): " + eventsRow.prevP1V + " (expected 100)");
-  Logger.log("contact(무데이터) a/b: " + otherRow.currentFYP1V + "/" + otherRow.prevP1V + " (expected 0/0)");
+  Logger.log("Seminar CurrentFYP1V(a): " + seminarRow.currentFYP1V + " (expected 1000)");
+  Logger.log("Seminar PrevP1V(b): " + seminarRow.prevP1V + " (expected 100)");
+  Logger.log("BOFU(무데이터) a/b: " + otherRow.currentFYP1V + "/" + otherRow.prevP1V + " (expected 0/0)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1656,7 +1711,8 @@ function computeDealShareRatiosFromDealRows_(dealRows){
   config.EXCLUDE_LEAD_SOURCES.forEach(function(src){ excludeSet[src] = true; });
 
   let base = 0;
-  const byGroup = { events: 0, contact: 0, content: 0 };
+  const byGroup = {};
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(g){ byGroup[g] = 0; });
 
   let classifiedCount = 0;
   let unclassifiedCount = 0;
@@ -1682,7 +1738,7 @@ function computeDealShareRatiosFromDealRows_(dealRows){
   Logger.log(
     CONFIG.LOG.PREFIX + " Deal Tracker classify (FY" + targetFY + " 코호트1 — 같은 해 생성·클로징): " +
     classifiedCount + " classified / " + unclassifiedCount + " unclassified " +
-    "(Content Category로 세그먼트 분류 안 된 건수)"
+    "(Segment 컬럼으로 세그먼트 분류 안 된 건수)"
   );
 
   const result = {};
@@ -1703,7 +1759,8 @@ function computeDealShareRatiosFromDealRows_(dealRows){
  */
 /**
  * ==========================================================
- * TEST — classifyDealSegment_() (딜 자체 필드로 직접 분류, Leads_OPS 매칭 없음)
+ * TEST — classifyDealSegment_() (딜 자체 필드로 직접 분류, Leads_OPS 매칭 없음 —
+ * 2026-07-30 세그먼트 분해로 그룹명이 세그먼트명 그대로가 됨, 1:1 매핑 확인)
  * ==========================================================
  */
 function testClassifyDealSegment(){
@@ -1715,15 +1772,15 @@ function testClassifyDealSegment(){
   const otherMatch = classifyDealSegment_({ businessSegment: "Other" });
 
   const pass =
-    webinarMatch === "events" &&
-    searchMatch === "contact" &&
-    contentMatch === "content" &&
+    webinarMatch === "Webinar" &&
+    searchMatch === "Search" &&
+    contentMatch === "Content" &&
     noMatch === null &&
     otherMatch === null;
 
-  Logger.log("Webinar 분류: " + webinarMatch + " (expected events)");
-  Logger.log("Search 분류: " + searchMatch + " (expected contact)");
-  Logger.log("Content 분류: " + contentMatch + " (expected content)");
+  Logger.log("Webinar 분류: " + webinarMatch + " (expected Webinar)");
+  Logger.log("Search 분류: " + searchMatch + " (expected Search)");
+  Logger.log("Content 분류: " + contentMatch + " (expected Content)");
   Logger.log("N/A → 분류 불가: " + noMatch + " (expected null)");
   Logger.log("Other → 분류 불가: " + otherMatch + " (expected null)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
@@ -1748,13 +1805,13 @@ function testComputeDealShareRatiosFromDealRows(){
 
   const result = computeDealShareRatiosFromDealRows_(dealRows);
 
-  const expectedEvents = 100 / 450; // 코호트1 base = 100+100+200+50(분류 안 됨) = 450
+  const expectedWebinar = 100 / 450; // 코호트1 base = 100+100+200+50(분류 안 됨) = 450
 
-  const pass = Math.abs(result.events - expectedEvents) < 1e-6;
+  const pass = Math.abs(result.Webinar - expectedWebinar) < 1e-6;
 
-  Logger.log("events dealShare: " + result.events + " (expected ~" + expectedEvents + ")");
-  Logger.log("contact dealShare: " + result.contact);
-  Logger.log("content dealShare: " + result.content);
+  Logger.log("Webinar dealShare: " + result.Webinar + " (expected ~" + expectedWebinar + ")");
+  Logger.log("Search dealShare: " + result.Search);
+  Logger.log("Content dealShare: " + result.Content);
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1793,7 +1850,8 @@ function computeDealShareRatiosCohort2FromDealRows_(dealRows){
   config.EXCLUDE_LEAD_SOURCES.forEach(function(src){ excludeSet[src] = true; });
 
   let base = 0;
-  const byGroup = { events: 0, contact: 0, content: 0 };
+  const byGroup = {};
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(g){ byGroup[g] = 0; });
 
   let classifiedCount = 0;
   let unclassifiedCount = 0;
@@ -1835,30 +1893,35 @@ function computeDealShareRatiosCohort2FromDealRows_(dealRows){
 /**
  * ==========================================================
  * TEST — computeDealShareRatiosCohort2FromDealRows_() (합성 데이터)
+ *
+ * 2026-07-30 수정: 원래 픽스처가 `contentCategory` 필드를 썼는데 classifyDealSegment_()는
+ * `businessSegment`만 읽으므로(2026-07-28부터) 전 행이 항상 분류 실패(unclassified)해
+ * 테스트가 실질적으로 아무것도 검증하지 못하고 있었음(값 자체는 우연히 0이라 통과 판정만
+ * 됐던 잠재적 버그) — `businessSegment`로 교정, 그룹명도 5세그먼트로 갱신.
  * ==========================================================
  */
 function testComputeDealShareRatiosCohort2FromDealRows(){
 
   const dealRows = [
     // 코호트1 — 완전 제외돼야 함
-    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" },
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "paid social", businessSegment: "Webinar" },
     // 코호트2 (closeFY=26, createdFY=25) — 배분 대상
-    { closeFY: 26, createdFY: 25, revenue: 300, leadSource: "paid social", contentCategory: "webinar" },
-    { closeFY: 26, createdFY: 24, revenue: 200, leadSource: "organic", contentCategory: "ebook" },
-    { closeFY: 26, createdFY: null, revenue: 100, leadSource: "organic", contentCategory: "n/a" }, // createdFY 불명 — 코호트2로 처리, 분류 안 됨
-    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "Upsell", contentCategory: "n/a" }, // 제외 대상
+    { closeFY: 26, createdFY: 25, revenue: 300, leadSource: "paid social", businessSegment: "Webinar" },
+    { closeFY: 26, createdFY: 24, revenue: 200, leadSource: "organic", businessSegment: "Content" },
+    { closeFY: 26, createdFY: null, revenue: 100, leadSource: "organic", businessSegment: "N/A" }, // createdFY 불명 — 코호트2로 처리, 분류 안 됨
+    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "Upsell", businessSegment: "N/A" }, // 제외 대상
     // closeFY가 타겟 FY 아님 — 제외
-    { closeFY: 25, createdFY: 24, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" }
+    { closeFY: 25, createdFY: 24, revenue: 9999, leadSource: "paid social", businessSegment: "Webinar" }
   ];
 
   const result = computeDealShareRatiosCohort2FromDealRows_(dealRows);
 
-  const expectedEvents = 300 / 600; // 코호트2 base = 300+200+100 = 600
+  const expectedWebinar = 300 / 600; // 코호트2 base = 300+200+100 = 600
 
-  const pass = Math.abs(result.events - expectedEvents) < 1e-6;
+  const pass = Math.abs(result.Webinar - expectedWebinar) < 1e-6;
 
-  Logger.log("events pipelineShare: " + result.events + " (expected ~" + expectedEvents + ")");
-  Logger.log("content pipelineShare: " + result.content + " (expected ~" + (200 / 600) + ")");
+  Logger.log("Webinar pipelineShare: " + result.Webinar + " (expected ~" + expectedWebinar + ")");
+  Logger.log("Content pipelineShare: " + result.Content + " (expected ~" + (200 / 600) + ")");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1972,8 +2035,9 @@ function computeDealCohortsFromDealRows_(dealRows){
   const excludeSet = {};
   config.EXCLUDE_LEAD_SOURCES.forEach(function(src){ excludeSet[src] = true; });
 
-  const cohort1ByGroup = { events: 0, contact: 0, content: 0 };
-  const cohort2ByGroup = { events: 0, contact: 0, content: 0 };
+  const cohort1ByGroup = {};
+  const cohort2ByGroup = {};
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(g){ cohort1ByGroup[g] = 0; cohort2ByGroup[g] = 0; });
 
   dealRows.forEach(function(row){
 
@@ -2029,11 +2093,11 @@ function testComputeDealCohortsFromDealRows(){
   const result = computeDealCohortsFromDealRows_(dealRows);
 
   const pass =
-    result.events.cohort1Revenue === 100 &&
-    result.events.cohort2Revenue === 300;
+    result.Webinar.cohort1Revenue === 100 &&
+    result.Webinar.cohort2Revenue === 300;
 
-  Logger.log("events cohort1Revenue: " + result.events.cohort1Revenue + " (expected 100)");
-  Logger.log("events cohort2Revenue: " + result.events.cohort2Revenue + " (expected 300)");
+  Logger.log("Webinar cohort1Revenue: " + result.Webinar.cohort1Revenue + " (expected 100)");
+  Logger.log("Webinar cohort2Revenue: " + result.Webinar.cohort2Revenue + " (expected 300)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -2066,11 +2130,7 @@ function testComputeDealCohortsFromDealRows(){
  */
 function computeDealShareBlockRows_(inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit){
 
-  const fallbackMap = {
-    events: inputs.dealShareEvents,
-    contact: inputs.dealShareContact,
-    content: inputs.dealShareContent
-  };
+  const fallbackMap = inputs.dealShareByGroup || {};
 
   return CONFIG.TARGET.GROUP_ORDER.map(function(group){
 
@@ -2108,18 +2168,23 @@ function computeDealShareBlockRows_(inputs, dealShareRatios, pipelineShareRatios
  */
 function testComputeDealShareBlockRows(){
 
+  // 2026-07-30 세그먼트 분해: CONFIG.TARGET.GROUP_ORDER가 실제로 5세그먼트
+  // (Seminar/Webinar/BOFU/Search/Content)라 픽스처도 그 이름을 그대로 써야
+  // rows[0]이 실제 첫 세그먼트(Seminar)와 맞물린다.
   const inputs = {
     revenueTarget: 1000000,
-    dealShareEvents: 0.34, dealShareContact: 0.33, dealShareContent: 0.33
+    dealShareByGroup: { Seminar: 0.34, Webinar: 0.2, BOFU: 0.2, Search: 0.13, Content: 0.13 }
   };
 
-  const dealShareRatios = { events: 0.5, contact: 0.3, content: 0.2 };
-  const pipelineShareRatios = { events: 0.2, contact: 0.3, content: 0.5 };
+  const dealShareRatios = { Seminar: 0.5, Webinar: 0.1, BOFU: 0.1, Search: 0.1, Content: 0.2 };
+  const pipelineShareRatios = { Seminar: 0.2, Webinar: 0.1, BOFU: 0.1, Search: 0.1, Content: 0.5 };
 
   const p1ValueByGroup = {
-    events: { currentFYP1V: 1000, prevP1V: 500 },
-    contact: { currentFYP1V: 800, prevP1V: 400 },
-    content: { currentFYP1V: 200, prevP1V: 300 }
+    Seminar: { currentFYP1V: 1000, prevP1V: 500 },
+    Webinar: { currentFYP1V: 900, prevP1V: 450 },
+    BOFU: { currentFYP1V: 800, prevP1V: 400 },
+    Search: { currentFYP1V: 700, prevP1V: 350 },
+    Content: { currentFYP1V: 200, prevP1V: 300 }
   };
 
   const newPipelineSplit = { newShare: 0.6, pipelineShare: 0.4 };
@@ -2128,20 +2193,20 @@ function testComputeDealShareBlockRows(){
     inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit
   );
 
-  const eventsRow = rows[0];
+  const seminarRow = rows[0];
 
   const expectedNewP1Target = (1000000 * 0.6 * 0.5) / 1000; // 300
   const expectedPipelineP1Target = (1000000 * 0.4 * 0.2) / 500; // 160
 
   const pass =
-    eventsRow.group === "events" &&
-    Math.abs(eventsRow.newP1Target - expectedNewP1Target) < 1e-6 &&
-    Math.abs(eventsRow.pipelineP1Target - expectedPipelineP1Target) < 1e-6 &&
-    Math.abs(eventsRow.totalP1Target - (expectedNewP1Target + expectedPipelineP1Target)) < 1e-6;
+    seminarRow.group === "Seminar" &&
+    Math.abs(seminarRow.newP1Target - expectedNewP1Target) < 1e-6 &&
+    Math.abs(seminarRow.pipelineP1Target - expectedPipelineP1Target) < 1e-6 &&
+    Math.abs(seminarRow.totalP1Target - (expectedNewP1Target + expectedPipelineP1Target)) < 1e-6;
 
-  Logger.log("events newP1Target: " + eventsRow.newP1Target + " (expected " + expectedNewP1Target + ")");
-  Logger.log("events pipelineP1Target: " + eventsRow.pipelineP1Target + " (expected " + expectedPipelineP1Target + ")");
-  Logger.log("events totalP1Target: " + eventsRow.totalP1Target);
+  Logger.log("Seminar newP1Target: " + seminarRow.newP1Target + " (expected " + expectedNewP1Target + ")");
+  Logger.log("Seminar pipelineP1Target: " + seminarRow.pipelineP1Target + " (expected " + expectedPipelineP1Target + ")");
+  Logger.log("Seminar totalP1Target: " + seminarRow.totalP1Target);
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -2180,11 +2245,7 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
     benchmarkByGroupMonth[row.group + "|" + row.month] = row;
   });
 
-  const improvementFactorByGroup = {
-    events: inputs.improvementFactorEvents,
-    contact: inputs.improvementFactorContact,
-    content: inputs.improvementFactorContent
-  };
+  const improvementFactorByGroup = inputs.improvementFactorByGroup || {};
 
   const fyNewP1TargetByGroup = {};
   const fyPipelineP1TargetByGroup = {};
@@ -2267,51 +2328,58 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
  */
 function testComputeTargetDerivationRows(){
 
+  // 2026-07-30 세그먼트 분해: CONFIG.TARGET.GROUP_ORDER가 실제로 5세그먼트라
+  // 픽스처도 그 이름(Seminar/Webinar/BOFU/Search/Content)을 그대로 써야
+  // computeTargetDerivationRows_() 내부의 GROUP_ORDER.forEach가 이 데이터를 찾는다.
   const benchmarkRows = [
-    { group: "events", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 500 },
-    { group: "contact", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 100 },
-    { group: "content", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 50 }
+    { group: "Seminar", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 500 },
+    { group: "Webinar", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 300 },
+    { group: "BOFU", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 100 },
+    { group: "Search", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 120 },
+    { group: "Content", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 50 }
   ];
 
   const dealShareRows = [
-    { group: "events", dealShare: 0.5, pipelineShare: 0.5, newP1Target: 500, pipelineP1Target: 200, totalP1Target: 700 },
-    { group: "contact", dealShare: 0.3, pipelineShare: 0.3, newP1Target: 300, pipelineP1Target: 100, totalP1Target: 400 },
-    { group: "content", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 400, totalP1Target: 600 }
+    { group: "Seminar", dealShare: 0.5, pipelineShare: 0.5, newP1Target: 500, pipelineP1Target: 200, totalP1Target: 700 },
+    { group: "Webinar", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 100, totalP1Target: 300 },
+    { group: "BOFU", dealShare: 0.15, pipelineShare: 0.15, newP1Target: 150, pipelineP1Target: 50, totalP1Target: 200 },
+    { group: "Search", dealShare: 0.1, pipelineShare: 0.1, newP1Target: 100, pipelineP1Target: 50, totalP1Target: 150 },
+    { group: "Content", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 400, totalP1Target: 600 }
   ];
 
   const inputs = {
     revenueTarget: 1000000,
-    improvementFactorEvents: 0.9,
-    improvementFactorContact: 0.9,
-    improvementFactorContent: 0.9
+    improvementFactorByGroup: {
+      Seminar: 0.9, Webinar: 0.9, BOFU: 0.9, Search: 0.9, Content: 0.9
+    }
   };
 
   const rows = computeTargetDerivationRows_(27, benchmarkRows, dealShareRows, inputs);
 
-  const augEventsRows = rows.filter(function(r){ return r.group === "events" && r.month === "AUG"; });
+  const augSeminarRows = rows.filter(function(r){ return r.group === "Seminar" && r.month === "AUG"; });
 
   const expectedMonthlyNewTarget = 500 * 0.5; // 250
   const expectedMonthlyPipelineTarget = 200 * 0.5; // 100
   const expectedMonthlyTotalTarget = expectedMonthlyNewTarget + expectedMonthlyPipelineTarget; // 350
-  const expectedWeeklyNewTarget = expectedMonthlyNewTarget / augEventsRows.length;
-  const expectedWeeklyPipelineTarget = expectedMonthlyPipelineTarget / augEventsRows.length;
+  const expectedWeeklyNewTarget = expectedMonthlyNewTarget / augSeminarRows.length;
+  const expectedWeeklyPipelineTarget = expectedMonthlyPipelineTarget / augSeminarRows.length;
 
   const pass =
-    (augEventsRows.length === 4 || augEventsRows.length === 5) &&
-    Math.abs(augEventsRows[0].monthlyNewP1Target - expectedMonthlyNewTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].monthlyPipelineP1Target - expectedMonthlyPipelineTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].monthlyP1Target - expectedMonthlyTotalTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].weeklyNewP1Target - expectedWeeklyNewTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].weeklyPipelineP1Target - expectedWeeklyPipelineTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].weeklyP1Target - (expectedWeeklyNewTarget + expectedWeeklyPipelineTarget)) < 1e-6 &&
-    Math.abs(augEventsRows[0].monthlyCPNP1Target - 450) < 1e-6 &&
-    augEventsRows[0].weeklyCPNP1Target === augEventsRows[0].monthlyCPNP1Target;
+    (augSeminarRows.length === 4 || augSeminarRows.length === 5) &&
+    Math.abs(augSeminarRows[0].monthlyNewP1Target - expectedMonthlyNewTarget) < 1e-6 &&
+    Math.abs(augSeminarRows[0].monthlyPipelineP1Target - expectedMonthlyPipelineTarget) < 1e-6 &&
+    Math.abs(augSeminarRows[0].monthlyP1Target - expectedMonthlyTotalTarget) < 1e-6 &&
+    Math.abs(augSeminarRows[0].weeklyNewP1Target - expectedWeeklyNewTarget) < 1e-6 &&
+    Math.abs(augSeminarRows[0].weeklyPipelineP1Target - expectedWeeklyPipelineTarget) < 1e-6 &&
+    Math.abs(augSeminarRows[0].weeklyP1Target - (expectedWeeklyNewTarget + expectedWeeklyPipelineTarget)) < 1e-6 &&
+    Math.abs(augSeminarRows[0].monthlyCPNP1Target - 450) < 1e-6 &&
+    augSeminarRows[0].weeklyCPNP1Target === augSeminarRows[0].monthlyCPNP1Target;
 
-  Logger.log("AUG events week rows: " + augEventsRows.length + " (expected 4 or 5)");
-  Logger.log("Weekly New P1 Target: " + augEventsRows[0].weeklyNewP1Target + " (expected " + expectedWeeklyNewTarget + ")");
-  Logger.log("Weekly Pipeline P1 Target: " + augEventsRows[0].weeklyPipelineP1Target + " (expected " + expectedWeeklyPipelineTarget + ")");
-  Logger.log("Weekly Total P1 Target: " + augEventsRows[0].weeklyP1Target);
-  Logger.log("Monthly CPNP1 Target: " + augEventsRows[0].monthlyCPNP1Target + " (expected 450)");
+  Logger.log("AUG Seminar week rows: " + augSeminarRows.length + " (expected 4 or 5)");
+  Logger.log("Weekly New P1 Target: " + augSeminarRows[0].weeklyNewP1Target + " (expected " + expectedWeeklyNewTarget + ")");
+  Logger.log("Weekly Pipeline P1 Target: " + augSeminarRows[0].weeklyPipelineP1Target + " (expected " + expectedWeeklyPipelineTarget + ")");
+  Logger.log("Weekly Total P1 Target: " + augSeminarRows[0].weeklyP1Target);
+  Logger.log("Monthly CPNP1 Target: " + augSeminarRows[0].monthlyCPNP1Target + " (expected 450)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -2330,27 +2398,84 @@ function testComputeTargetDerivationRows(){
  */
 function readTargetEngineInputs_(sheet){
 
-  const rows = CONFIG.TARGET.INPUT.ROWS;
-  const col = CONFIG.TARGET.INPUT.VALUE_COL;
-  const lastRow = CONFIG.TARGET.INPUT.LAST_ROW;
-  const defaults = CONFIG.TARGET.INPUT.DEFAULTS;
+  const input = CONFIG.TARGET.INPUT;
+  const rows = input.ROWS;
+  const groupOrder = CONFIG.TARGET.GROUP_ORDER;
+  const monthOrder = CONFIG.ACQ.FISCAL_MONTH_ORDER;
+  const col = input.VALUE_COL;
+  const lastRow = input.LAST_ROW;
+  const defaults = input.DEFAULTS;
 
+  // 섹션 1(스칼라)+섹션 2(CPNP1 벤치마크 수동입력)는 전부 VALUE_COL 단일 컬럼이라
+  // 한 번의 getRange로 같이 읽는다.
   const values = sheet.getRange(1, col, lastRow, 1).getValues();
+  const get = function(row){ return values[row - 1][0]; };
 
-  const get = function(row){
-    return values[row - 1][0];
+  const improvementFactorByGroup = {};
+  const dealShareByGroup = {};
+  const cpnp1BenchmarkByGroup = {};
+
+  groupOrder.forEach(function(group, i){
+    improvementFactorByGroup[group] = Number(get(rows.IMPROVEMENT_FACTOR_START + i)) || 0;
+    dealShareByGroup[group] = Number(get(rows.DEAL_SHARE_START + i)) || 0;
+    cpnp1BenchmarkByGroup[group] = Number(get(input.CPNP1_BENCHMARK_MANUAL.DATA_START_ROW + i)) || 0;
+  });
+
+  // 섹션 3(월별 회사 전체 Revenue Target/Budget)+섹션 4(세그먼트별 월별 Spent)는
+  // MONTH_START_COL부터 12개월 폭이라 별도 블록 읽기 — 두 섹션이 연속된 행 범위
+  // (헤더 행 포함, 사이 공백 행 1개)라 한 번의 getRange로 같이 읽는다.
+  const gridStartRow = input.MONTHLY_COMPANY_INPUTS.HEADER_ROW;
+  const gridEndRow = input.MANUAL_SEGMENT_SPENT.DATA_START_ROW + groupOrder.length - 1;
+  const gridValues = sheet.getRange(
+    gridStartRow, input.MONTHLY_COMPANY_INPUTS.MONTH_START_COL,
+    gridEndRow - gridStartRow + 1, monthOrder.length
+  ).getValues();
+
+  const getGridCell = function(row, colIndex){
+    return gridValues[row - gridStartRow][colIndex];
   };
+
+  const monthlyRevenueTarget = {};
+  const monthlyBudget = {};
+
+  monthOrder.forEach(function(month, i){
+    monthlyRevenueTarget[month] = Number(getGridCell(input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW, i)) || 0;
+    monthlyBudget[month] = Number(getGridCell(input.MONTHLY_COMPANY_INPUTS.BUDGET_ROW, i)) || 0;
+  });
+
+  const monthlySegmentSpent = {};
+
+  groupOrder.forEach(function(group, gi){
+
+    const row = input.MANUAL_SEGMENT_SPENT.DATA_START_ROW + gi;
+    const byMonth = {};
+
+    monthOrder.forEach(function(month, mi){
+      byMonth[month] = Number(getGridCell(row, mi)) || 0;
+    });
+
+    monthlySegmentSpent[group] = byMonth;
+
+  });
+
+  // revenueTarget(연간 합계) — 기존 §6 top-down 공식 체인(computeDealShareBlockRows_())의
+  // 하위호환용. 월별 실제 값이 도입되며 스칼라 입력은 폐기됐지만, 그 체인 자체를
+  // 대체하는 예산 기반 도출 체인은 아직 설계 확정 전이라(exec-plan Decision Log 참고)
+  // 당분간 월별 합계로 대체해 기존 계산이 계속 동작하게 한다.
+  const revenueTarget = monthOrder.reduce(function(sum, m){
+    return sum + monthlyRevenueTarget[m];
+  }, 0);
 
   return {
     targetFY: Number(get(rows.TARGET_FY)) || defaults.TARGET_FY,
-    revenueTarget: Number(get(rows.REVENUE_TARGET)) || 0,
-    improvementFactorEvents: Number(get(rows.IMPROVEMENT_FACTOR_EVENTS)) || 0,
-    improvementFactorContact: Number(get(rows.IMPROVEMENT_FACTOR_CONTACT)) || 0,
-    improvementFactorContent: Number(get(rows.IMPROVEMENT_FACTOR_CONTENT)) || 0,
-    dealShareEvents: Number(get(rows.DEAL_SHARE_EVENTS)) || 0,
-    dealShareContact: Number(get(rows.DEAL_SHARE_CONTACT)) || 0,
-    dealShareContent: Number(get(rows.DEAL_SHARE_CONTENT)) || 0,
-    cutoverDate: get(rows.CUTOVER_DATE)
+    cutoverDate: get(rows.CUTOVER_DATE),
+    improvementFactorByGroup: improvementFactorByGroup,
+    dealShareByGroup: dealShareByGroup,
+    cpnp1BenchmarkByGroup: cpnp1BenchmarkByGroup,
+    revenueTarget: revenueTarget,
+    monthlyRevenueTarget: monthlyRevenueTarget,
+    monthlyBudget: monthlyBudget,
+    monthlySegmentSpent: monthlySegmentSpent
   };
 
 }
@@ -2373,23 +2498,42 @@ function readTargetEngineInputs_(sheet){
  */
 function setupTargetEngineInputDefaults_(sheet){
 
-  const rows = CONFIG.TARGET.INPUT.ROWS;
-  const labelCol = CONFIG.TARGET.INPUT.LABEL_COL;
-  const valueCol = CONFIG.TARGET.INPUT.VALUE_COL;
-  const lastRow = CONFIG.TARGET.INPUT.LAST_ROW;
-  const defaults = CONFIG.TARGET.INPUT.DEFAULTS;
+  const input = CONFIG.TARGET.INPUT;
+  const rows = input.ROWS;
+  const groupOrder = CONFIG.TARGET.GROUP_ORDER;
+  const labelCol = input.LABEL_COL;
+  const valueCol = input.VALUE_COL;
+  const lastRow = input.LAST_ROW;
+  const defaults = input.DEFAULTS;
 
   const entries = [
     [rows.TARGET_FY, "Target FY", defaults.TARGET_FY],
-    [rows.REVENUE_TARGET, "Marketing Revenue Target (NZD)", defaults.REVENUE_TARGET],
-    [rows.IMPROVEMENT_FACTOR_EVENTS, "Improvement Factor - events", defaults.IMPROVEMENT_FACTOR],
-    [rows.IMPROVEMENT_FACTOR_CONTACT, "Improvement Factor - contact", defaults.IMPROVEMENT_FACTOR],
-    [rows.IMPROVEMENT_FACTOR_CONTENT, "Improvement Factor - content", defaults.IMPROVEMENT_FACTOR],
-    [rows.DEAL_SHARE_EVENTS, "Deal Share - events (임시 수동 — 딜트래커 이관 전)", defaults.DEAL_SHARE.events],
-    [rows.DEAL_SHARE_CONTACT, "Deal Share - contact (임시 수동 — 딜트래커 이관 전)", defaults.DEAL_SHARE.contact],
-    [rows.DEAL_SHARE_CONTENT, "Deal Share - content (임시 수동 — 딜트래커 이관 전)", defaults.DEAL_SHARE.content],
     [rows.CUTOVER_DATE, "Week Cycle Cutover Date", CONFIG.TARGET.CUTOVER_DATE]
   ];
+
+  groupOrder.forEach(function(group, i){
+    entries.push([
+      rows.IMPROVEMENT_FACTOR_START + i,
+      "Improvement Factor - " + group,
+      defaults.IMPROVEMENT_FACTOR
+    ]);
+  });
+
+  groupOrder.forEach(function(group, i){
+    entries.push([
+      rows.DEAL_SHARE_START + i,
+      "Deal Share - " + group + " (임시 수동 — 딜트래커 접근 실패 시 Fallback)",
+      defaults.DEAL_SHARE
+    ]);
+  });
+
+  groupOrder.forEach(function(group, i){
+    entries.push([
+      input.CPNP1_BENCHMARK_MANUAL.DATA_START_ROW + i,
+      "FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark - " + group + " (수동 입력)",
+      0
+    ]);
+  });
 
   const existingValues = sheet.getRange(1, valueCol, lastRow, 1).getValues();
 
@@ -2414,8 +2558,87 @@ function setupTargetEngineInputDefaults_(sheet){
 
   });
 
+  labelColumn[input.CPNP1_BENCHMARK_MANUAL.HEADER_ROW - 1] =
+    ["FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark by Segment (수동 입력 — 예산 기반 도출 체인 전용)"];
+
   sheet.getRange(1, labelCol, lastRow, 1).setValues(labelColumn);
   sheet.getRange(1, valueCol, lastRow, 1).setValues(valueColumn);
+
+  setupTargetEngineMonthlyGridDefaults_(sheet);
+
+}
+
+
+/**
+ * ==========================================================
+ * Setup Target Engine Monthly Grid Defaults (Block 0 섹션 3·4 — 월별 그리드)
+ *
+ * WHY
+ * 월별 회사 전체 Revenue Target/Budget(섹션 3)과 세그먼트별 월별 실제 Spent
+ * (섹션 4)는 Label=A열 단일 셀이 아니라 12개월(B..M열) 그리드라 스칼라 섹션과
+ * 별도 함수로 분리. setupTargetEngineInputDefaults_()와 동일하게 "값은 비어있을
+ * 때만 채운다"(보존형) 원칙을 그대로 따른다 — 2026-07-30 세그먼트 분해/예산
+ * 반영으로 신규 도입. docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md 참고.
+ * ==========================================================
+ */
+function setupTargetEngineMonthlyGridDefaults_(sheet){
+
+  const input = CONFIG.TARGET.INPUT;
+  const groupOrder = CONFIG.TARGET.GROUP_ORDER;
+  const monthOrder = CONFIG.ACQ.FISCAL_MONTH_ORDER;
+  const labelCol = input.LABEL_COL;
+  const monthStartCol = input.MONTHLY_COMPANY_INPUTS.MONTH_START_COL;
+
+  const headerRow = input.MONTHLY_COMPANY_INPUTS.HEADER_ROW;
+  const revenueRow = input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW;
+  const budgetRow = input.MONTHLY_COMPANY_INPUTS.BUDGET_ROW;
+  const spentHeaderRow = input.MANUAL_SEGMENT_SPENT.HEADER_ROW;
+  const spentStartRow = input.MANUAL_SEGMENT_SPENT.DATA_START_ROW;
+
+  // 월 헤더(AUG..JUL) — 두 섹션 헤더 행에 동일하게 기록 (매번 덮어써도 무방, 라벨성 데이터).
+  sheet.getRange(headerRow, monthStartCol, 1, monthOrder.length).setValues([monthOrder]);
+  sheet.getRange(spentHeaderRow, monthStartCol, 1, monthOrder.length).setValues([monthOrder]);
+
+  const labelEntries = [
+    [headerRow, "Monthly Company-wide Inputs (실제 값)"],
+    [revenueRow, "Marketing Revenue Target (NZD)"],
+    [budgetRow, "Total Ad Budget (NZD)"],
+    [spentHeaderRow, "Monthly Segment Spent (NZD, 수동 취합)"]
+  ];
+
+  groupOrder.forEach(function(group, i){
+    labelEntries.push([spentStartRow + i, group + " Spent"]);
+  });
+
+  labelEntries.forEach(function(entry){
+    sheet.getRange(entry[0], labelCol).setValue(entry[1]);
+  });
+
+  // 값 셀 — 비어있을 때만 0으로 초기화(보존형). Revenue Target/Budget 행 + 세그먼트별
+  // Spent 행을 한 번의 getRange/setValues로 처리(Article 10: Read Once).
+  const dataRows = [revenueRow, budgetRow].concat(
+    groupOrder.map(function(g, i){ return spentStartRow + i; })
+  );
+
+  const minRow = Math.min.apply(null, dataRows);
+  const maxRow = Math.max.apply(null, dataRows);
+  const numRows = maxRow - minRow + 1;
+
+  const existing = sheet.getRange(minRow, monthStartCol, numRows, monthOrder.length).getValues();
+
+  dataRows.forEach(function(row){
+
+    const rowValues = existing[row - minRow];
+
+    for(let c = 0; c < monthOrder.length; c++){
+      if(rowValues[c] === "" || rowValues[c] === null){
+        rowValues[c] = 0;
+      }
+    }
+
+  });
+
+  sheet.getRange(minRow, monthStartCol, numRows, monthOrder.length).setValues(existing);
 
 }
 

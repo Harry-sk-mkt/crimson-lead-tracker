@@ -9,9 +9,20 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-07-30)
+ * - CONFIG.TARGET 세그먼트 구조 전면 분해: GROUP_ORDER/SEGMENT_GROUPS를 3그룹
+ *   (events/contact/content)에서 5개 실제 Business Segment(Seminar/Webinar/
+ *   BOFU/Search/Content)로 교체 — Referral/Other는 계속 제외. BENCHMARK.CPNP1_FYS/
+ *   WEIGHTS는 빈 배열로 잠정 중단(채널시트가 3그룹 단위라 5세그먼트 자동 분해 불가 —
+ *   대신 세그먼트별 CPNP1은 신규 INPUT.CPNP1_BENCHMARK_MANUAL로 사용자 직접 입력).
+ *   INPUT 블록을 4개 섹션(스칼라/CPNP1 벤치마크 수동입력/월별 회사 전체 Revenue
+ *   Target·Budget/세그먼트별 월별 실제 Spent)으로 확장, IMPROVEMENT_FACTOR/DEAL_SHARE는
+ *   named row에서 START행+GROUP_ORDER 인덱스 방식으로 변경(90_TargetEngine.js
+ *   readTargetEngineInputs_()/setupTargetEngineInputDefaults_() 참고). 상세 배경:
+ *   docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
  * v1.12.0 (2026-07-29)
  * - 별도 git worktree(worktree-clever-seeking-dolphin)에 있던 Target_REP
  *   New/Pipeline 2트랙 Block C/D 확장 설정(2026-07-27, 아래 v1.13.0-worktree/
@@ -291,14 +302,19 @@ const CONFIG = {
     SHEET: "Target_REP",
     ENGINE_SHEET: "Target_Engine",
 
-    // 리포트 축 3개 그룹 — CONFIG.ACQ.SEGMENTS(Business Segment 7개)의 하위 매핑.
-    // Referral/Other는 그룹에 없으므로 자동 제외됨 (docs/TargetReportDesign.md §2).
-    GROUP_ORDER: ["events", "contact", "content"],
+    // 리포트 축 — CONFIG.ACQ.SEGMENTS(Business Segment 7개) 중 5개를 그대로 사용
+    // (Referral/Other는 마케팅 타겟 대상이 아니므로 계속 제외 — 2026-07-30 세그먼트
+    // 구조 분해로 기존 3그룹(events/contact/content) 추상화 폐기. deriveTargetGroup_()
+    // 로직은 변경 없음 — 그룹명이 세그먼트명 그대로라 1:1 매핑이 됨).
+    // 상세: docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
+    GROUP_ORDER: ["Seminar", "Webinar", "BOFU", "Search", "Content"],
 
     SEGMENT_GROUPS: {
-      events: ["Seminar", "Webinar"],
-      contact: ["BOFU", "Search"],
-      content: ["Content"]
+      Seminar: ["Seminar"],
+      Webinar: ["Webinar"],
+      BOFU: ["BOFU"],
+      Search: ["Search"],
+      Content: ["Content"]
     },
 
     // P1당 가치 산출 코호트 FY (§5 "P1당 가치" — FY26 1개 FY만 사용)
@@ -310,9 +326,13 @@ const CONFIG = {
       NEWP1_FYS: [24, 25, 26],
       NEWP1_WEIGHTS: [1, 2, 3],
 
-      // CPNP1 벤치마크 가중평균 — FY25:26 = 2:3 (채널시트가 FY24 데이터 없음, 확보 FY만)
-      CPNP1_FYS: [25, 26],
-      CPNP1_WEIGHTS: [2, 3]
+      // CPNP1 벤치마크(그룹×월 채널시트 자동집계) — 2026-07-30 세그먼트 분해로 잠정
+      // 중단(빈 배열 = 계산 스킵). 채널시트가 3그룹(event/contact/lead) 단위라 5세그먼트로
+      // 자동으로 못 쪼갬 — 세그먼트별 CPNP1은 대신 INPUT.CPNP1_BENCHMARK_MANUAL(사용자
+      // 직접 입력)로 대체. docs/Roadmap.md Phase 1(캠페인 데이터 자동 연동) 완료 시
+      // 재활성화 검토. 상세: docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
+      CPNP1_FYS: [],
+      CPNP1_WEIGHTS: []
 
     },
 
@@ -409,35 +429,61 @@ const CONFIG = {
 
     // Engine 시트 Block 0 (Inputs) — 절대 덮어쓰지 않는 영역 (읽기만).
     // 조정 시 숨김 해제 후 직접 편집 (docs/TargetReportDesign.md §9).
+    //
+    // 2026-07-30 세그먼트 분해 + 예산 반영으로 4개 섹션으로 확장 (컬럼 범위는 의도적으로
+    // 제한 안 함 — 사용자 요청). 상세 설계 배경:
+    // docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
+    //   1) 스칼라 입력 (Target FY / Cutover Date / 세그먼트별 개선계수·딜비중 — GROUP_ORDER 순서)
+    //   2) 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, 예산 기반 도출 체인 전용 — 사용자
+    //      시트에 직접 입력, 채널시트 자동집계 아님)
+    //   3) 월별 회사 전체 Revenue Target / Budget (Label=A, 12개월=B..M,
+    //      CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
+    //   4) 세그먼트별 월별 실제 Spent (수동 취합) — 5세그먼트 × 12개월
     INPUT: {
 
       LABEL_COL: 1,
       VALUE_COL: 2,
 
+      // 섹션 1 — 스칼라 입력. IMPROVEMENT_FACTOR/DEAL_SHARE는 개별 named row가 아니라
+      // START 행 + GROUP_ORDER 인덱스로 계산 (5세그먼트 순서 그대로, readTargetEngineInputs_()/
+      // setupTargetEngineInputDefaults_() 참고).
       ROWS: {
         TARGET_FY: 1,
-        REVENUE_TARGET: 2,
-        IMPROVEMENT_FACTOR_EVENTS: 3,
-        IMPROVEMENT_FACTOR_CONTACT: 4,
-        IMPROVEMENT_FACTOR_CONTENT: 5,
-        DEAL_SHARE_EVENTS: 6,
-        DEAL_SHARE_CONTACT: 7,
-        DEAL_SHARE_CONTENT: 8,
-        CUTOVER_DATE: 9
+        CUTOVER_DATE: 2,
+        IMPROVEMENT_FACTOR_START: 3,  // 3~7 (GROUP_ORDER 순서, 5행)
+        DEAL_SHARE_START: 8           // 8~12 (GROUP_ORDER 순서, 5행)
       },
 
-      LAST_ROW: 9,
+      SCALAR_LAST_ROW: 12,
+
+      // 섹션 2 — 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, VALUE_COL 사용)
+      CPNP1_BENCHMARK_MANUAL: {
+        HEADER_ROW: 14,
+        DATA_START_ROW: 15   // 15~19 (GROUP_ORDER 순서, 5행)
+      },
+
+      // 섹션 3 — 월별 회사 전체 Revenue Target / Budget
+      MONTHLY_COMPANY_INPUTS: {
+        HEADER_ROW: 21,
+        REVENUE_TARGET_ROW: 22,
+        BUDGET_ROW: 23,
+        MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
+      },
+
+      // 섹션 4 — 세그먼트별 월별 실제 Spent (수동 취합)
+      MANUAL_SEGMENT_SPENT: {
+        HEADER_ROW: 25,
+        DATA_START_ROW: 26,  // 26~30 (GROUP_ORDER 순서, 5행)
+        MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
+      },
+
+      LAST_ROW: 30,
 
       // 최초 setupTargetReport() 실행 시 채워지는 기본값 (사용자가 이후 직접 편집).
       DEFAULTS: {
         TARGET_FY: 27,
-        REVENUE_TARGET: 9450000,
         IMPROVEMENT_FACTOR: 0.9,
-        DEAL_SHARE: {
-          events: 0.34,
-          contact: 0.33,
-          content: 0.33
-        }
+        DEAL_SHARE: 0.2   // 5세그먼트 균등분배(1/5) placeholder — 사용자가 실측치로 교체
       }
 
     },
