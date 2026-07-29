@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — 하네스 엔지니어링 ②단계: prose 규칙 대신 결정론적으로
+# 커밋을 막는 최소 검사 체인. eslint/vitest 등은 도입하지 않음 (2차 재검토 예정).
+#
+# 설치: git config core.hooksPath .githooks
+# (scripts/start-session.sh가 매 세션 시작 시 이 설정이 돼 있는지 확인한다.)
+
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+status=0
+
+echo "[pre-commit] naming check (test/run 함수명 '_' 접미사)..."
+bash scripts/check-naming.sh
+[ $? -ne 0 ] && status=1
+
+echo "[pre-commit] version header check..."
+bash scripts/check-version-header.sh
+[ $? -ne 0 ] && status=1
+
+echo "[pre-commit] duplicate declaration check (여러 파일 간 중복 선언)..."
+bash scripts/check-duplicate-declarations.sh
+[ $? -ne 0 ] && status=1
+
+echo "[pre-commit] syntax check (node --check)..."
+bash scripts/check-syntax.sh
+[ $? -ne 0 ] && status=1
+
+if [ "$status" -ne 0 ]; then
+  echo ""
+  echo "pre-commit 검사 실패 — 커밋이 차단되었습니다. 위 오류를 수정한 뒤 다시 커밋하세요."
+  exit 1
+fi
+
+echo "[pre-commit] 전부 통과."
+exit 0
