@@ -1,5 +1,51 @@
 # Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
 
+## 하네스 엔지니어링 도입 — clasp push 안전장치, pre-commit 훅, 세션 시작 스크립트, CLAUDE.md 다이어트
+
+**배경**: 규칙 준수를 "Claude가 CLAUDE.md의 prose 규칙을 기억하는 확률적 방식"에서 "스크립트/git
+hook이 결정론적으로 차단하는 방식"으로 전환. 실제 사고 이력(2026-07-24 divergence 미인지,
+2026-07-29 worktree 덮어쓰기, `_` 접미사 반복 실수)이 전부 강제 메커니즘 부재에서 발생했음.
+4단계로 나눠 각 단계마다 실제 시연으로 검증 후 다음 단계 진행.
+
+**① `scripts/safe-clasp-push.sh`**: `clasp push` 래퍼. `git worktree list`가 2개 이상이면
+목록을 보여주고 y/n 확인을 받은 뒤에만 push한다. 실제 사고 메커니즘(main worktree에서 push하다가
+linked worktree가 배포해둔 코드를 덮어씀)을 감안해, "어느 worktree에서 push하는가"가 아니라
+"worktree가 여러 개 존재한다는 사실 자체"를 차단 기준으로 삼음(사용자 확정 정책). 정상 케이스(1개
+→ 경고 없이 진행)와 차단 케이스(2개, 임시 worktree로 시연 → y/n 둘 다 확인)를 실제로 실행해 검증.
+
+**② `.githooks/pre-commit`(`git config core.hooksPath .githooks`) + 4개 검사 스크립트**:
+`scripts/check-naming.sh`(신규 추가된 test/run 진입점 함수가 `_`로 끝나는 실수 — diff의 추가된
+줄만 검사해 24_OPSQA.js의 기존 알려진 예외는 안 건드림), `scripts/check-version-header.sh`
+(코드 변경 시 Version/Change Log 헤더 갱신 여부), `scripts/check-duplicate-declarations.sh`
+(파일 간 동일 함수/상수명 중복 선언), `scripts/check-syntax.sh`(`node --check`). 실제
+`git commit`으로 4개 위반 케이스 전부 차단 확인 → 수정 후 통과 확인 → 테스트 커밋/스크래치
+파일 정리. `check-version-header.sh`는 주석만 고친 변경과 실제 코드 변경을 구분 못 하는 알려진
+한계가 있음(관찰 대기).
+
+**③ `scripts/start-session.sh`**: git fetch/divergence, `git worktree list`, `core.hooksPath`
+설치 여부를 한 번에 확인 — 기존 CLAUDE.md prose의 "Session-Start Git Sync Check" 절차를 대체.
+ahead-of-origin 케이스와 hooksPath 미설정 경고 둘 다 실측 확인.
+
+**④ CLAUDE.md 다이어트**: 81줄 → 53줄. 미해결 항목 15개를 `docs/OpenItems.md`로 이관(원문과
+byte-identical, 대조 검증 완료). Session-Start Git Sync Check/Clasp Push Pre-Authorized
+섹션을 각 스크립트 실행 안내로 압축(사고 배경 스토리는 삭제하지 않고 각 스크립트 자체의 주석으로
+이동 — 정보 손실 없음).
+
+**그 외**: `.gitattributes` 신규(`*.sh`/`.githooks/*` LF 강제 — `core.autocrlf=true` 환경에서
+스크립트 line ending이 깨지는 것 방지). 기존 `.js` GAS 코드는 1바이트도 수정하지 않음(제약 준수),
+eslint/vitest는 미도입(2차 재검토 예정).
+
+## 프로젝트 공용 permission 허용목록(`.claude/settings.json`) 신규 추가
+
+세션 트랜스크립트(최근 9개 — crimson-lead-tracker + crimson-naver-blog) 스캔 후, 읽기 전용
+커맨드 중 자주 쓰이는데 아직 자동 허용되지 않던 것만 프로젝트 공용 `.claude/settings.json`
+(신규 생성)에 추가: `Bash(git fetch *)`, `mcp__claude_ai_Notion__notion-query-data-sources`,
+`mcp__claude_ai_Notion__notion-fetch`, `Bash(clasp --version)`. `clasp push`/
+`./scripts/safe-clasp-push.sh` 등 배포/뮤테이션성 명령은 자주 쓰였어도(각 18회/3회) 의도적으로
+제외 — 특히 `safe-clasp-push.sh`는 방금 ①에서 그 실행 자체를 확인받도록 만든 래퍼라 허용
+목록에 넣으면 취지와 충돌. 기존 개인 설정(`.claude/settings.local.json`, git 미추적)은 건드리지
+않음.
+
 ## Session-Start Git Sync Check의 worktree 확인 항목 — "기억해서 확인" → 스크립트 자동화로 대체
 
 **배경**: `docs/OpenItems.md` #15(구 CLAUDE.md 미해결 항목 #15, 2026-07-29 세션)에서 `git worktree
