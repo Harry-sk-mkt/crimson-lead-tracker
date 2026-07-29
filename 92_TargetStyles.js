@@ -11,9 +11,12 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-27)
+ * - 그룹당 컬럼 5→7개 확장(Target New/Pipeline P1 분리 표시, 91_TargetReport.js
+ *   참고)에 맞춰 number format 오프셋 갱신.
  * v1.2.0 (2026-07-27)
  * - Body 범위에 setFontStyle("normal")/setFontWeight("normal")/setFontSize(10)
  *   추가 — 레이아웃 변경 이력 중 남은 잔재 서식(예: 옛 파라미터 요약 행의
@@ -112,8 +115,9 @@ function applyTargetReportStyles_(sheet, rowCount){
 
   /*
   ==========================================================
-  그룹별 5컬럼 서식 (2026-07-27 사용자 요청 — 숫자는 전부 소수점 없이,
-  달성%만 소수 2자리): Target P1(정수) / Actual P1(정수) / 달성%(소수2) /
+  그룹별 7컬럼 서식 (2026-07-27 New/Pipeline 분리 — 숫자는 전부 소수점 없이,
+  달성%만 소수 2자리): Target New P1(정수) / Target Pipeline P1(정수) /
+  Target P1(합계, 정수) / Actual P1(정수) / 달성%(소수2) /
   Target CPNP1(정수, 금액 콤마) / Actual CPNP1(정수, 금액 콤마)
   ==========================================================
   */
@@ -125,11 +129,13 @@ function applyTargetReportStyles_(sheet, rowCount){
 
     const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
 
-    sheet.getRange(dataStartRow, baseCol, rowCount, 1).setNumberFormat("#,##0");      // Target P1
-    sheet.getRange(dataStartRow, baseCol + 1, rowCount, 1).setNumberFormat("#,##0");  // Actual P1
-    sheet.getRange(dataStartRow, baseCol + 2, rowCount, 1).setNumberFormat("0.00%");  // 달성%
-    sheet.getRange(dataStartRow, baseCol + 3, rowCount, 1).setNumberFormat("#,##0");  // Target CPNP1
-    sheet.getRange(dataStartRow, baseCol + 4, rowCount, 1).setNumberFormat("#,##0");  // Actual CPNP1
+    sheet.getRange(dataStartRow, baseCol, rowCount, 1).setNumberFormat("#,##0");      // Target New P1
+    sheet.getRange(dataStartRow, baseCol + 1, rowCount, 1).setNumberFormat("#,##0");  // Target Pipeline P1
+    sheet.getRange(dataStartRow, baseCol + 2, rowCount, 1).setNumberFormat("#,##0");  // Target P1(합계)
+    sheet.getRange(dataStartRow, baseCol + 3, rowCount, 1).setNumberFormat("#,##0");  // Actual P1
+    sheet.getRange(dataStartRow, baseCol + 4, rowCount, 1).setNumberFormat("0.00%");  // 달성%
+    sheet.getRange(dataStartRow, baseCol + 5, rowCount, 1).setNumberFormat("#,##0");  // Target CPNP1
+    sheet.getRange(dataStartRow, baseCol + 6, rowCount, 1).setNumberFormat("#,##0");  // Actual CPNP1
 
   });
 

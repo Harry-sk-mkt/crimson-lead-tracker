@@ -21,9 +21,28 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.14.0
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-07-29)
+ * - 별도 git worktree(worktree-clever-seeking-dolphin)에 있던 New/Pipeline
+ *   2트랙 Block C/D 확장 작업(2026-07-27, 아래 병합된 v1.13.0/v1.12.2/
+ *   v1.12.0 항목)을 main에 merge — 세션 도중 main에서 반복한 clasp push가
+ *   이 worktree가 라이브 스크립트에 배포해뒀던 버전을 덮어써 Target_REP의
+ *   New/Pipeline P1 컬럼이 0으로 보이는 사고 발생, 원인 파악 후 복구
+ *   (CLAUDE.md 미기록, 사용자 확인 후 진행). 병합 시 분류 로직 충돌 —
+ *   worktree는 classifyDealSegment_()가 Deal Tracker "Content Category"
+ *   컬럼(H열)을 CONTENT_CATEGORY_GROUP_MAP으로 매핑했으나, 그 이후(v1.12.0,
+ *   2026-07-28) 이 접근이 실측 검증에서 신뢰 불가 수준(Search $144,265 vs
+ *   실제 ~$537,507.89)으로 폐기되고 사용자가 그 컬럼을 "Segment"로 개명해
+ *   전체 딜을 직접 수동 재분류하는 방식으로 전환된 상태 — **분류 로직은
+ *   이 최신(Segment 컬럼 직접 참조, deriveTargetGroup_()) 쪽으로 통일**,
+ *   worktree의 CONTENT_CATEGORY_GROUP_MAP 방식은 폐기. New/Pipeline 2트랙
+ *   Block C/D 계산 로직(computeDealShareRatiosCohort2FromDealRows_/
+ *   computeNewPipelineRevenueSplit_/computeDealShareBlockRows_/
+ *   computeTargetDerivationRows_ 12컬럼 확장)은 worktree 버전 그대로 채택 —
+ *   classifyDealSegment_()를 그대로 호출만 하므로 분류 방식 교체와 무관하게
+ *   정상 동작.
  * v1.14.0 (2026-07-28)
  * - readDealTrackerRawRows_()가 이제 정규화된 createdDate(Date, 타임존 보정
  *   완료)도 반환(additive) — NewP1_REP의 Won/Revenue를 Deal Tracker Created
@@ -61,6 +80,42 @@
  *   Leads_OPS Opportunity Won Date/Revenue 로직을 대체할 공용 헬퍼(도메인별
  *   키 정규화 함수를 주입받아 Deal Tracker 프로그램명 기준으로 #Deals/Revenue
  *   집계). 상세: docs/Changelog.md 2026-07-28.
+ * v1.13.0-worktree (2026-07-27, worktree-clever-seeking-dolphin에서 병합)
+ * - computeTargetDerivationRows_()(Block D)가 New/Pipeline FY 목표를 합쳐서
+ *   전개하던 걸 각각 전개하도록 변경(사용자 요청: Target_REP에서 New P1
+ *   Target/Pipeline P1 Target을 분리해서 보고 싶다). 월/주 캐시가 New/Pipeline
+ *   각각 생기고, weeklyP1Target(합계)은 둘을 더한 값으로 계속 유지(달성% 분모).
+ *   두 트랙 모두 같은 시즌성 %를 재사용(트랙별 다른 시즌성 커브는 미정).
+ *   buildTargetDerivationHeaders_/targetDerivationRowsToMatrix_/
+ *   readTargetEngineDerivationRows_ 전부 8→12컬럼으로 갱신
+ *   (CONFIG.TARGET.ENGINE.BLOCK_D_COLUMNS).
+ * v1.12.2-worktree (2026-07-27, worktree-clever-seeking-dolphin에서 병합)
+ * - refreshTargetEngine_()의 wide-clear를 clearContent()→clear()로 변경 —
+ *   사용자 실측 확인: 예전 Block D 위치(X·Y열, Week Start/Week End Date 서식)에
+ *   새 Block C의 FY New/Pipeline P1 Target이 겹치면서 남아있던 Date 서식 때문에
+ *   숫자값이 "12/30/1899"류 날짜로 잘못 표시되는 버그 발견 → clear()로 값+서식
+ *   모두 제거하도록 수정.
+ * v1.12.0-worktree (2026-07-27, worktree-clever-seeking-dolphin에서 병합)
+ * - FY P1 목표 공식을 New/Pipeline 2트랙 분리로 전면 교체 — CLAUDE.md #7
+ *   최종 결정(a/b 블렌딩 방식 미정 상태 해소). 신규
+ *   computeDealShareRatiosCohort2FromDealRows_()(코호트2/R2 기준 그룹 비중,
+ *   Pipeline 트랙 전용 — 코호트1 딜비중 재사용 시 contact에 과도 배분되는
+ *   문제 발견돼 분리), computeNewPipelineRevenueSplit_()(전체 Revenue 타겟을
+ *   코호트1/2 비중으로 New/Pipeline 두 트랙 금액으로 분리). 3FY 평균/median
+ *   없이 FY26(P1_VALUE_FY) 단일 스냅샷만 사용(사용자 확정: 이전 FY는 본사
+ *   관리 체제라 노이즈).
+ *   computeDealShareBlockRows_()(Block C)가 이제 dealShare/pipelineShare/
+ *   newP1Target/pipelineP1Target/totalP1Target을 전부 계산 — 시그니처 확장
+ *   (pipelineShareRatios/p1ValueByGroup/newPipelineSplit 파라미터 추가).
+ *   computeTargetDerivationRows_()(Block D)는 이제 dealShareRows.totalP1Target
+ *   을 그대로 읽어 월/주 전개만 담당 — p1ValueRows 파라미터 제거(더 이상
+ *   필요 없음), a만 쓰던 placeholder 로직 삭제.
+ *   Block C가 2컬럼→6컬럼으로 확장되며 Block D 시작 컬럼이 뒤로 밀림
+ *   (CONFIG.TARGET.ENGINE, X열→AB열) — refreshTargetEngine_()에 Block A~D
+ *   전체 wide-clear 추가(예전 Block D 위치 잔재 방지, 향후 블록 구조 변경에도
+ *   안전하도록 일반화). ⚠️ 이 시점의 classifyDealSegment_()는 "Content
+ *   Category" 컬럼 직접 매핑 방식이었으나, v1.15.0 병합 시 Segment 컬럼
+ *   직접 참조 방식(v1.12.0, 2026-07-28)으로 교체됨 — 위 v1.15.0 항목 참고.
  * v1.10.0 (2026-07-27)
  * - P1당 가치(Block B)를 코호트1/2 이원화 구조로 전면 재작성 — 사용자 확정
  *   프레임워크: CurrentFYP1V(a) = 코호트1(Created=Closed=타겟FY) Revenue ÷
@@ -1627,7 +1682,7 @@ function computeDealShareRatiosFromDealRows_(dealRows){
   Logger.log(
     CONFIG.LOG.PREFIX + " Deal Tracker classify (FY" + targetFY + " 코호트1 — 같은 해 생성·클로징): " +
     classifiedCount + " classified / " + unclassifiedCount + " unclassified " +
-    "(Lead Source Detail/Lead Source/Source Category로 세그먼트 분류 안 된 건수)"
+    "(Content Category로 세그먼트 분류 안 된 건수)"
   );
 
   const result = {};
@@ -1700,6 +1755,191 @@ function testComputeDealShareRatiosFromDealRows(){
   Logger.log("events dealShare: " + result.events + " (expected ~" + expectedEvents + ")");
   Logger.log("contact dealShare: " + result.contact);
   Logger.log("content dealShare: " + result.content);
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Deal Share Ratios From Deal Rows — Cohort2 (Pipeline 트랙 그룹 배분 기준)
+ *
+ * WHY
+ * 2026-07-27 Target_REP Block D 재설계(New/Pipeline 2트랙 분리) 확정: pipeline
+ * 트랙(과거에 뿌려둔 리드가 이번 FY에 전환되는 몫)의 그룹별 배분은 코호트1
+ * 딜비중(computeDealShareRatiosFromDealRows_)을 재사용하면 안 된다 — 실측
+ * 검증 결과 contact처럼 "같은 해 빠르게 전환되는" 채널에 파이프라인 목표까지
+ * 과도하게 쏠리는 문제가 발견됨(사용자 확인). 대신 **코호트2(R2) 자체의
+ * 그룹별 비중**을 써야 "실제로 백로그가 전환되고 있는 채널"에 파이프라인
+ * 목표가 붙는다 — content처럼 nurture가 긴 채널이 더 큰 몫을 받게 됨(원래
+ * 코호트1/2 이원화를 시작한 동기와 일치, CLAUDE.md #7).
+ * 계산 구조는 computeDealShareRatiosFromDealRows_()와 동일(조정 베이스에
+ * unclassified 포함, 분자에서는 제외, referral/upsell 제외) — 필터 조건만
+ * "코호트2"(closeFY===targetFY, createdFY!==targetFY, null 포함)로 바뀐다.
+ *
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string, contentCategory:string}>} dealRows
+ * @return {Object}  group -> ratio (0~1)
+ *
+ * TEST
+ * FY26 코호트2 events=300/600 (조정 베이스 600 중 events 300 배분)
+ * ==========================================================
+ */
+function computeDealShareRatiosCohort2FromDealRows_(dealRows){
+
+  const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
+  const targetFY = CONFIG.TARGET.P1_VALUE_FY;
+
+  const excludeSet = {};
+  config.EXCLUDE_LEAD_SOURCES.forEach(function(src){ excludeSet[src] = true; });
+
+  let base = 0;
+  const byGroup = { events: 0, contact: 0, content: 0 };
+
+  let classifiedCount = 0;
+  let unclassifiedCount = 0;
+
+  dealRows.forEach(function(row){
+
+    if(row.closeFY !== targetFY || row.createdFY === targetFY) return; // 코호트2만(과거 생성, 이번 FY 클로징)
+    if(excludeSet[String(row.leadSource || "").toLowerCase()]) return;
+
+    base += row.revenue;
+
+    const group = classifyDealSegment_(row);
+
+    if(group){
+      byGroup[group] += row.revenue;
+      classifiedCount++;
+    } else {
+      unclassifiedCount++;
+    }
+
+  });
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " Deal Tracker classify (FY" + targetFY + " 코호트2 — 과거 생성·이번 FY 클로징): " +
+    classifiedCount + " classified / " + unclassifiedCount + " unclassified"
+  );
+
+  const result = {};
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
+    result[group] = base > 0 ? byGroup[group] / base : 0;
+  });
+
+  return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeDealShareRatiosCohort2FromDealRows_() (합성 데이터)
+ * ==========================================================
+ */
+function testComputeDealShareRatiosCohort2FromDealRows(){
+
+  const dealRows = [
+    // 코호트1 — 완전 제외돼야 함
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" },
+    // 코호트2 (closeFY=26, createdFY=25) — 배분 대상
+    { closeFY: 26, createdFY: 25, revenue: 300, leadSource: "paid social", contentCategory: "webinar" },
+    { closeFY: 26, createdFY: 24, revenue: 200, leadSource: "organic", contentCategory: "ebook" },
+    { closeFY: 26, createdFY: null, revenue: 100, leadSource: "organic", contentCategory: "n/a" }, // createdFY 불명 — 코호트2로 처리, 분류 안 됨
+    { closeFY: 26, createdFY: 25, revenue: 9999, leadSource: "Upsell", contentCategory: "n/a" }, // 제외 대상
+    // closeFY가 타겟 FY 아님 — 제외
+    { closeFY: 25, createdFY: 24, revenue: 9999, leadSource: "paid social", contentCategory: "webinar" }
+  ];
+
+  const result = computeDealShareRatiosCohort2FromDealRows_(dealRows);
+
+  const expectedEvents = 300 / 600; // 코호트2 base = 300+200+100 = 600
+
+  const pass = Math.abs(result.events - expectedEvents) < 1e-6;
+
+  Logger.log("events pipelineShare: " + result.events + " (expected ~" + expectedEvents + ")");
+  Logger.log("content pipelineShare: " + result.content + " (expected ~" + (200 / 600) + ")");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute New/Pipeline Revenue Split (Block C — 전체 Revenue 타겟을 2트랙으로 분리)
+ *
+ * WHY
+ * 2026-07-27 사용자 확정 프레임워크: FY27 마케팅 Revenue 타겟 전체를 "New
+ * 트랙"(이번 FY 새로 생성된 리드가 같은 해 안에 전환하는 몫, 코호트1 비율)과
+ * "Pipeline 트랙"(과거에 뿌려둔 리드가 이번 FY에 전환되는 몫, 코호트2 비율)
+ * 으로 먼저 나눈다. 분리 기준은 FY26 실측 전체 코호트1/코호트2 Revenue 비중
+ * (조정 베이스 = 전체 딜 − referral/upsell, unclassified 포함) — "이전 FY들은
+ * 본사 관리 체제라 노이즈"라는 사용자 판단(2026-07-27)에 따라 3FY 평균/median
+ * 없이 FY26 단일 스냅샷만 사용(Block B의 a/b, Block C 딜비중과 동일 원칙).
+ *
+ * @param {Array<{closeFY:number, createdFY:number|null, revenue:number, leadSource:string}>} dealRows
+ * @return {{newShare:number, pipelineShare:number}}
+ *
+ * TEST
+ * base1=100, base2=50 → newShare=100/150, pipelineShare=50/150
+ * ==========================================================
+ */
+function computeNewPipelineRevenueSplit_(dealRows){
+
+  const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
+  const targetFY = CONFIG.TARGET.P1_VALUE_FY;
+
+  const excludeSet = {};
+  config.EXCLUDE_LEAD_SOURCES.forEach(function(src){ excludeSet[src] = true; });
+
+  let base1 = 0; // 코호트1 (New 트랙)
+  let base2 = 0; // 코호트2 (Pipeline 트랙)
+
+  dealRows.forEach(function(row){
+
+    if(row.closeFY !== targetFY) return;
+    if(excludeSet[String(row.leadSource || "").toLowerCase()]) return;
+
+    if(row.createdFY === targetFY){
+      base1 += row.revenue;
+    } else {
+      base2 += row.revenue;
+    }
+
+  });
+
+  const total = base1 + base2;
+
+  return {
+    newShare: total > 0 ? base1 / total : 0,
+    pipelineShare: total > 0 ? base2 / total : 0
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNewPipelineRevenueSplit_() (합성 데이터)
+ * ==========================================================
+ */
+function testComputeNewPipelineRevenueSplit(){
+
+  const dealRows = [
+    { closeFY: 26, createdFY: 26, revenue: 100, leadSource: "paid social" }, // 코호트1
+    { closeFY: 26, createdFY: 25, revenue: 50, leadSource: "organic" },      // 코호트2
+    { closeFY: 26, createdFY: 26, revenue: 9999, leadSource: "Upsell" },     // 제외
+    { closeFY: 25, createdFY: 25, revenue: 9999, leadSource: "paid social" } // closeFY 불일치 — 제외
+  ];
+
+  const result = computeNewPipelineRevenueSplit_(dealRows);
+
+  const pass =
+    Math.abs(result.newShare - (100 / 150)) < 1e-6 &&
+    Math.abs(result.pipelineShare - (50 / 150)) < 1e-6;
+
+  Logger.log("newShare: " + result.newShare + " (expected " + (100 / 150) + ")");
+  Logger.log("pipelineShare: " + result.pipelineShare + " (expected " + (50 / 150) + ")");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -1801,18 +2041,30 @@ function testComputeDealCohortsFromDealRows(){
 
 /**
  * ==========================================================
- * Compute Deal Share Block Rows (Block C)
+ * Compute Deal Share Block Rows (Block C — New/Pipeline 2트랙 FY P1 목표 포함)
  *
- * WHY
- * Deal Tracker 계산이 성공하면 그 값을 쓰고, 실패(시트 접근 불가 등)하면
- * Input 블록의 수동 값으로 Fallback한다 (§5, §12 Open Item #5 — 2026-07-27
- * 실데이터 연동 완료, Fallback 경로는 안전장치로 유지).
+ * WHY (2026-07-27 New/Pipeline 2트랙 확정 — CLAUDE.md #7 최종 결정)
+ * a/b 블렌딩 방식이 미정이던 걸 사용자가 실물 값 검토 후 확정: FY 목표를
+ * "New 트랙"(코호트1 비율로 나눈 Revenue ÷ a)과 "Pipeline 트랙"(코호트2
+ * 비율로 나눈 Revenue ÷ b)으로 나눠 각각 계산한 뒤 더한다. 딜비중(코호트1)을
+ * Pipeline 트랙에도 재사용하면 안 됨(같은 해 빠르게 전환되는 채널에 쏠림,
+ * 실측으로 확인) — Pipeline 트랙은 반드시 코호트2(R2) 자체 비중을 써야 한다.
+ * 3FY median/가중평균도 쓰지 않음 — "이전 FY는 본사 관리 체제라 노이즈"라는
+ * 사용자 판단(2026-07-27)에 따라 a/b/딜비중/pipeline비중/New-Pipeline 분리
+ * 비율 전부 FY26(P1_VALUE_FY) 단일 스냅샷 기준으로 통일.
+ * Deal Tracker 계산이 실패(시트 접근 불가 등)하면 Input 블록의 수동 값으로
+ * Fallback(§5, §12 Open Item #5) — pipelineShare/newPipelineSplit도 딜비중과
+ * 동일하게 Fallback(dealShare 재사용, 실패 시 안전장치일 뿐 정밀도 요구 안 함).
  *
  * @param {Object} inputs
- * @param {Object|null} dealShareRatios  computeDealShareRatiosFromDealRows_() 결과(딜 0건이면 null)
+ * @param {Object|null} dealShareRatios      computeDealShareRatiosFromDealRows_() 결과(코호트1, 딜 0건이면 null)
+ * @param {Object|null} pipelineShareRatios  computeDealShareRatiosCohort2FromDealRows_() 결과(코호트2, 딜 0건이면 null)
+ * @param {Object} p1ValueByGroup            group -> {currentFYP1V, prevP1V} (computeP1ValueBlockRows_ 결과를 group 키로 재매핑)
+ * @param {{newShare:number, pipelineShare:number}} newPipelineSplit  computeNewPipelineRevenueSplit_() 결과
+ * @return {Array<Object>}
  * ==========================================================
  */
-function computeDealShareBlockRows_(inputs, dealShareRatios){
+function computeDealShareBlockRows_(inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit){
 
   const fallbackMap = {
     events: inputs.dealShareEvents,
@@ -1823,8 +2075,26 @@ function computeDealShareBlockRows_(inputs, dealShareRatios){
   return CONFIG.TARGET.GROUP_ORDER.map(function(group){
 
     const dealShare = dealShareRatios ? (dealShareRatios[group] || 0) : (fallbackMap[group] || 0);
+    const pipelineShare = pipelineShareRatios ? (pipelineShareRatios[group] || 0) : (fallbackMap[group] || 0);
 
-    return { group: group, dealShare: dealShare };
+    const p1Value = p1ValueByGroup[group] || { currentFYP1V: 0, prevP1V: 0 };
+
+    const newP1Target = computeFYP1Target_(
+      inputs.revenueTarget * newPipelineSplit.newShare, dealShare, p1Value.currentFYP1V
+    );
+
+    const pipelineP1Target = computeFYP1Target_(
+      inputs.revenueTarget * newPipelineSplit.pipelineShare, pipelineShare, p1Value.prevP1V
+    );
+
+    return {
+      group: group,
+      dealShare: dealShare,
+      pipelineShare: pipelineShare,
+      newP1Target: newP1Target,
+      pipelineP1Target: pipelineP1Target,
+      totalP1Target: newP1Target + pipelineP1Target
+    };
 
   });
 
@@ -1833,24 +2103,73 @@ function computeDealShareBlockRows_(inputs, dealShareRatios){
 
 /**
  * ==========================================================
+ * TEST — computeDealShareBlockRows_() (합성 데이터, New/Pipeline 2트랙 검증)
+ * ==========================================================
+ */
+function testComputeDealShareBlockRows(){
+
+  const inputs = {
+    revenueTarget: 1000000,
+    dealShareEvents: 0.34, dealShareContact: 0.33, dealShareContent: 0.33
+  };
+
+  const dealShareRatios = { events: 0.5, contact: 0.3, content: 0.2 };
+  const pipelineShareRatios = { events: 0.2, contact: 0.3, content: 0.5 };
+
+  const p1ValueByGroup = {
+    events: { currentFYP1V: 1000, prevP1V: 500 },
+    contact: { currentFYP1V: 800, prevP1V: 400 },
+    content: { currentFYP1V: 200, prevP1V: 300 }
+  };
+
+  const newPipelineSplit = { newShare: 0.6, pipelineShare: 0.4 };
+
+  const rows = computeDealShareBlockRows_(
+    inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit
+  );
+
+  const eventsRow = rows[0];
+
+  const expectedNewP1Target = (1000000 * 0.6 * 0.5) / 1000; // 300
+  const expectedPipelineP1Target = (1000000 * 0.4 * 0.2) / 500; // 160
+
+  const pass =
+    eventsRow.group === "events" &&
+    Math.abs(eventsRow.newP1Target - expectedNewP1Target) < 1e-6 &&
+    Math.abs(eventsRow.pipelineP1Target - expectedPipelineP1Target) < 1e-6 &&
+    Math.abs(eventsRow.totalP1Target - (expectedNewP1Target + expectedPipelineP1Target)) < 1e-6;
+
+  Logger.log("events newP1Target: " + eventsRow.newP1Target + " (expected " + expectedNewP1Target + ")");
+  Logger.log("events pipelineP1Target: " + eventsRow.pipelineP1Target + " (expected " + expectedPipelineP1Target + ")");
+  Logger.log("events totalP1Target: " + eventsRow.totalP1Target);
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Target Derivation Rows (Block D — FY→월→주 목표 전개)
  *
- * WHY (2026-07-27 코호트1/2 P1당 가치 placeholder)
- * P1당 가치가 CurrentFYP1V(a)/PrevP1V(b) 두 값으로 나뉜 뒤에도 FY P1 Target
- * 공식(computeFYP1Target_)은 분모 하나만 받는다 — a/b를 어떻게 합칠지는
- * 사용자가 Block B에서 두 값을 직접 검토한 뒤 결정하기로 확정(2026-07-27
- * 논의). 그때까지는 원래 단일 코호트 정의(같은 FY 생성·클로징)에 가장
- * 가까운 CurrentFYP1V(a)를 임시로 사용한다.
+ * WHY (2026-07-27 New/Pipeline 2트랙 확정 — CLAUDE.md #7 최종 결정)
+ * FY P1 목표는 이제 Block C(computeDealShareBlockRows_)에서 New 트랙(코호트1
+ * 비율÷a)과 Pipeline 트랙(코호트2 비율÷b)을 각각 계산해 들어온다 — a/b를
+ * 어떻게 합칠지 미정이라 a만 쓰던 placeholder는 폐기됨. 이 함수는 New/Pipeline
+ * FY 목표를 **각각** 월별 시즌성 비중(②)·주별 균등 분배(③)로 전개한다(합계로
+ * 뭉쳐서 전개한 뒤 나누는 게 아니라, 처음부터 트랙별로 따로 전개 — 사용자
+ * 요청, 2026-07-27: Target_REP에 New/Pipeline이 분리 표시돼야 함). 두 트랙
+ * 모두 같은 시즌성 %를 적용한다(트랙별 다른 시즌성 커브는 아직 미정).
+ * weeklyP1Target(합계)는 New+Pipeline을 더한 값으로 계속 유지 — 기존
+ * 달성%(Actual÷Target) 계산의 분모로 쓰임.
  *
  * @param {number} targetFY
  * @param {Array<Object>} benchmarkRows
- * @param {Array<Object>} p1ValueRows
- * @param {Array<Object>} dealShareRows
+ * @param {Array<Object>} dealShareRows  computeDealShareBlockRows_() 결과(newP1Target/pipelineP1Target 포함)
  * @param {Object} inputs
  * @return {Array<Object>}
  * ==========================================================
  */
-function computeTargetDerivationRows_(targetFY, benchmarkRows, p1ValueRows, dealShareRows, inputs){
+function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, inputs){
 
   const weeks = generateCalendarWeeksForFY_(targetFY);
   const weeksInMonthCounts = computeWeeksInMonthCounts_(weeks);
@@ -1861,37 +2180,22 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, p1ValueRows, deal
     benchmarkByGroupMonth[row.group + "|" + row.month] = row;
   });
 
-  const p1ValueByGroup = {};
-
-  p1ValueRows.forEach(function(row){
-    p1ValueByGroup[row.group] = row.currentFYP1V; // placeholder — a/b 블렌딩은 추후 결정
-  });
-
-  const dealShareByGroup = {};
-
-  dealShareRows.forEach(function(row){
-    dealShareByGroup[row.group] = row.dealShare;
-  });
-
   const improvementFactorByGroup = {
     events: inputs.improvementFactorEvents,
     contact: inputs.improvementFactorContact,
     content: inputs.improvementFactorContent
   };
 
-  const fyP1TargetByGroup = {};
+  const fyNewP1TargetByGroup = {};
+  const fyPipelineP1TargetByGroup = {};
 
-  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
-
-    fyP1TargetByGroup[group] = computeFYP1Target_(
-      inputs.revenueTarget,
-      dealShareByGroup[group] || 0,
-      p1ValueByGroup[group] || 0
-    );
-
+  dealShareRows.forEach(function(row){
+    fyNewP1TargetByGroup[row.group] = row.newP1Target;
+    fyPipelineP1TargetByGroup[row.group] = row.pipelineP1Target;
   });
 
-  const monthlyP1TargetCache = {};
+  const monthlyNewP1TargetCache = {};
+  const monthlyPipelineP1TargetCache = {};
   const monthlyCPNP1TargetCache = {};
 
   const rows = [];
@@ -1905,10 +2209,17 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, p1ValueRows, deal
 
       const monthKey = group + "|" + week.fy + "|" + week.month;
 
-      if(monthlyP1TargetCache[monthKey] === undefined){
+      if(monthlyNewP1TargetCache[monthKey] === undefined){
 
-        monthlyP1TargetCache[monthKey] = computeMonthlyP1Target_(
-          fyP1TargetByGroup[group],
+        // New/Pipeline 둘 다 같은 시즌성 비중(월별 New P1 실적 기반)을 적용한다 —
+        // 트랙별로 다른 시즌성 커브를 쓸지는 아직 미정, 필요시 후속 논의(§6 참고).
+        monthlyNewP1TargetCache[monthKey] = computeMonthlyP1Target_(
+          fyNewP1TargetByGroup[group],
+          benchmark.seasonalityPct
+        );
+
+        monthlyPipelineP1TargetCache[monthKey] = computeMonthlyP1Target_(
+          fyPipelineP1TargetByGroup[group],
           benchmark.seasonalityPct
         );
 
@@ -1921,7 +2232,8 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, p1ValueRows, deal
 
       const weeksInMonth = weeksInMonthCounts[week.fy + "|" + week.month] || 1;
 
-      const weeklyP1Target = computeWeeklyP1Target_(monthlyP1TargetCache[monthKey], weeksInMonth);
+      const weeklyNewP1Target = computeWeeklyP1Target_(monthlyNewP1TargetCache[monthKey], weeksInMonth);
+      const weeklyPipelineP1Target = computeWeeklyP1Target_(monthlyPipelineP1TargetCache[monthKey], weeksInMonth);
 
       rows.push({
         weekStart: week.weekStart,
@@ -1929,8 +2241,12 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, p1ValueRows, deal
         fy: week.fy,
         month: week.month,
         group: group,
-        monthlyP1Target: monthlyP1TargetCache[monthKey],
-        weeklyP1Target: weeklyP1Target,
+        monthlyNewP1Target: monthlyNewP1TargetCache[monthKey],
+        monthlyPipelineP1Target: monthlyPipelineP1TargetCache[monthKey],
+        monthlyP1Target: monthlyNewP1TargetCache[monthKey] + monthlyPipelineP1TargetCache[monthKey],
+        weeklyNewP1Target: weeklyNewP1Target,
+        weeklyPipelineP1Target: weeklyPipelineP1Target,
+        weeklyP1Target: weeklyNewP1Target + weeklyPipelineP1Target,
         monthlyCPNP1Target: monthlyCPNP1TargetCache[monthKey],
         weeklyCPNP1Target: monthlyCPNP1TargetCache[monthKey]
       });
@@ -1957,16 +2273,10 @@ function testComputeTargetDerivationRows(){
     { group: "content", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 50 }
   ];
 
-  const p1ValueRows = [
-    { group: "events", currentFYP1V: 1000 },
-    { group: "contact", currentFYP1V: 500 },
-    { group: "content", currentFYP1V: 200 }
-  ];
-
   const dealShareRows = [
-    { group: "events", dealShare: 0.5 },
-    { group: "contact", dealShare: 0.3 },
-    { group: "content", dealShare: 0.2 }
+    { group: "events", dealShare: 0.5, pipelineShare: 0.5, newP1Target: 500, pipelineP1Target: 200, totalP1Target: 700 },
+    { group: "contact", dealShare: 0.3, pipelineShare: 0.3, newP1Target: 300, pipelineP1Target: 100, totalP1Target: 400 },
+    { group: "content", dealShare: 0.2, pipelineShare: 0.2, newP1Target: 200, pipelineP1Target: 400, totalP1Target: 600 }
   ];
 
   const inputs = {
@@ -1976,24 +2286,31 @@ function testComputeTargetDerivationRows(){
     improvementFactorContent: 0.9
   };
 
-  const rows = computeTargetDerivationRows_(27, benchmarkRows, p1ValueRows, dealShareRows, inputs);
+  const rows = computeTargetDerivationRows_(27, benchmarkRows, dealShareRows, inputs);
 
   const augEventsRows = rows.filter(function(r){ return r.group === "events" && r.month === "AUG"; });
 
-  const expectedFYTarget = (1000000 * 0.5) / 1000; // 500
-  const expectedMonthlyTarget = expectedFYTarget * 0.5; // 250
-  const expectedWeeklyTarget = expectedMonthlyTarget / augEventsRows.length;
+  const expectedMonthlyNewTarget = 500 * 0.5; // 250
+  const expectedMonthlyPipelineTarget = 200 * 0.5; // 100
+  const expectedMonthlyTotalTarget = expectedMonthlyNewTarget + expectedMonthlyPipelineTarget; // 350
+  const expectedWeeklyNewTarget = expectedMonthlyNewTarget / augEventsRows.length;
+  const expectedWeeklyPipelineTarget = expectedMonthlyPipelineTarget / augEventsRows.length;
 
   const pass =
     (augEventsRows.length === 4 || augEventsRows.length === 5) &&
-    Math.abs(augEventsRows[0].monthlyP1Target - expectedMonthlyTarget) < 1e-6 &&
-    Math.abs(augEventsRows[0].weeklyP1Target - expectedWeeklyTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyNewP1Target - expectedMonthlyNewTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyPipelineP1Target - expectedMonthlyPipelineTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].monthlyP1Target - expectedMonthlyTotalTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyNewP1Target - expectedWeeklyNewTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyPipelineP1Target - expectedWeeklyPipelineTarget) < 1e-6 &&
+    Math.abs(augEventsRows[0].weeklyP1Target - (expectedWeeklyNewTarget + expectedWeeklyPipelineTarget)) < 1e-6 &&
     Math.abs(augEventsRows[0].monthlyCPNP1Target - 450) < 1e-6 &&
     augEventsRows[0].weeklyCPNP1Target === augEventsRows[0].monthlyCPNP1Target;
 
   Logger.log("AUG events week rows: " + augEventsRows.length + " (expected 4 or 5)");
-  Logger.log("Monthly P1 Target: " + augEventsRows[0].monthlyP1Target + " (expected " + expectedMonthlyTarget + ")");
-  Logger.log("Weekly P1 Target: " + augEventsRows[0].weeklyP1Target + " (expected " + expectedWeeklyTarget + ")");
+  Logger.log("Weekly New P1 Target: " + augEventsRows[0].weeklyNewP1Target + " (expected " + expectedWeeklyNewTarget + ")");
+  Logger.log("Weekly Pipeline P1 Target: " + augEventsRows[0].weeklyPipelineP1Target + " (expected " + expectedWeeklyPipelineTarget + ")");
+  Logger.log("Weekly Total P1 Target: " + augEventsRows[0].weeklyP1Target);
   Logger.log("Monthly CPNP1 Target: " + augEventsRows[0].monthlyCPNP1Target + " (expected 450)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
@@ -2160,7 +2477,14 @@ function buildTargetP1ValueHeaders_(){
 
 function buildTargetDealShareHeaders_(){
 
-  return ["Group", "Deal Share"];
+  return [
+    "Group",
+    "Deal Share (R1, New Track)",
+    "Pipeline Share (R2, Pipeline Track)",
+    "FY New P1 Target",
+    "FY Pipeline P1 Target",
+    "FY Total P1 Target"
+  ];
 
 }
 
@@ -2168,6 +2492,8 @@ function buildTargetDerivationHeaders_(){
 
   return [
     "Week Start", "Week End", "Month", "Group",
+    "Month New P1 Target", "Week New P1 Target",
+    "Month Pipeline P1 Target", "Week Pipeline P1 Target",
     "Month Target P1", "Week Target P1",
     "Month CPNP1 Benchmark", "Week Target CPNP1"
   ];
@@ -2203,7 +2529,7 @@ function targetP1ValueRowsToMatrix_(rows){
 function targetDealShareRowsToMatrix_(rows){
 
   return rows.map(function(r){
-    return [r.group, r.dealShare];
+    return [r.group, r.dealShare, r.pipelineShare, r.newP1Target, r.pipelineP1Target, r.totalP1Target];
   });
 
 }
@@ -2216,6 +2542,8 @@ function targetDerivationRowsToMatrix_(rows){
       r.weekStart, r.weekEnd,
       r.month, // FY 접두사 없이 월 라벨만(예: "AUG") — 사용자 요청, 2026-07-27
       r.group,
+      r.monthlyNewP1Target, r.weeklyNewP1Target,
+      r.monthlyPipelineP1Target, r.weeklyPipelineP1Target,
       r.monthlyP1Target, r.weeklyP1Target,
       r.monthlyCPNP1Target, r.weeklyCPNP1Target
     ];
@@ -2260,8 +2588,8 @@ function refreshTargetEngine_(){
     spentByGroupFYMonth
   );
 
-  // Deal Tracker는 Block B(코호트1/2 P1당 가치)와 Block C(코호트1 Deal Share)
-  // 둘 다에 쓰이므로 1회만 읽어(Article 10: Read Once) 재사용한다.
+  // Deal Tracker는 Block B(코호트1/2 P1당 가치)와 Block C(코호트1/2 Deal Share +
+  // New/Pipeline 2트랙 FY 목표) 전부에 쓰이므로 1회만 읽어(Article 10: Read Once) 재사용한다.
   const dealRows = readDealTrackerRawRows_();
 
   const dealCohortsByGroup = computeDealCohortsFromDealRows_(dealRows);
@@ -2269,12 +2597,39 @@ function refreshTargetEngine_(){
     dealCohortsByGroup, leadsAgg.newP1CountByGroup, leadsAgg.totalP1CountByGroup
   );
 
+  const p1ValueByGroup = {};
+  p1ValueRows.forEach(function(row){
+    p1ValueByGroup[row.group] = { currentFYP1V: row.currentFYP1V, prevP1V: row.prevP1V };
+  });
+
   const dealShareRatios = dealRows.length > 0 ? computeDealShareRatiosFromDealRows_(dealRows) : null;
-  const dealShareRows = computeDealShareBlockRows_(inputs, dealShareRatios);
+  const pipelineShareRatios = dealRows.length > 0 ? computeDealShareRatiosCohort2FromDealRows_(dealRows) : null;
+  const newPipelineSplit = computeNewPipelineRevenueSplit_(dealRows);
+
+  const dealShareRows = computeDealShareBlockRows_(
+    inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit
+  );
 
   const derivationRows = computeTargetDerivationRows_(
-    inputs.targetFY, benchmarkRows, p1ValueRows, dealShareRows, inputs
+    inputs.targetFY, benchmarkRows, dealShareRows, inputs
   );
+
+  // Block C가 2컬럼→6컬럼으로 확장되며 Block D 시작 컬럼이 뒤로 밀림(2026-07-27)
+  // — writeTargetEngineBlock_()는 자기 블록 너비만큼만 지우므로, 예전 Block D
+  // 위치(X열~)에 남아있던 잔재가 안 지워질 수 있다. Block A~D 전체 영역을
+  // 넉넉하게 먼저 비운 뒤 새로 쓴다(향후 블록 구조가 또 바뀌어도 동일하게 안전).
+  //
+  // clearContent()가 아니라 clear()를 쓴다 — 실측 확인(2026-07-27): 예전 Block D의
+  // Week Start/Week End(X·Y열)가 Date 서식이 적용된 셀이었는데, 새 Block C의
+  // FY New/Pipeline P1 Target이 같은 컬럼 위치를 차지하면서 clearContent()로는
+  // 안 지워진 Date 서식이 그대로 남아 숫자값이 "12/30/1899" 같은 날짜로 잘못
+  // 표시되는 버그 발생. clear()는 값+서식을 모두 지워 근본적으로 방지한다
+  // (Target_Engine은 수식/수동 서식이 없는 순수 계산 시트라 안전).
+  const WIDE_CLEAR_END_COL = 60;
+  sheet.getRange(
+    1, CONFIG.TARGET.ENGINE.BLOCK_A_START_COL, 2000,
+    WIDE_CLEAR_END_COL - CONFIG.TARGET.ENGINE.BLOCK_A_START_COL + 1
+  ).clear();
 
   writeTargetEngineBlock_(
     sheet, CONFIG.TARGET.ENGINE.BLOCK_A_START_COL,
@@ -2347,10 +2702,14 @@ function readTargetEngineDerivationRows_(){
         weekEnd: row[1],
         month: row[2],
         group: row[3],
-        monthlyP1Target: row[4],
-        weeklyP1Target: row[5],
-        monthlyCPNP1Target: row[6],
-        weeklyCPNP1Target: row[7]
+        monthlyNewP1Target: row[4],
+        weeklyNewP1Target: row[5],
+        monthlyPipelineP1Target: row[6],
+        weeklyPipelineP1Target: row[7],
+        monthlyP1Target: row[8],
+        weeklyP1Target: row[9],
+        monthlyCPNP1Target: row[10],
+        weeklyCPNP1Target: row[11]
       };
 
     });

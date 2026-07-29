@@ -9,9 +9,17 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.11.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-07-29)
+ * - 별도 git worktree(worktree-clever-seeking-dolphin)에 있던 Target_REP
+ *   New/Pipeline 2트랙 Block C/D 확장 설정(2026-07-27, 아래 v1.13.0-worktree/
+ *   v1.12.0-worktree 항목)을 main에 merge(90_TargetEngine.js v1.15.0 changelog
+ *   참고 — 세션 중 clasp push가 이 worktree의 라이브 배포분을 덮어쓴 사고
+ *   복구). CONTENT_CATEGORY_GROUP_MAP(worktree가 추가했던 것)은 그 이후
+ *   main에서 SEGMENT 컬럼 직접 참조 방식(v1.11.0, 2026-07-28)으로 이미
+ *   대체된 상태라 제거 — classifyDealSegment_()는 더 이상 이 맵을 안 씀.
  * v1.11.0 (2026-07-28)
  * - CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS에 SEGMENT(8, H열) 추가 —
  *   사용자가 Deal Tracker의 H열("Content Category"였던 컬럼을 "Segment"로
@@ -21,6 +29,17 @@
  *   readDealTrackerRawRows_()/classifyDealSegment_(), 30_ACQReport.js
  *   computeACQDealRevenueFromRows_() 참고). SOURCE_CATEGORY/LEAD_SOURCE_DETAIL은
  *   세그먼트 분류엔 더 이상 안 씀(다른 용도로 보존).
+ * v1.13.0-worktree (2026-07-27, worktree-clever-seeking-dolphin에서 병합)
+ * - CONFIG.TARGET.ENGINE.BLOCK_D_COLUMNS 8→12(Block D도 New/Pipeline 각각
+ *   전개), CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT 5→7(Target_REP에 Target
+ *   New/Pipeline P1 컬럼 추가) — Target_REP에서 New/Pipeline P1 목표를 분리
+ *   표시해달라는 사용자 요청 반영. 90_TargetEngine.js/91_TargetReport.js/
+ *   92_TargetStyles.js 참고.
+ * v1.12.0-worktree (2026-07-27, worktree-clever-seeking-dolphin에서 병합)
+ * - CONFIG.TARGET.ENGINE.BLOCK_C_COLUMNS 2→6(딜비중+New/Pipeline 2트랙 FY
+ *   목표), BLOCK_D_START_COL 24→28(X열→AB열, Block C 확장에 따른 이동) —
+ *   New/Pipeline 2트랙 FY P1 목표 공식 확정(CLAUDE.md #7 최종 결정),
+ *   90_TargetEngine.js 참고.
  * v1.10.0 (2026-07-27)
  * - CONFIG.TARGET.ENGINE Block B를 4컬럼→7컬럼으로 확장(코호트1 CurrentFYP1V/
  *   코호트2 PrevP1V 분리 표시), Block C/D 시작 컬럼 뒤로 이동(U열/X열).
@@ -355,7 +374,7 @@ const CONFIG = {
 
         // 헤더 1행 기준, 24컬럼 중 실제로 쓰는 7개.
         COLUMNS: {
-          FY: 1,                // A  ("FY26" 등 텍스트 — 그대로 사용, 날짜 파생 불필요)
+          FY: 1,                 // A  ("FY26" 등 텍스트 — 그대로 사용, 날짜 파생 불필요)
           REVENUE: 5,            // E  (Revenue (NZD))
           LEAD_SOURCE: 6,        // F  (Upsell/Referral/Paid Search/... — EXCLUDE_LEAD_SOURCES 필터 전용,
                                   //     세그먼트 분류엔 더 이상 안 씀 — 아래 SEGMENT 참고)
@@ -438,11 +457,21 @@ const CONFIG = {
       BLOCK_B_COLUMNS: 7,     // Group, NewP1(FY26) 수, 코호트1 Revenue(R1), CurrentFYP1V,
                                 // PrevP1 수, 코호트2 Revenue(R2), PrevP1V
 
-      BLOCK_C_START_COL: 21,  // U열 — 딜 비중 (코호트1만 사용)
-      BLOCK_C_COLUMNS: 2,     // Group, Deal Share
+      // 딜 비중 + New/Pipeline 2트랙 FY P1 목표 — 2026-07-27 사용자 최종 확정
+      // (CLAUDE.md #7): FY Revenue 타겟을 New 트랙(코호트1 비율÷a)/Pipeline
+      // 트랙(코호트2 비율÷b)으로 나눠 계산 후 합산. 2컬럼→6컬럼으로 확장되며
+      // Block D 시작 컬럼이 뒤로 밀림(refreshTargetEngine_()의 wide-clear로
+      // 예전 위치 잔재 처리).
+      BLOCK_C_START_COL: 21,  // U열 — 딜 비중(코호트1/2) + New/Pipeline FY 목표
+      BLOCK_C_COLUMNS: 6,     // Group, Deal Share(R1), Pipeline Share(R2),
+                                // FY New P1 Target, FY Pipeline P1 Target, FY Total P1 Target
 
-      BLOCK_D_START_COL: 24,  // X열 — 목표 전개 (주 캘린더 전체 나열)
-      BLOCK_D_COLUMNS: 8      // Week Start, Week End, Month(라벨만, 예 "AUG"), Group, Month Target P1, Week Target P1, Month CPNP1 Benchmark, Week Target CPNP1
+      // 2026-07-27 사용자 요청: Target_REP에서 New/Pipeline P1 목표가 분리 표시돼야
+      // 해서, 합계(Total)로 뭉쳐 전개하던 걸 New/Pipeline 각각 전개하도록 확장.
+      BLOCK_D_START_COL: 28,  // AB열 — 목표 전개 (주 캘린더 전체 나열)
+      BLOCK_D_COLUMNS: 12     // Week Start, Week End, Month(라벨만, 예 "AUG"), Group,
+                                // Month/Week New P1 Target, Month/Week Pipeline P1 Target,
+                                // Month/Week Target P1(합계), Month CPNP1 Benchmark, Week Target CPNP1
 
     },
 
@@ -458,8 +487,9 @@ const CONFIG = {
         REPORT_DATA_START: 3
       },
 
-      // 그룹당 5컬럼: Target P1 / Actual P1 / 달성% / Target CPNP1 / Actual CPNP1
-      GROUP_COLUMN_COUNT: 5,
+      // 그룹당 7컬럼(2026-07-27 New/Pipeline 분리 표시 — 사용자 요청): Target New P1 /
+      // Target Pipeline P1 / Target P1(합계) / Actual P1 / 달성% / Target CPNP1 / Actual CPNP1
+      GROUP_COLUMN_COUNT: 7,
 
       FIXED_HEADERS: ["Week Start", "Week End", "Month"]
 
