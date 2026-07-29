@@ -160,6 +160,16 @@ Target을 시즌성 벤치마크로 월별 배분)을 대체할 잠재력이 있
   지우고(전체 선택 후 Delete) 재실행 — 아직 실 데이터(Revenue Target 등)를 입력하기 전 단계라
   전체 초기화 비용이 낮음.
 
+- **Block 0만 서식 적용, Block A~D는 누락**: `applyTargetEngineInputStyles_()`가 Block 0(수동
+  입력 영역)에만 숫자 서식을 넣고 Block A~D(계산 결과 — 사실상 시트 숫자의 대부분)는 서식이
+  전혀 없었음 — 사용자가 실 시트에서 Seasonality %가 "0.07478545157"로 그대로 보이는 걸 확인
+  하고 지적. **수정 완료**: 신규 `applyTargetEngineBlockStyles_()`(92_TargetStyles.js)로 Block
+  A~D 전체에 동일 규칙(숫자=천단위 콤마, %/$=소수점 2자리) 적용, `refreshTargetEngine_()` 끝에서
+  호출. Node 하네스로 각 블록의 정확한 컬럼 오프셋에 의도한 서식이 걸리는지 전수 검증 완료.
+- **컬럼 간격(Block 간 빈 컬럼 없음)**: 사용자가 확인 — Block 0(A~M열) 바로 다음 N열부터 Block A가
+  시작해 블록 간 시각적 구분(빈 컬럼 1개)이 없어짐. **사용자 확정: 지금 당장 해결 안 해도 됨**,
+  임의로 고치지 말 것 — 필요 시 별도 요청.
+
 ## Outcomes & Retrospective
 
 (작업 완료 시 작성)
