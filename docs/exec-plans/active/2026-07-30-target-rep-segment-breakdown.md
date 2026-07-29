@@ -36,12 +36,18 @@ Target/실적은 이번 phase에서 완성. CPNP1은 사용자가 직접 취합�
       자동 연동) 완료 후 재검토.
 - [ ] **예산 기반 신규 도출 체인(5단계, Decision Log 참고)은 미구현** — Deal Share 트랙 선택(R1/R2),
       "실질적 조정" 메커니즘 등 세부 확정 후 `computeTargetDerivationRows_()` 등에 반영 필요
-- [ ] `91_TargetReport.js`/`92_TargetStyles.js` — 그룹당 컬럼 반복 구조를 3그룹에서 5세그먼트로
-      확장 (레이아웃 변경, 이번 라운드 미착수 — **이게 안 되면 `runGenerateTargetReport()`가
-      제대로 동작하지 않음**, 다음 세션 최우선)
-- [ ] 실 시트로 `runGenerateTargetReport()` 실행 검증 (Report/Styles 작업 완료 후)
-- [ ] `clasp push`는 Report/Styles까지 끝나서 전체 체인이 실제로 동작할 때까지 보류
-      (Engine만 배포하면 Report가 깨진 상태로 라이브에 반영되는 위험)
+- [x] `91_TargetReport.js`/`92_TargetStyles.js` — 5세그먼트 확장 완료. 헤더/리포트 행 빌더는
+      이미 GROUP_ORDER 동적 순회라 설정만으로 자동 확장(3그룹×7컬럼=24 → 5세그먼트×7컬럼=38).
+      실제 버그 1건 수정: `computeTargetActualP1ByWeek_()`의 3그룹 하드코딩 초기화 →
+      GROUP_ORDER 동적 초기화. Actual CPNP1 원천을 `buildCombinedWeeklySpentByDateKey_()`
+      (외부 채널/Naver 시트 주간 정확매칭, 3그룹 전용이라 폐기)에서 신규
+      `computeTargetActualCPNP1ByGroupMonth_()`(Block 0 세그먼트별 월별 수동 Spent 기준,
+      월 값을 그 달 모든 주에 반복 — Target CPNP1과 동일 패턴)로 교체. `applyTargetEngineInputStyles_()`
+      (92_TargetStyles.js) 신규로 Block 0 숫자 서식(천단위 콤마, $/%는 소수점 2자리) 적용.
+      Node 하네스로 `computeTargetActualCPNP1ByGroupMonth_()` 별도 검증 완료(합성 데이터).
+- [ ] 실 시트로 `runGenerateTargetReport()` 실행 검증 (다음 단계 — Config/Engine/Report/Styles
+      전부 코드 레벨로는 완료됐으나 실제 Apps Script 환경 검증 전)
+- [ ] `clasp push`는 위 실 시트 검증 전까지 보류
 
 ### 검증 방법 (2026-07-30, Node 하네스)
 
