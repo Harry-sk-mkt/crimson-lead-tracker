@@ -80,6 +80,69 @@ TODO 상태로 남아 있었다.
 **처리 방침**: 최소 구성 원칙에 따라 일단 이 한계를 안고 도입(스크립트 자체 주석에 명시). 실사용
 중 이 false-positive가 실제로 거슬리면 그때 완화 여부를 재검토한다 — 아직 코드 변경 없음.
 
+## Search를 Marketo 프로그램화 + 캐치올 재분류 (CLAUDE.md #14 연장)
+
+**배경**: 사용자가 Search_OPS를 육안으로 훑어보다가 search/sitelink가 아닌 raw UTM이 너무 많다고
+재확인. 2026-07-24에 "Search 리드 대부분이 Marketo Program 없이 직접 캡처된다"는 판단으로 raw
+UTM 그레인을 선택했었는데, 그 판단을 재검토하는 것에서 시작.
+
+**발견 1 — Search_OPS Key/Channel**: Lead Source Detail에 "Naver SA"/"Google SA"가 포함되면
+raw UTM 대신 그 Program명을 그대로 키로 사용하도록 `resolveSearchEngineKey_()`(71_Search_Engine.js)
+재설계 — 패턴 매칭이라 향후 신규 프로그램도 자동 인식. UTM→Program 정확 매핑 7건(detail이
+비어있는 터치 구제), "chatgpt.com"/"website-consultation-booking" 같은 비정보성 UTM은 Organic
+Search 버킷으로 병합. Channel도 `resolveSearchChannelFromKey_()` 신규로 Naver Search/Google
+Search 구분, 기본값 "Meta"(BOFU에서 물려받아 실측 검증 안 됐던 값)는 빈 값으로 변경 —
+`runClearSearchOPSMetaChannel()`로 기존 값도 일괄 공란 처리, 나머지는 사용자가 직접 채움.
+
+**발견 2 — "research" 오탐 버그**: `campaign.includes("search")` 확정 신호가 "research"(리서치)
+안의 "search"까지 잡아서, "college-research-ebook" 같은 명백한 Content/Webinar 캠페인이 전부
+강제로 Search가 되고 있었음. `/(?<!re)search/` 정규식으로 수정.
+
+**발견 3 — Search_OPS 캐치올 육안 재검토**: "Crimson Education Contact Us form" 같은 범용
+Lead Source Detail 폼이 raw UTM 그레인과 겹쳐 콘텐츠/웨비나/세미나 캠페인까지 Search로 뭉개던
+문제(Content 우선순위 재배치, leadSource 기반 재분류 등)를 여러 라운드로 해결한 뒤에도 남은
+캠페인들을 사용자가 Search_OPS 전체를 직접 훑어보고 개별 지정 — `BUSINESS_SEGMENT_EXCEPTIONS`
+(16_TransformHelper.js)에 150여 건 누적 추가(파트너십 프로그램/숫자만 있는 캠페인 ID/MedView/
+CGA 등). CLAUDE.md #14의 "잔존 leadSource=Organic Search 레거시"도 이번에 해소 — 신호가
+전혀 없는 리드는 leadSource 값을 임의 Marketo Campaign name으로 써서 Search_Engine/Search_OPS
+집계 누락(Revenue $4M+ 포함)을 막는 `resolveSearchEngineKey_()` fallback으로 처리.
+
+**부수 발견**: `Search_CatchAll_QA` 시트(76_TempQA_SearchCatchAll.js 신규)로 "신호는 있는데
+Lead Source Category가 더 정확한 신호인" 케이스를 사람이 직접 검토(Marketo 로그 대조) —
+Lead Source Category만으로는 같은 카테고리("Naver online cafe" 등)가 Content/Webinar/Seminar로
+캠페인마다 다르게 갈려 자동 규칙화가 불가능함을 확인, 캠페인 단위 override로 반영.
+
+## OPS 전체 정렬 스타일 통일 + Leads_OPS 정렬 추가
+
+**배경**: Search_OPS에서 이번 세션에 신규 생성된 키(Naver SA/Google UTM/Organic Search 등,
+Start Date 미기입)가 "빈 날짜 최상단" 정렬 때문에 실데이터 있는 캠페인들을 밀어내는 문제 발견.
+
+**변경**: BOFU/Events(Event Date 기준)/Content/Search_OPS 전부 "빈 날짜 최하단 + 나머지
+최신순"으로 통일(`compareBy*BlankLast*` 함수들로 교체). Leads_OPS는 애초에 정렬 로직 자체가
+없었음(`20_OPS_Config.js`의 `SORT_BY`/`SORT_ASC`는 어디서도 안 읽히는 죽은 설정) — Create Date
+기준으로 동일 스타일 신규 추가.
+
+## git worktree 사고 발견 및 복구 (CLAUDE.md #15 신설)
+
+**배경**: Target_REP에서 "Events Target Pipeline P1"/"Contact Target New P1" 값이 0으로
+표시된다는 사용자 보고로 조사 시작.
+
+**원인**: 별도 git worktree(`worktree-clever-seeking-dolphin`, main과 동일한 Apps Script
+scriptId)가 New/Pipeline 2트랙 Block C/D 확장(2026-07-27, 8개 커밋)을 라이브 스크립트에
+배포해뒀었는데, main에는 이 작업이 merge된 적이 없었음 — 이번 세션 중 `git worktree list`
+확인 없이 main에서 `clasp push`를 반복하면서 그 배포분을 구버전(main)으로 덮어씀.
+
+**복구**: worktree 브랜치를 main에 merge — 분류 로직(`classifyDealSegment_()`)은 그 사이 main에서
+더 검증된 방식(Deal Tracker "Segment" 컬럼 직접 참조)으로 이미 교체돼 있어 그쪽으로 통일하고,
+worktree의 New/Pipeline Block C/D 계산 로직은 그대로 채택(90_TargetEngine.js v1.15.0/
+00_Config.js v1.12.0 changelog 참고). Merge 후 관련 테스트 전부 PASS, `runGenerateTargetReport()`
+재실행으로 실제 값 정상 반영 확인. Merge 완료 후 worktree/브랜치 삭제(완전히 merge된 상태라
+안전).
+
+**재발 방지**: CLAUDE.md "Session-Start Git Sync Check" 원칙에 `git worktree list` 확인을
+추가 — 별도 worktree가 main과 동일한 scriptId를 가리키면 그 작업 내용을 먼저 파악하고 진행
+(2026-07-29 스크립트 자동화로 해소 완료 — 위 하네스 엔지니어링 섹션 참고).
+
 ## 완전 동일 중복 터치(Exact Duplicate Touch Row) 자동 삭제 구현 (CLAUDE.md #8)
 
 **배경**: 2026-07-24 검출 로직(`findExactDuplicateTouchRows_()`)만 구현하고 자동 삭제는 보류.
