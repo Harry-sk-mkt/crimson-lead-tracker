@@ -1,3 +1,68 @@
+# Changelog — 2026-07-30
+
+## 로컬/origin 재동기화 (2026-07-29 하네스 엔지니어링 세션과의 divergence)
+
+세션 시작 시 로컬과 origin이 서로 갈라진 상태(로컬 전용 커밋 1개, origin 전용 6개 — 다른 머신의
+하네스 엔지니어링 세션)를 발견. origin을 기준으로 리셋한 뒤, 로컬에만 있던 `docs/Changelog.md`
+기록(Search Marketo 프로그램화, OPS 정렬 통일, worktree 사고/복구)이 origin Changelog 어디에도
+없다는 걸 확인하고 다시 이어붙여 커밋. `core.hooksPath`가 이 로컬 체크아웃에는 아직 설치 안 돼
+있던 것도 이번에 설치(`scripts/start-session.sh`가 감지).
+
+## exec-plans 컨벤션 + Roadmap 신설
+
+OpenAI "Harness Engineering" 아티클(exec-plans 패턴)을 참고해 `docs/exec-plans/{active,completed}/`
++ `docs/ExecPlanConvention.md` 신설 — 작업 단위 실시간 진행 기록용, docs/ 트리 안에 유지(일관성
+우선, 사용자 확인). `docs/Roadmap.md` 신설 — 실제 코드(`00_Config.js` 등 시트 상수) 기준으로
+현재 파이프라인 플로우차트 정리, End Goal(Phase 1: 외부 캠페인 지출 데이터 통합 → CPNP1 실적
+계산 / Phase 2: Target_REP 전체 세그먼트+예산 반영 재설계) 및 FY별 Sales Funnel 대시보드(계획 중),
+End Goal 이후 장기 항목(유지보수/리팩토링/네이밍 컨벤션/에이전트 QA) 기록.
+
+## Target_REP 세그먼트 구조 전면 분해 (3그룹 → 5개 실제 Business Segment)
+
+**배경**: Target_REP/Target_Engine의 리포트 축이 3개 추상화 그룹(events=Seminar+Webinar,
+contact=BOFU+Search, content=Content)이었던 걸 실제 5개 Business Segment(Seminar/Webinar/
+BOFU/Search/Content, Referral/Other는 계속 제외)로 분해 — Roadmap Phase 2 중 세그먼트 구조
+부분만 먼저 착수(사용자 결정). 상세 설계/결정 이력: `docs/exec-plans/active/
+2026-07-30-target-rep-segment-breakdown.md`.
+
+**Config/Engine 레이어(`00_Config.js`/`90_TargetEngine.js`)**: `GROUP_ORDER`/`SEGMENT_GROUPS`를
+5세그먼트 1:1 매핑으로 교체. `deriveTargetGroup_()`/`computeBenchmarkBlockRows_()`/
+`computeP1ValueBlockRows_()`는 이미 GROUP_ORDER를 동적으로 순회해 코드 변경 없이 그대로 확장됐지만,
+`{events:0,contact:0,content:0}` 리터럴로 하드코딩됐던 `computeDealShareRatiosFromDealRows_()`
+등 3개 함수는 새 세그먼트명에 대해 NaN이 나는 버그가 있어 GROUP_ORDER 기반 동적 초기화로 수정.
+CPNP1 벤치마크(채널시트 3그룹 단위 자동집계, `CONFIG.TARGET.BENCHMARK.CPNP1_FYS`)는 5세그먼트로
+자동 분해가 안 돼 잠정 중단(빈 배열) — 대신 Target_Engine Block 0에 신규 섹션 3개 추가: 세그먼트별
+FY26 CPNP1 벤치마크(스칼라 수동입력), 월별 회사 전체 Revenue Target/Budget, 세그먼트별 월별 실제
+Spent(수동 취합). `readTargetEngineInputs_()`/`setupTargetEngineInputDefaults_()` 전면 재작성.
+
+**Report/Styles 레이어(`91_TargetReport.js`/`92_TargetStyles.js`)**: 헤더/리포트 행 빌더는 이미
+GROUP_ORDER 동적 순회라 설정만으로 자동 확장(3그룹×7컬럼=24 → 5세그먼트×7컬럼=38). 실제 버그
+1건 수정(`computeTargetActualP1ByWeek_()`의 3그룹 하드코딩). Actual CPNP1 원천을 "외부 채널/Naver
+시트 주간 정확매칭"(3그룹 전용, 폐기)에서 "Block 0 세그먼트별 월별 수동 Spent 기준(월 값을 그 달
+모든 주에 반복)"으로 교체. Block 0 서식(천단위 콤마, $/%는 소수점 2자리) 최초 추가.
+
+**실 시트 검증 중 발견·수정한 버그 2건**: (1) Block 0 신규 월별 그리드(B~M열, 12개월)가 기존
+`BLOCK_A_START_COL`(D열)과 정확히 겹쳐 두 블록이 같은 행/컬럼을 서로 덮어쓰던 버그 — 사용자가
+실 시트에서 "Monthly Company-wide Inputs 행에 다른 블록이 이어짐"을 발견해 확인, Block A~D 시작
+컬럼을 전부 +10 이동(4/13/21/28 → 14/23/31/38)해 해결. (2) Block 0에만 서식을 넣고 Block A~D
+(사실상 시트 숫자 대부분)는 서식이 없어 Seasonality % 등이 raw 소수로 표시되던 것 — 신규
+`applyTargetEngineBlockStyles_()`로 Block A~D 전체에 동일 서식 규칙 적용.
+
+**클라스프 push 관련 발견**: `clasp push`가 TTY 없는 환경(이 harness)에서 자체 확인 프롬프트를
+못 띄우고 조용히 "Skipping push."로 아무 것도 안 하고 종료되는 걸 발견 — `scripts/safe-clasp-push.sh`
+가 이미 자체 worktree 확인 게이트를 갖고 있으므로 `clasp push --force`를 기본으로 넘기도록 수정.
+
+**미해결(다음 세션, 임의로 처리하지 말 것)**:
+- 예산 기반 신규 도출 체인(월별 회사 전체 Revenue Target/Budget → 세그먼트별 CPNP1 벤치마크로
+  Budget-NP1 산출 → P1당 가치로 Revenue 프로젝션 → 벤치마크 NP1과의 차이로 조정)은 사용자가
+  설명한 5단계 로직만 기록됐고 실제 계산 코드는 미구현 — Deal Share 트랙 선택(New/Pipeline)과
+  "실질적 조정" 메커니즘(고정 수식인지 수동 판단인지)이 아직 미확정.
+- Block 0(A~M열)과 Block A(N열~) 사이 구분용 빈 컬럼 없음 — 사용자 확인 후 보류, 나중에 요청 시 처리.
+- Target_REP(리포트 시트 자체, Target_Engine이 아니라) 실제 출력물의 5세그먼트 컬럼/서식 최종
+  확인은 아직 안 됨(이번 세션은 Target_Engine 화면만 검토).
+- 사용자가 실제 월별 Revenue Target/Budget/세그먼트별 Spent 값을 아직 Target_Engine에 입력
+  안 함(다음 세션에서 진행 예정, 사용자 확인).
+
 # Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
 
 ## 하네스 엔지니어링 도입 — clasp push 안전장치, pre-commit 훅, 세션 시작 스크립트, CLAUDE.md 다이어트
