@@ -21,9 +21,20 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.16.0
+ * v1.17.0
  *
  * Change Log
+ * v1.17.0 (2026-07-30)
+ * - `buildCombinedWeeklySpentByDateKey_()` 제거 — Actual CPNP1 원천이
+ *   91_TargetReport.js의 신규 `computeTargetActualCPNP1ByGroupMonth_()`(Block 0
+ *   세그먼트별 월별 수동 Spent 기준)로 교체되며 호출부가 완전히 사라져 orphan
+ *   코드가 됨(Backward Compatibility 원칙상 안 쓰는 함수는 완전 삭제).
+ *   `setupTargetEngineInputDefaults_()` 끝에서 `applyTargetEngineInputStyles_()`
+ *   (92_TargetStyles.js 신규)를 호출해 Block 0 숫자 서식(천단위 콤마, $/%는
+ *   소수점 2자리) 적용. `readChannelRawRows_()`/`readNaverRawRows_()`/
+ *   `computeCombinedSpentByGroupFYMonth_()`는 CPNP1_FYS 잠정 중단으로 이미
+ *   호출이 사실상 no-op(조기 반환)이지만 아직 참조가 남아있어 이번엔 유지 —
+ *   완전 삭제는 Phase 1(캠페인 데이터 자동 연동) 방향이 확정된 뒤 별도 결정.
  * v1.16.0 (2026-07-30)
  * - 세그먼트 구조 전면 분해(3그룹 events/contact/content → 5세그먼트 Seminar/
  *   Webinar/BOFU/Search/Content, CONFIG.TARGET.GROUP_ORDER 변경) 대응.
@@ -1240,53 +1251,6 @@ function computeCombinedSpentByGroupFYMonth_(){
   readNaverRawRows_().forEach(function(row){
 
     addToResult("contact", row.startDate, row.spentNZD);
-
-  });
-
-  return result;
-
-}
-
-
-/**
- * ==========================================================
- * Build Combined Weekly Spent By Date Key (Target_REP 주간 실적 매칭용)
- *
- * WHY
- * 2026-08-03 사이클 전환 이후 주는 채널시트/Naver 행과 Week Start가
- * 정확히 1:1 매칭된다(docs/TargetReportDesign.md §8). FY/월 집계가 아니라
- * "이 정확한 날짜의 행"이 필요해서 raw row를 그대로 날짜 키로 색인한다.
- *
- * @return {Object}  "yyyy-MM-dd"(Week Start) -> {events, contact, content}
- * ==========================================================
- */
-function buildCombinedWeeklySpentByDateKey_(){
-
-  const result = {};
-
-  const toKey = function(date){
-    return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
-  };
-
-  readChannelRawRows_().forEach(function(row){
-
-    const key = toKey(row.startDate);
-
-    if(!result[key]) result[key] = { events: 0, contact: 0, content: 0 };
-
-    result[key].events += row.events;
-    result[key].contact += row.contact;
-    result[key].content += row.content;
-
-  });
-
-  readNaverRawRows_().forEach(function(row){
-
-    const key = toKey(row.startDate);
-
-    if(!result[key]) result[key] = { events: 0, contact: 0, content: 0 };
-
-    result[key].contact += row.spentNZD;
 
   });
 
@@ -2565,6 +2529,7 @@ function setupTargetEngineInputDefaults_(sheet){
   sheet.getRange(1, valueCol, lastRow, 1).setValues(valueColumn);
 
   setupTargetEngineMonthlyGridDefaults_(sheet);
+  applyTargetEngineInputStyles_(sheet); // 92_TargetStyles.js — 숫자 서식(천단위 콤마, $/%는 소수점 2자리)
 
 }
 

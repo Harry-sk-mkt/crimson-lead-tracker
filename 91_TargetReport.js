@@ -6,9 +6,11 @@
  * Responsibility
  * Target_REP 시트: Report(주간 Target/Actual) 생성 — Control 영역 없음
  * (Generate는 수동 실행, 아래 Change Log 참고). Target_Engine(90_TargetEngine.js)을
- * 조회만 하고, 실적(Actual)은 Leads_OPS/외부 채널·Naver 시트를 직접 스캔한다
- * (Engine의 목표 계산과 분리 — Generate는 Engine 전체 재계산까지 하지만,
- * 실적만 갱신하는 refreshTargetActuals_()는 Engine을 건드리지 않는다).
+ * 조회만 하고, 실적(Actual P1)은 Leads_OPS를 직접 스캔한다(Engine의 목표 계산과
+ * 분리 — Generate는 Engine 전체 재계산까지 하지만, 실적만 갱신하는
+ * refreshTargetActuals_()는 Engine을 건드리지 않는다). Actual CPNP1은
+ * 2026-07-30부터 Target_Engine Block 0의 세그먼트별 월별 수동 Spent 입력값
+ * 기준(예전엔 외부 채널·Naver 시트 주간 정확 매칭 — 3그룹 전용이라 폐기).
  *
  * 설계 문서
  * docs/TargetReportDesign.md
@@ -17,9 +19,24 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.4.1
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-07-30)
+ * - 세그먼트 구조 전면 분해(3그룹 → 5세그먼트) 대응. `buildTargetReportHeaders_()`/
+ *   `generateTargetReport_()`/`updateTargetReportActuals_()`/`clearTargetReportArea_()`는
+ *   이미 CONFIG.TARGET.GROUP_ORDER를 동적으로 순회하고 있어 설정 변경만으로
+ *   자동 확장됨(3그룹×7컬럼=24 → 5세그먼트×7컬럼=38, 코드 변경 불필요). 반면
+ *   `computeTargetActualP1ByWeek_()`의 `{events:0,contact:0,content:0}` 하드코딩은
+ *   GROUP_ORDER 기반 동적 초기화로 수정(새 세그먼트명에 대해 undefined++라
+ *   NaN 발생하던 버그). Actual CPNP1의 원천을 `buildCombinedWeeklySpentByDateKey_()`
+ *   (외부 채널/Naver 시트 주간 정확 매칭, 3그룹 전용이라 5세그먼트에 못 씀,
+ *   90_TargetEngine.js에서 제거)에서 신규 `computeTargetActualCPNP1ByGroupMonth_()`
+ *   (Target_Engine Block 0의 세그먼트별 월별 수동 Spent 기준, 월 값을 그 달
+ *   모든 주에 반복 표시 — Target CPNP1과 동일 패턴)로 교체. 이에 따라
+ *   더 이상 쓰이지 않게 된 `readTargetCutoverDate_()` 제거(8/3 cutover 게이트는
+ *   채널시트 주간 그레인 제약 때문이었고, 월별 수동 입력에는 해당 없음).
+ *   상세: docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
  * v1.4.1 (2026-07-27)
  * - generateTargetReport_()가 헤더 행을 한 번도 다시 안 쓰고 있었던 버그
  *   발견·수정 — 헤더는 setupTargetReport()(최초 1회)에서만 쓰였고, 이후
@@ -126,27 +143,6 @@ function buildTargetReportHeaders_(){
 
 /**
  * ==========================================================
- * Read Target Cutover Date (Target_Engine Input 블록에서 읽기, 없으면 CONFIG 기본값)
- * ==========================================================
- */
-function readTargetCutoverDate_(){
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
-
-  if(!sheet) return CONFIG.TARGET.CUTOVER_DATE;
-
-  const value = sheet
-    .getRange(CONFIG.TARGET.INPUT.ROWS.CUTOVER_DATE, CONFIG.TARGET.INPUT.VALUE_COL)
-    .getValue();
-
-  return (value instanceof Date && !isNaN(value.getTime())) ? value : CONFIG.TARGET.CUTOVER_DATE;
-
-}
-
-
-/**
- * ==========================================================
  * Compute Target Actual P1 By Week (Leads_OPS 1회 스캔)
  *
  * WHY
@@ -154,7 +150,7 @@ function readTargetCutoverDate_(){
  * 실제로 존재하는 주(weekStarts)에만 매칭시켜 카운트한다 (Article 10: Read Once).
  *
  * @param {Array<Date>} weekStarts  리포트에 나열된 모든 Week Start
- * @return {Object}  "yyyy-MM-dd"(Week Start) -> {events, contact, content}
+ * @return {Object}  "yyyy-MM-dd"(Week Start) -> {세그먼트명: count, ...} (CONFIG.TARGET.GROUP_ORDER 순)
  * ==========================================================
  */
 function computeTargetActualP1ByWeek_(weekStarts){
@@ -194,13 +190,95 @@ function computeTargetActualP1ByWeek_(weekStarts){
 
     if(!validKeys[key]) return;
 
-    if(!result[key]) result[key] = { events: 0, contact: 0, content: 0 };
+    if(!result[key]){
+      result[key] = {};
+      CONFIG.TARGET.GROUP_ORDER.forEach(function(g){ result[key][g] = 0; });
+    }
 
     result[key][group]++;
 
   });
 
   return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Actual CPNP1 By Group/Month (세그먼트별 월별 수동 Spent 기반 — 2026-07-30)
+ *
+ * WHY
+ * 2026-07-30 세그먼트 분해로 Actual Spent/CPNP1의 원천이 "채널시트 주간 정확
+ * 매칭"(buildCombinedWeeklySpentByDateKey_(), 3그룹 전용이라 5세그먼트에 못 씀)
+ * 에서 "Target_Engine Block 0의 세그먼트별 월별 수동 Spent 입력"으로 바뀌었다.
+ * 수동 입력은 월 단위라 주 단위로 쪼갤 근거가 없으므로, Target CPNP1(월별
+ * 값을 그 달의 모든 주에 동일하게 반복 표시, computeTargetDerivationRows_()의
+ * weeklyCPNP1Target 참고)과 동일한 패턴을 따른다 — 그 달의 Actual CPNP1도
+ * 모든 주에 같은 값(월 Spent ÷ 그 달 Actual P1 합계)을 반복 표시한다.
+ * 기존의 "8/3 cutover 이전 주는 공란" 게이트는 채널시트의 주간 그레인
+ * 제약 때문이었으므로(월 데이터에는 해당 없음) 더 이상 적용하지 않는다.
+ *
+ * @param {Array<Date>} weekStarts     리포트에 나열된 모든 Week Start
+ * @param {Object} actualP1ByWeek      computeTargetActualP1ByWeek_() 결과
+ * @return {Object}  "group|month" -> ratio (그 달 Actual P1 합계가 0이면 키 없음)
+ * ==========================================================
+ */
+function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
+
+  const toKey = function(date){
+    return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+  };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!engineSheet) return {};
+
+  const inputs = readTargetEngineInputs_(engineSheet);
+
+  const actualP1ByGroupMonth = {};
+
+  weekStarts.forEach(function(weekStart){
+
+    if(!(weekStart instanceof Date)) return;
+
+    const month = getFiscalMonthLabel(weekStart);
+    const counts = actualP1ByWeek[toKey(weekStart)] || {};
+
+    CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
+
+      const groupMonthKey = group + "|" + month;
+
+      actualP1ByGroupMonth[groupMonthKey] =
+        (actualP1ByGroupMonth[groupMonthKey] || 0) + (counts[group] || 0);
+
+    });
+
+  });
+
+  const ratios = {};
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
+
+    const monthlySpent = inputs.monthlySegmentSpent[group] || {};
+
+    Object.keys(actualP1ByGroupMonth).forEach(function(groupMonthKey){
+
+      if(groupMonthKey.indexOf(group + "|") !== 0) return;
+
+      const month = groupMonthKey.slice(group.length + 1);
+      const p1Count = actualP1ByGroupMonth[groupMonthKey];
+
+      if(p1Count > 0 && Object.prototype.hasOwnProperty.call(monthlySpent, month)){
+        ratios[groupMonthKey] = monthlySpent[month] / p1Count;
+      }
+
+    });
+
+  });
+
+  return ratios;
 
 }
 
@@ -384,14 +462,12 @@ function generateTargetReport_(){
   const weekStarts = weekOrder.map(function(key){ return weekMap[key].weekStart; });
 
   const actualP1ByWeek = computeTargetActualP1ByWeek_(weekStarts);
-  const weeklySpentByDateKey = buildCombinedWeeklySpentByDateKey_();
-  const cutoverDate = readTargetCutoverDate_();
+  const actualCPNP1ByGroupMonth = computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek);
 
   const outputRows = weekOrder.map(function(key){
 
     const week = weekMap[key];
-    const actualCounts = actualP1ByWeek[key] || { events: 0, contact: 0, content: 0 };
-    const spentCounts = week.weekStart >= cutoverDate ? (weeklySpentByDateKey[key] || null) : null;
+    const actualCounts = actualP1ByWeek[key] || {};
 
     const row = [week.weekStart, week.weekEnd, week.month];
 
@@ -406,12 +482,15 @@ function generateTargetReport_(){
       const actualP1 = actualCounts[group] || 0;
       const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
 
-      const actualSpent = spentCounts ? spentCounts[group] : null;
-      const actualCPNP1 = (actualSpent !== null && actualP1 > 0) ? actualSpent / actualP1 : "";
+      // 그 달의 Actual CPNP1 값을 그 달 모든 주에 동일하게 반복 표시(Target CPNP1과
+      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
+      const actualCPNP1Key = group + "|" + week.month;
+      const actualCPNP1 = actualCPNP1ByGroupMonth[actualCPNP1Key];
 
       row.push(
         targetNewP1, targetPipelineP1, targetP1,
-        actualP1, achievementPct, target.weeklyCPNP1Target, actualCPNP1
+        actualP1, achievementPct, target.weeklyCPNP1Target,
+        actualCPNP1 === undefined ? "" : actualCPNP1
       );
 
     });
@@ -479,11 +558,10 @@ function updateTargetReportActuals_(sheet){
 
   const values = sheet.getRange(rows.REPORT_DATA_START, 1, dataRowCount, totalCols).getValues();
 
-  const cutoverDate = readTargetCutoverDate_();
   const weekStarts = values.map(function(row){ return row[0]; });
 
   const actualP1ByWeek = computeTargetActualP1ByWeek_(weekStarts);
-  const weeklySpentByDateKey = buildCombinedWeeklySpentByDateKey_();
+  const actualCPNP1ByGroupMonth = computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek);
 
   const toKey = function(date){
     return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
@@ -496,8 +574,8 @@ function updateTargetReportActuals_(sheet){
     if(!(weekStart instanceof Date)) return row;
 
     const key = toKey(weekStart);
-    const actualCounts = actualP1ByWeek[key] || { events: 0, contact: 0, content: 0 };
-    const spentCounts = weekStart >= cutoverDate ? (weeklySpentByDateKey[key] || null) : null;
+    const month = row[2]; // Month 컬럼(라벨만, 예 "AUG") — 리포트에 이미 기록된 값 재사용
+    const actualCounts = actualP1ByWeek[key] || {};
 
     CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
 
@@ -512,12 +590,13 @@ function updateTargetReportActuals_(sheet){
       const actualP1 = actualCounts[group] || 0;
       const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
 
-      const actualSpent = spentCounts ? spentCounts[group] : null;
-      const actualCPNP1 = (actualSpent !== null && actualP1 > 0) ? actualSpent / actualP1 : "";
+      // 그 달의 Actual CPNP1을 그 달 모든 주에 동일하게 반복 표시(generateTargetReport_()와
+      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
+      const actualCPNP1 = actualCPNP1ByGroupMonth[group + "|" + month];
 
       row[baseCol + 3] = actualP1;
       row[baseCol + 4] = achievementPct;
-      row[baseCol + 6] = actualCPNP1;
+      row[baseCol + 6] = actualCPNP1 === undefined ? "" : actualCPNP1;
 
     });
 
