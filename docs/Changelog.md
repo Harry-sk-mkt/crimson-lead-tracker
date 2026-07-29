@@ -1,4 +1,38 @@
-# Changelog — 2026-07-28
+# Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
+
+## Session-Start Git Sync Check의 worktree 확인 항목 — "기억해서 확인" → 스크립트 자동화로 대체
+
+**배경**: `docs/OpenItems.md` #15(구 CLAUDE.md 미해결 항목 #15, 2026-07-29 세션)에서 `git worktree
+list` 확인 없이 main에서 `clasp push`를 반복하다가 linked worktree(`worktree-clever-seeking-dolphin`)가
+배포해뒀던 Target_REP New/Pipeline 코드를 덮어쓴 사고가 발생했고, 그 항목의 "재발 방지" 문장은
+"앞으로 세션 시작 시 git sync 체크에 `git worktree list`도 포함할 것(기존 원칙에 반영 필요)"이라는
+TODO 상태로 남아 있었다.
+
+**해소**: 같은 날 진행한 하네스 엔지니어링 세션에서 이 TODO를 스크립트로 구현 완료 —
+- `scripts/safe-clasp-push.sh`: `clasp push`를 직접 실행하는 대신 이 래퍼를 통하도록 전환.
+  `git worktree list`가 2개 이상이면 목록을 보여주고 y/n 확인을 받은 뒤에만 push한다. 실제 사고
+  메커니즘(main에서 push했는데 다른 worktree가 배포해둔 코드를 덮어씀)을 감안해, "어느 worktree에서
+  push하는가"가 아니라 "worktree가 여러 개 존재한다는 사실 자체"를 기준으로 경고한다.
+- `scripts/start-session.sh`: 세션 시작 시 `git fetch`+divergence, `git worktree list`,
+  `core.hooksPath` 설치 여부를 한 번에 확인 — 기존에 CLAUDE.md prose로만 존재하던 "Session-Start
+  Git Sync Check" 절차를 대체.
+- 둘 다 실제 `git commit`/임시 worktree 생성으로 정상 케이스·차단 케이스 각각 시연 후 검증 완료.
+- `docs/OpenItems.md` #15 자체는 텍스트를 수정하지 않고 원문 그대로 보존(당시 기록 그대로 유지) —
+  "해소됐다"는 사실은 이 Changelog 항목으로 대신 기록한다.
+
+## 하네스 엔지니어링 pre-commit 도입 — `check-version-header.sh`의 알려진 한계 발견
+
+**배경**: 같은 세션에서 `.githooks/pre-commit`(naming/version-header/중복선언/문법 4개 검사)을
+신규 도입하면서, `check-version-header.sh`(코드가 바뀐 `.js` 파일이 Version/Change Log 헤더도
+같이 갱신했는지 검사)의 판정 방식을 설계하는 과정에서 한계를 발견했다.
+
+**한계**: 이 스크립트는 diff의 hunk가 파일 헤더 안쪽인지 바깥쪽(코드 영역)인지만 구분할 뿐, 코드
+영역 변경이 "실제 로직 변경"인지 "순수 주석만 고친 변경"인지는 구분하지 못한다. `docs/NamingConvention.md`
+"File Versioning" 규칙은 주석/문서만 고친 경우를 Version 갱신 예외로 인정하는데, 이 스크립트는 그
+예외를 인식하지 못해 함수 본문 내부의 주석 한 줄만 고쳐도 Version 미갱신으로 커밋이 막힐 수 있다.
+
+**처리 방침**: 최소 구성 원칙에 따라 일단 이 한계를 안고 도입(스크립트 자체 주석에 명시). 실사용
+중 이 false-positive가 실제로 거슬리면 그때 완화 여부를 재검토한다 — 아직 코드 변경 없음.
 
 ## 완전 동일 중복 터치(Exact Duplicate Touch Row) 자동 삭제 구현 (CLAUDE.md #8)
 
