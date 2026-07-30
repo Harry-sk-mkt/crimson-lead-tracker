@@ -21,9 +21,53 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.2.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-31)
+ * - `NAVER_SEARCH.API.BACKFILL_START`(2022-09, Meta 파이프라인의 실제 첫
+ *   데이터 시점과 동일 범위 — 사용자 확정) + `FX`(GOOGLEFINANCE 기반 KRW→NZD
+ *   환율 캐시 시트/수식) 신규 — ACQ_REP W열을 Meta+Naver Search 합산 지출로
+ *   연결하기 위한 준비(AD_004_SpendCache.js 참고). 상세: docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md
+ * v1.6.0 (2026-07-31)
+ * - **`NAVER_SEARCH.API.BASE_URL` 수정 — `https://api.searchad.naver.com` →
+ *   `https://api.naver.com`**. 실 호출에서 `runDebugNaverSearchAdCampaigns()`가
+ *   403 invalid-signature로 실패, 원인 조사 중 GitHub
+ *   `naver/searchad-apidoc` 이슈 #1319("GET 요청은 성공하나... Google Apps
+ *   Script")에서 **동일한 서명 로직**(`Utilities.computeHmacSha256Signature`
+ *   + `base64Encode`)을 쓰는 Apps Script 코드가 `https://api.naver.com`으로는
+ *   GET 200 OK를 받은 실사례 확인 — `api.searchad.naver.com`은 공식 샘플
+ *   저장소(python-sample)의 예전 값으로 추정, `api.naver.com`이 현재 유효한
+ *   도메인. 서명 로직 자체(HMAC-SHA256, 헤더 이름)는 변경 없음.
+ * v1.5.0 (2026-07-31)
+ * - **Naver Search 수동 붙여넣기 방식 폐기 → API 방식으로 전환(사용자 확정)**.
+ *   지출액 리포트 자체에 쓸 수 있는 기간 컬럼이 끝내 없는 것으로 확정된 직후,
+ *   사용자가 네이버 검색광고 API(Customer ID/API License Key/Secret Key 이미
+ *   발급받음) 사용 가능하다고 알려와 방향 전환. `NAVER_SEARCH.COLUMNS`/
+ *   `REPORT_MONTH`(Header-Based Mapping 수동 붙여넣기 스키마)와
+ *   `RAW_SHEET["Naver Search"]`(NaverSA_Raw) 제거 — API가 정확한 기간을
+ *   직접 지정해 가져오므로 더 이상 필요 없음. 대신 `NAVER_SEARCH.API`
+ *   섹션 신규(BASE_URL, 자격증명 Script Properties 키 이름). **자격증명
+ *   자체는 코드/git에 절대 포함하지 않음** — Apps Script 편집기 Project
+ *   Settings > Script Properties에 사용자가 직접 입력(PROPERTY_KEYS는 그
+ *   키 이름만 참조). API 인증 방식(HMAC-SHA256, 헤더 이름 등)은
+ *   naver/searchad-apidoc 공식 샘플 코드(GitHub)로 확인 후 반영 — 추측
+ *   없음. `LEAD_SOURCE_OVERRIDE`는 그대로 유지(API로 얻은 캠페인명에도
+ *   동일하게 필요). 구현은 AD_003_NaverSearch.js 참고.
+ * v1.4.0 (2026-07-31)
+ * - `NAVER_SEARCH.COLUMNS`/`LEAD_SOURCE_OVERRIDE` 추가 — 실 다운로드 파일
+ *   확인 결과 지출액 리포트 자체엔 기간 컬럼이 전혀 없음이 확정돼(화면
+ *   테이블과 다운로드 파일 모두 동일), 사용자가 붙여넣을 때 "Report Month"
+ *   컬럼(YYYY-MM 텍스트)을 수동 추가하기로 확정. `LEAD_SOURCE_OVERRIDE`는
+ *   `getBusinessSegment()` 재사용 시 `_contact`류 캠페인이 BOFU로 오분류되는
+ *   문제(leadSource 없으면 기본 BOFU) 해결용 고정값 — 상세는
+ *   docs/exec-plans/active/2026-07-30-campaign-spend-integration.md 참고.
+ * v1.3.0 (2026-07-31)
+ * - `RAW_SHEET`에 `"Naver Search": "NaverSA_Raw"` 추가(사용자 확정 시트명) —
+ *   2번째 플랫폼(Naver Search) 착수. `NAVER_SEARCH` 컬럼 매핑은 실 다운로드
+ *   파일의 기간 컬럼 확인 후 추가 예정(docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md 참고).
  * v1.2.0 (2026-07-30)
  * - `META.COLUMNS` 전면 정정 — 처음엔 사용자가 채팅으로 옮겨 적어준 한국어
  *   헤더 샘플을 그대로 썼으나, 실제 Meta_Raw에 붙여넣은 라이브 export는
@@ -121,6 +165,79 @@ const AD = {
     */
 
     ACTIVE_ACCOUNT_ID: "2954404598150809"
+
+  },
+
+  /*
+  ==========================================================
+  NAVER SEARCH — 네이버 검색광고 Open API 연동(2026-07-31, 사용자 확정 —
+  수동 붙여넣기 방식에서 전환). Base URL/인증 헤더/서명 방식은
+  naver/searchad-apidoc 공식 샘플 코드(python-sample/examples/
+  signaturehelper.py, ad_management_sample.py)로 확인.
+
+  **자격증명은 여기 없음** — Customer ID/API License Key/Secret Key는
+  Apps Script 편집기 "Project Settings > Script Properties"에 아래
+  PROPERTY_KEYS의 키 이름으로 사용자가 직접 입력한다(git/코드에 노출 금지).
+  ==========================================================
+  */
+
+  NAVER_SEARCH: {
+
+    API: {
+
+      BASE_URL: "https://api.naver.com",
+
+      PROPERTY_KEYS: {
+        CUSTOMER_ID: "NAVER_SEARCHAD_CUSTOMER_ID",
+        API_KEY: "NAVER_SEARCHAD_API_KEY",
+        SECRET_KEY: "NAVER_SEARCHAD_SECRET_KEY"
+      },
+
+      /*
+      ==========================================================
+      BACKFILL START (2026-07-31 사용자 확정 — "Meta와 동일한 범위")
+      Ad_Spend_Cache 전체 갱신(runRefreshAdSpendCache(), AD_004_SpendCache.js)
+      시 Naver Search 지출을 이 연/월부터 현재 달까지 월별로 조회해 합산한다.
+      Meta 파이프라인의 실제 첫 데이터 시점(FY23 SEP, 2026-07-30 실측)과 동일.
+      ==========================================================
+      */
+
+      BACKFILL_START: { YEAR: 2022, MONTH: 9 }
+
+    },
+
+    /*
+    ==========================================================
+    LEAD SOURCE OVERRIDE (2026-07-31 사용자 확인)
+    Naver 검색광고 캠페인명 다수가 "_contact" 계열이라, getBusinessSegment()의
+    BOFU/Search 공용 fallback이 leadSource 없이는 기본 BOFU로 오분류함
+    (docs/BusinessSegmentClassification.md — Search는 Lead Source가 Naver
+    Search/Google Search/Organic Search일 때만 존재). 이 채널은 구조적으로
+    항상 검색광고이므로, 실제 리드가 이 채널에서 들어왔을 때와 동일한 결과가
+    나오도록 leadSource에 이 고정값을 넘겨 getBusinessSegment()를 그대로
+    재사용한다(campaign에 "expo" 등 확정 신호가 있으면 이 값과 무관하게
+    Seminar 등으로 먼저 분류되므로 영향 없음).
+    ==========================================================
+    */
+
+    LEAD_SOURCE_OVERRIDE: "naver search"
+
+  },
+
+  /*
+  ==========================================================
+  FX — 환율 변환(2026-07-31 신규, 사용자 확정: GOOGLEFINANCE 사용).
+  Naver Search 등 KRW 원본 플랫폼의 지출을 NZD로 합산하기 위해, 메인
+  스프레드시트 안 숨김 시트에 GOOGLEFINANCE 수식을 심어두고 계산된 값을
+  읽는다(Apps Script는 GOOGLEFINANCE를 직접 호출할 수 없음 — 시트 수식
+  경유 필요). AD_004_SpendCache.js의 fetchKrwToNzdRate_() 참고.
+  ==========================================================
+  */
+
+  FX: {
+
+    RATE_CACHE_SHEET: "FX_Rate_Cache",
+    KRW_TO_NZD_FORMULA: '=GOOGLEFINANCE("CURRENCY:KRWNZD")'
 
   }
 

@@ -1,3 +1,60 @@
+# Changelog — 2026-07-31
+
+## 캠페인 지출 통합 Phase 1 — Naver Search API 파이프라인 신설 + ACQ_REP 합산 Spent 연결
+
+**배경**: 이전 세션(2026-07-30)에서 Meta 파일럿까지 실사용 검증을 마친 상태에서 이어감. 상세 이력:
+`docs/exec-plans/active/2026-07-30-campaign-spend-integration.md`.
+
+**Meta 마무리** — 사용자가 `runRefreshMetaSpendCache()` 실행 → ACQ_REP Generate 재체크 → W열
+("Meta Spent") 값 정상 표시 확인. Meta 파일럿(Raw→Cache→ACQ_REP 소비까지) 전체 배선 검증 완료.
+
+**Naver Search 2번째 플랫폼 — 수동 붙여넣기 시도 후 API로 전면 전환**: 처음엔 Meta처럼 네이버
+검색광고 리포트를 수동 붙여넣는 방식(`NaverSA_Raw`)으로 시작했으나, 화면/다운로드 리포트 어디에도
+쓸 수 있는 기간(날짜) 컬럼이 없는 것으로 확정(사용자 확인 — "계속노출" 표시뿐). 이 시점에 사용자가
+네이버 검색광고 API 자격증명(Customer ID/API License Key/Secret Key)을 이미 보유하고 있다고 알려와
+API 방식으로 전면 전환 — 수동 붙여넣기 코드는 완전 폐기.
+
+**API 인증·엔드포인트는 공식 샘플 코드로 확인(추측 없음)** — `naver/searchad-apidoc`(GitHub) 저장소의
+`signaturehelper.py`(서명: `Base64(HMAC-SHA256(secretKey, "{timestamp}.{method}.{uri}"))`)와
+`ad_management_sample.py`(헤더 `X-Timestamp`/`X-API-KEY`/`X-Customer`/`X-Signature`)를 실제로 확인
+후 구현. **실 호출 중 403 invalid-signature 2건 발견·해결**: (1) Base URL을 공식 샘플의
+`api.searchad.naver.com`으로 썼다가 실패 — GitHub 이슈 #1319(동일 Apps Script 서명 로직으로 GET
+200 성공 사례)를 근거로 `api.naver.com`으로 수정. (2) 그래도 재발 — 진단 함수로 확인한 결과 Script
+Properties에 저장된 Secret Key 끝의 `==`가 누락돼 있었음(길이 50, 정상 52), 사용자가 재입력 후 해결.
+이후 `/ncc/campaigns`(캠페인 목록, 필드 `nccCampaignId`/`name`)와 `/stats`(지출 통계,
+`{data:[{id,salesAmt,...}]}`) 둘 다 실 응답으로 확인.
+
+**구현**: `AD_003_NaverSearch.js` 신규 — `computeNaverSearchAdSignature_()`(HMAC 서명)/
+`buildNaverSearchAdQueryString_()`(ids는 반복 파라미터, fields/timeRange는 JSON 문자열)/
+`buildCalendarMonthRange_()`/`computeNaverSearchAdSpendByFYMonthSegment_()`(캠페인명→Segment는
+`getBusinessSegment()` 재사용, `leadSource="naver search"` 고정값으로 `_contact` 계열이 BOFU로
+오분류되는 문제 해결) 등. **실 데이터 검증**: 2026년 7월 결과 `Search: 3,737,733`원 vs 실제
+3,737,732원(31일 미포함 기준) — 1원 차이(반올림)로 정확히 일치 확인.
+
+**ACQ_REP W열을 Meta+Naver Search 합산 "Spent"로 재구성(사용자 확정)** — 헤더를 "Meta Spent"→
+"Spent"로 변경, Naver 지출(KRW)은 `GOOGLEFINANCE("CURRENCY:KRWNZD")`(Apps Script가 직접 호출 못
+해 숨김 시트에 수식을 심고 읽는 방식)로 NZD 변환 후 합산. 신규 `AD_004_SpendCache.js`가 이 합산/
+환율변환/캐시 저장(`Ad_Spend_Cache` 시트, 옛 `Meta_Spend_Cache` 대체)을 전담 — `refreshAdSpendCache_()`/
+`runRefreshAdSpendCache()`/`readAdSpendCacheMap_()`. Naver Search는 Meta와 동일 범위(2022-09~현재,
+`AD.NAVER_SEARCH.API.BACKFILL_START`)까지 소급, 캠페인 목록은 1회만 조회하고 월별로 `/stats`만
+반복 호출. `CONFIG.ACQ.META_SPENT_COLUMN`→`SPENT_COLUMN`, `META_SPEND_CACHE_SHEET`→
+`AD_SPEND_CACHE_SHEET` 개명(`00_Config.js`/`30_ACQReport.js`/`32_ACQReportStyles.js` 반영).
+`AD_002_Meta.js`의 Meta 전용 캐시 함수(`refreshMetaSpendCache_()` 등)는 AD_004로 통합되며 제거
+(`computeMetaSpendSummary_()`는 유지, AD_004가 호출).
+
+**실 시트 검증(사용자 확인)**: `runRefreshAdSpendCache()` 실행 결과 212행 갱신, 환율
+0.0011963(1 NZD≈836원, 합리적 범위) — ACQ_REP Generate 재체크 후 W열 "Spent" 값 정상 표시 확인.
+옛 `Meta_Spend_Cache` 시트는 `runDeleteMetaSpendCacheSheet()`(1회성 정리 함수)로 삭제.
+
+**검증 방법**: Node vm 하네스로 신규 순수 함수 전부 테스트(서명 생성 자체는 Apps Script
+`Utilities.*` 전용이라 Node에서 검증 불가 — 실 API 호출로만 검증). `node --check`/중복 선언 검사
+통과, 매 라운드 `clasp push` 완료.
+
+**남은 결정 사항(TODO, 임의로 처리하지 말 것)**: (1) 매달 자동 갱신 트리거 연결 여부(Backend
+비동기화 논의와 연관). (2) 이번에 검증된 API 방식을 Meta에도 적용할지(Meta Marketing API 존재).
+(3) 나머지 6개 플랫폼(Naver GFA/Google Search·Display/Naver Offline Cafe/Kakao Moments·Channel)
+확장 순서.
+
 # Changelog — 2026-07-30
 
 ## Target CPNP1 Benchmark 계산 전환 + Seminar 캠페인 월 예외 + Target_REP 헤더 3행 재설계

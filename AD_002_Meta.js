@@ -34,9 +34,17 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-07-31)
+ * - Meta 전용 캐시 쓰기/읽기(`refreshMetaSpendCache_()`/`runRefreshMetaSpendCache()`/
+ *   `readMetaSpendCacheMap_()`, `META_SPEND_CACHE_HEADERS`, "Meta_Spend_Cache"
+ *   시트) 제거 — Naver Search Ad API 파이프라인 추가로 ACQ_REP가 여러 플랫폼
+ *   합산 지출을 쓰게 되면서, 캐시 쓰기/읽기를 신규 `AD_004_SpendCache.js`로
+ *   통합(사용자 확정, "합쳐서 연결"). `computeMetaSpendSummary_()`는 그대로
+ *   유지(AD_004가 호출). 상세: docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md
  * v1.5.0 (2026-07-30)
  * - **Simple Trigger 권한 버그 발견·수정** — ACQ_REP에 "Meta Spent" 컬럼을
  *   연결한 뒤(30_ACQReport.js v1.11.0) Generate 체크박스가 조용히 실패, Cloud
@@ -587,118 +595,14 @@ function computeMetaSpendSummary_(){
 }
 
 
-/**
- * ==========================================================
- * Meta Spend Cache Headers (같은 메인 스프레드시트 안 캐시 시트)
- * ==========================================================
- */
-const META_SPEND_CACHE_HEADERS = ["FY", "Month", "Segment", "Spent"];
-
-
-/**
- * ==========================================================
- * Refresh Meta Spend Cache (IO 래퍼 — 수동 실행 전용)
- *
- * WHY (2026-07-30)
- * ACQ_REP의 Generate 체크박스는 `onEdit()` Simple Trigger로 실행되는데,
- * Simple Trigger는 제한된 권한이라 캠페인 지출 시트를 `openById()`로 여는
- * `computeMetaSpendSummary_()`를 호출하면 "Specified permissions are not
- * sufficient to call SpreadsheetApp.openById" 에러로 조용히 실패한다(실측
- * 확인 — Target_REP가 예전에 겪은 것과 동일한 제약, docs/exec-plans/active/
- * 2026-07-30-campaign-spend-integration.md 참고). `ACQ_Summary`와 동일한
- * 캐시 패턴으로 우회 — 이 함수는 메인 스프레드시트 안에 캐시 시트를 만들어
- * 두고, `generateACQReport_()`는 이 캐시만 읽는다(외부 열기 없음, Simple
- * Trigger 안전). Meta_Raw가 갱신될 때마다(또는 최소 ACQ_REP Generate 전에)
- * 사용자가 이 함수를 직접 Run 해야 한다 — 자동 실행 체인에는 아직 안 걸림.
- * ==========================================================
- */
-function refreshMetaSpendCache_(){
-
-  const summary = computeMetaSpendSummary_();
-
-  const rows = Object.keys(summary).map(function(key){
-
-    const parts = key.split("|");
-
-    return [Number(parts[0]), parts[1], parts[2], summary[key]];
-
-  });
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  let sheet = ss.getSheetByName(CONFIG.ACQ.META_SPEND_CACHE_SHEET);
-
-  if(!sheet){
-    sheet = ss.insertSheet(CONFIG.ACQ.META_SPEND_CACHE_SHEET);
-  }
-
-  sheet.clearContents();
-
-  sheet.getRange(1, 1, 1, META_SPEND_CACHE_HEADERS.length)
-    .setValues([META_SPEND_CACHE_HEADERS]);
-
-  if(rows.length > 0){
-
-    sheet.getRange(2, 1, rows.length, META_SPEND_CACHE_HEADERS.length)
-      .setValues(rows);
-
-  }
-
-  sheet.hideSheet();
-
-  SpreadsheetApp.flush();
-
-  Logger.log("Meta_Spend_Cache 갱신 완료 : " + rows.length + "행");
-
-}
-
-
-/**
- * ==========================================================
- * TEMP — refreshMetaSpendCache_() 수동 실행용 공개 진입점
- * ==========================================================
- */
-function runRefreshMetaSpendCache(){
-
-  refreshMetaSpendCache_();
-
-}
-
-
-/**
- * ==========================================================
- * Read Meta Spend Cache Map (같은 스프레드시트 안 캐시 읽기 — Simple Trigger 안전)
- *
- * WHY
- * generateACQReport_()가 onEdit() Simple Trigger에서 호출되므로, 이 함수는
- * `getActiveSpreadsheet()`(같은 문서)만 쓰고 외부 시트는 절대 열지 않는다.
- *
- * OUTPUT
- * Object  키 "fy|month|segment" → Spent
- * ==========================================================
- */
-function readMetaSpendCacheMap_(){
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.ACQ.META_SPEND_CACHE_SHEET);
-
-  const map = {};
-
-  if(!sheet) return map;
-
-  const values = sheet.getDataRange().getValues();
-
-  for(let i = 1; i < values.length; i++){
-
-    const row = values[i];
-
-    map[row[0] + "|" + row[1] + "|" + row[2]] = row[3];
-
-  }
-
-  return map;
-
-}
+// Meta 전용 캐시 쓰기/읽기(refreshMetaSpendCache_/runRefreshMetaSpendCache/
+// readMetaSpendCacheMap_, "Meta_Spend_Cache" 시트)는 2026-07-31 제거됨 —
+// Naver Search Ad API 파이프라인(AD_003_NaverSearch.js) 추가 후 ACQ_REP가
+// 여러 플랫폼 합산 지출을 쓰기로 확정, 캐시 쓰기/읽기는 신규
+// AD_004_SpendCache.js(refreshAdSpendCache_()/readAdSpendCacheMap_(),
+// "Ad_Spend_Cache" 시트)로 통합. computeMetaSpendSummary_()는 그대로 유지 —
+// AD_004가 이 함수를 호출해 Meta 몫을 가져간다. 상세: docs/exec-plans/active/
+// 2026-07-30-campaign-spend-integration.md
 
 
 /**

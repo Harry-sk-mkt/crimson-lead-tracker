@@ -9,9 +9,19 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.22.0
+ * v1.23.0
  *
  * Change Log
+ * v1.23.0 (2026-07-31)
+ * - **`ACQ.META_SPENT_COLUMN` → `ACQ.SPENT_COLUMN`, `ACQ.META_SPEND_CACHE_SHEET`
+ *   ("Meta_Spend_Cache") → `ACQ.AD_SPEND_CACHE_SHEET`("Ad_Spend_Cache") 개명** —
+ *   Naver Search Ad API 파이프라인(AD_003_NaverSearch.js) 검증 완료 후 사용자가
+ *   ACQ_REP W열에 Meta+Naver Search 합산 지출을 연결하기로 확정, 헤더도
+ *   "Meta Spent"→"Spent"로 변경. 합산/환율 변환(KRW→NZD, GOOGLEFINANCE)은
+ *   신규 `AD_004_SpendCache.js`가 담당. 옛 `Meta_Spend_Cache` 시트는 새
+ *   `Ad_Spend_Cache`로 대체(사용자가 옛 시트는 직접 삭제 가능, 코드가 자동
+ *   삭제하지 않음). 상세: docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md.
  * v1.22.0 (2026-07-30)
  * - `ACQ.META_SPEND_CACHE_SHEET`("Meta_Spend_Cache") 신규 — 실 시트 검증 중 발견된
  *   버그 수정. ACQ_REP Generate 체크박스가 `onEdit()` Simple Trigger로 실행되는데,
@@ -337,24 +347,28 @@ const CONFIG = {
     TARGET_COLUMNS_START_COL: 19,  // S열
     TARGET_COLUMNS_COUNT: 4,
 
-    // Meta Spent 컬럼(2026-07-30 신규) — AD_002_Meta.js의 캠페인 지출 파이프라인
-    // 결과를 리포트 생성 시점에 조회해서 붙임(Target 컬럼과 동일 패턴). S:V(19~22,
+    // Spent 컬럼(2026-07-30 신규, 2026-07-31 Meta 전용→플랫폼 합산으로 확장) —
+    // 캠페인 지출 파이프라인 결과(현재 Meta+Naver Search, AD_004_SpendCache.js가
+    // 합산)를 리포트 생성 시점에 조회해서 붙임(Target 컬럼과 동일 패턴). S:V(19~22,
     // TARGET_COLUMNS_*) 바로 다음인 W열(23)에 배치 — 붙이기 전 사용자에게 W열
     // 이후 수동 내용 없음을 확인받음(2026-07-30, 오늘 세 번 겪은 컬럼 충돌 재발 방지).
-    // **8개 플랫폼 중 Meta 하나만 자동화된 상태 — "총 광고비"가 아니라 "Meta
-    // 자동집계"라는 뜻으로 헤더명을 "Meta Spent"로 명확히 함**(나머지 7개 플랫폼
-    // 자동화 전까지 총 지출과 혼동하지 않도록, docs/exec-plans/active/
-    // 2026-07-30-campaign-spend-integration.md 참고).
-    META_SPENT_COLUMN: 23,  // W열
+    // **헤더명 "Meta Spent"→"Spent"로 변경(2026-07-31, 사용자 확정)** — Naver
+    // Search까지 합산되면서 "Meta 전용"이라는 의미가 더 이상 안 맞음. 아직 8개
+    // 플랫폼 중 2개(Meta+Naver Search)만 자동화된 상태라 "총 광고비"와는 여전히
+    // 다름 — 헤더 Note에 그 사실을 명시(32_ACQReportStyles.js). 상세:
+    // docs/exec-plans/active/2026-07-30-campaign-spend-integration.md.
+    SPENT_COLUMN: 23,  // W열
 
-    // Meta Spend 캐시 시트(2026-07-30 신규, 같은 메인 스프레드시트 안) — ACQ_REP의
-    // Generate 체크박스가 onEdit() Simple Trigger로 실행되는데, Simple Trigger는
+    // Ad Spend 캐시 시트(2026-07-30 Meta 전용으로 신규, 2026-07-31 플랫폼 합산
+    // 캐시로 확장·개명 — 같은 메인 스프레드시트 안) — ACQ_REP의 Generate
+    // 체크박스가 onEdit() Simple Trigger로 실행되는데, Simple Trigger는
     // 제한된 권한이라 캠페인 지출 시트를 openById()로 여는 걸 못 함(실측 확인:
     // "Specified permissions are not sufficient to call SpreadsheetApp.openById").
-    // ACQ_Summary와 동일한 캐시 패턴 — AD_002_Meta.js의 runRefreshMetaSpendCache()가
-    // 수동 실행 시 외부 시트를 읽어 이 캐시 시트(같은 스프레드시트)에 미리 저장해두고,
-    // generateACQReport_()는 이 캐시만 읽는다(외부 열기 없음, Simple Trigger 안전).
-    META_SPEND_CACHE_SHEET: "Meta_Spend_Cache",
+    // ACQ_Summary와 동일한 캐시 패턴 — AD_004_SpendCache.js의 runRefreshAdSpendCache()가
+    // 수동 실행 시 Meta/Naver Search 각 플랫폼 요약을 합산(환율 변환 포함)해 이 캐시
+    // 시트(같은 스프레드시트)에 미리 저장해두고, generateACQReport_()는 이 캐시만
+    // 읽는다(외부 열기/API 호출 없음, Simple Trigger 안전).
+    AD_SPEND_CACHE_SHEET: "Ad_Spend_Cache",
 
     SEGMENTS: [
       "Seminar",

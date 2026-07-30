@@ -12,9 +12,14 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-07-31)
+ * - "Meta Spent" → "Spent" 개명 반영 — 변수명 `metaSpentCol`→`spentCol`,
+ *   `CONFIG.ACQ.META_SPENT_COLUMN`→`SPENT_COLUMN`, 헤더 Note를 Meta+Naver
+ *   Search 합산 설명으로 갱신(00_Config.js v1.23.0/30_ACQReport.js v1.13.0
+ *   참고). 서식 로직 자체(천단위 콤마, 배경/테두리 range 분리)는 변경 없음.
  * v1.7.0 (2026-07-30)
  * - "Meta Spent" 컬럼(W열, `CONFIG.ACQ.META_SPENT_COLUMN`) 서식 추가 — 천단위
  *   콤마, 배경/테두리 range를 A:N + Target 4컬럼(S:V)에 이어 세 번째로 분리
@@ -74,11 +79,11 @@ function applyACQReportStyles_(sheet, rowCount){
   const dataCols = CONFIG.ACQ.REPORT_DATA_COLUMNS;             // A:N (14)
   const targetStartCol = CONFIG.ACQ.TARGET_COLUMNS_START_COL;  // S열(19) — O:R(Engine)/U:AF(수동 영역) 둘 다 건너뜀
   const targetCols = CONFIG.ACQ.TARGET_COLUMNS_COUNT;          // 4
-  const metaSpentCol = CONFIG.ACQ.META_SPENT_COLUMN;           // W열(23, 2026-07-30 추가)
+  const spentCol = CONFIG.ACQ.SPENT_COLUMN;                    // W열(23, 2026-07-30 추가, 2026-07-31 Meta+Naver Search 합산으로 확장)
 
   //----------------------------------------------------------
   // 배경색 우선 초기화 (이전 실행의 줄무늬/강조가 남지 않도록)
-  // A:N / Target 4컬럼(S:V) / Meta Spent(W) 사이에 숨김 Engine 영역(O:R)과
+  // A:N / Target 4컬럼(S:V) / Spent(W) 사이에 숨김 Engine 영역(O:R)과
   // 사용자 수동 영역(U:AF)이 껴 있어 range를 분리한다.
   //----------------------------------------------------------
 
@@ -86,7 +91,7 @@ function applyACQReportStyles_(sheet, rowCount){
 
     sheet.getRange(startRow, 1, rowCount, dataCols).setBackground(null);
     sheet.getRange(startRow, targetStartCol, rowCount, targetCols).setBackground(null);
-    sheet.getRange(startRow, metaSpentCol, rowCount, 1).setBackground(null);
+    sheet.getRange(startRow, spentCol, rowCount, 1).setBackground(null);
 
   }
 
@@ -94,7 +99,7 @@ function applyACQReportStyles_(sheet, rowCount){
   // % 컬럼: All P1%(6) / New Leads%(8) / New P1%(10) /
   //   Revenue Target%(20) / New P1 Target%(22, 2026-07-30 추가)
   // Revenue 컬럼: 14 — 천단위 콤마 / Revenue Target(targetStartCol)/
-  //   Meta Spent(metaSpentCol)도 동일 (2026-07-30 추가)
+  //   Spent(spentCol)도 동일 (2026-07-30 추가)
   //----------------------------------------------------------
 
   if(rowCount > 0){
@@ -108,7 +113,7 @@ function applyACQReportStyles_(sheet, rowCount){
 
     });
 
-    [14, targetStartCol, metaSpentCol].forEach(function(col){
+    [14, targetStartCol, spentCol].forEach(function(col){
 
       sheet.getRange(startRow, col, rowCount, 1)
         .setNumberFormat("#,##0");
@@ -131,7 +136,7 @@ function applyACQReportStyles_(sheet, rowCount){
 
         sheet.getRange(startRow + i, 1, 1, dataCols).setBackground("#F3F3F3");
         sheet.getRange(startRow + i, targetStartCol, 1, targetCols).setBackground("#F3F3F3");
-        sheet.getRange(startRow + i, metaSpentCol, 1, 1).setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, spentCol, 1, 1).setBackground("#F3F3F3");
 
       }
 
@@ -170,7 +175,7 @@ function applyACQReportStyles_(sheet, rowCount){
   });
 
   //----------------------------------------------------------
-  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:N + Target 4컬럼 + Meta Spent
+  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:N + Target 4컬럼 + Spent
   // (O:R Engine/U:AF 수동 영역은 제외)
   //----------------------------------------------------------
 
@@ -188,7 +193,7 @@ function applyACQReportStyles_(sheet, rowCount){
       SpreadsheetApp.BorderStyle.SOLID
     );
 
-  sheet.getRange(headerRow, metaSpentCol, totalRows, 1)
+  sheet.getRange(headerRow, spentCol, totalRows, 1)
     .setBorder(
       true, true, true, true, true, true,
       "#000000",
@@ -250,9 +255,10 @@ function annotateACQReportMetricNotes_(sheet, headerRow){
 
   });
 
-  // Meta Spent(2026-07-30 추가) — 하드코딩 없이 CONFIG.ACQ.META_SPENT_COLUMN 기준.
-  sheet.getRange(headerRow, CONFIG.ACQ.META_SPENT_COLUMN)
-    .setNote("Meta Spent — Meta Ads Manager 캠페인 지출 자동 집계(AD_002_Meta.js). 8개 플랫폼 중 Meta만 자동화된 상태라 총 광고비가 아님(나머지 7개 플랫폼은 아직 미포함). Meta_Raw에 없는 (FY|Month|Segment) 조합은 공란.");
+  // Spent(2026-07-30 추가, 2026-07-31 Meta+Naver Search 합산으로 확장) — 하드코딩
+  // 없이 CONFIG.ACQ.SPENT_COLUMN 기준.
+  sheet.getRange(headerRow, CONFIG.ACQ.SPENT_COLUMN)
+    .setNote("Spent — Meta Ads Manager + Naver 검색광고 API 캠페인 지출 자동 집계·합산(AD_004_SpendCache.js, KRW→NZD 환율 변환 포함). 8개 플랫폼 중 2개(Meta+Naver Search)만 자동화된 상태라 총 광고비가 아님(나머지 6개 플랫폼은 아직 미포함). 두 소스 어디에도 없는 (FY|Month|Segment) 조합은 공란.");
 
 }
 

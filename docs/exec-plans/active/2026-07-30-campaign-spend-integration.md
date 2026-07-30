@@ -209,17 +209,156 @@
       읽음, Simple Trigger 안전). `30_ACQReport.js`(v1.12.0)가 `computeMetaSpendSummary_()`
       대신 `readMetaSpendCacheMap_()`을 쓰도록 전환. `node --check`/중복 선언 검사 통과,
       `clasp push` 완료.
-- [ ] **다음 단계**: 사용자가 `runRefreshMetaSpendCache()`(AD_002_Meta.js) 먼저 수동
-      실행 → ACQ_REP Generate 체크박스 재체크 → W열에 Meta Spent 값이 정상 표시되는지
-      확인 필요 — 아직 최종 검증 전.
+- [x] **ACQ_REP W열(Meta Spent) 최종 검증 완료(2026-07-31)** — 사용자가
+      `runRefreshMetaSpendCache()`(AD_002_Meta.js) 실행 → ACQ_REP Generate 재체크 →
+      W열에 Meta Spent 값 정상 표시 확인. Meta 파일럿(Raw→Cache→ACQ_REP 소비까지) 전체
+      배선 실사용 검증 끝남.
 - [ ] Meta_Raw 갱신 시마다 `runRefreshMetaSpendCache()`를 매번 수동 실행해야 하는 번거로움
       — 자동 실행 체인에 연결할지는 추후 결정(지금은 수동, 임의로 자동 연결하지 말 것)
 - [ ] Other 세그먼트 육안 검토(나중에, 급하지 않음)
-- [ ] 나머지 7개 플랫폼(Naver Search/GFA, Google Search/Display, Naver Offline Cafe,
-      Kakao Moments/Channel) 확장 — 확장되면 ACQ_REP의 "Meta Spent"도 "Ad Spent"(전체)로
-      재검토 필요할 수 있음
 - [ ] Meta 캠페인명 → Marketo Program명 매핑(Events_OPS 자동화용, 별도 작업)
 - [ ] Target_Engine 연결은 8개 플랫폼 다 자동화된 뒤 재검토(보류, 임의로 처리하지 말 것)
+
+### Naver Search (2번째 플랫폼, 착수 2026-07-31)
+
+- [x] 실 캠페인명 샘플 확보(2026-07-31, 사용자 제공 — Naver 광고관리시스템 검색광고 리포트
+      10개 행) — `KR_core_...` 패턴이 Meta와 동일하게 쓰이는 것 확인(예:
+      `KR_core_expo_earlybird2_ptc`, `KR_core_HStoDS_contact`, `KR_umatch_contact` 등).
+      컬럼: ON/OFF, 광고 구분, 상태, 캠페인 이름, 캠페인 분류(내부 ID), 총비용, 노출수, 클릭수,
+      클릭률, 평균 CPC, 총 전환수, 총 전환당비용.
+- [x] **`getBusinessSegment()` 재사용 시 오분류 위험 발견·해결 방안 확정(2026-07-31)** —
+      샘플 대부분이 `_contact` 계열인데, `16_TransformHelper.js`의 BOFU/Search 공용
+      fallback(1089~1095행)은 leadSource에 "search"가 없으면 기본 BOFU로 떨어짐. Meta는
+      검색광고 플랫폼이 아니라 이 케이스가 안 걸렸었으나, Naver Search는 진짜 검색광고라
+      leadSource 없이 캠페인명만 넘기면 `_contact` 캠페인이 전부 잘못 BOFU로 집계됨
+      (`docs/BusinessSegmentClassification.md`: "Search는 Lead Source가 Naver Search/Google
+      Search/Organic Search일 때만 존재"). **해결(사용자 확인)**: Naver Search 데이터 분류
+      시 `getBusinessSegment(campaignName, "", "naver search", "")`처럼 leadSource에 고정값
+      `"naver search"`를 넘겨 재사용 — 실제 이 채널에서 들어온 리드와 동일한 분류 결과 보장.
+      (`expo` 포함 캠페인 3개는 Seminar가 leadSource 무관하게 먼저 매칭되므로 영향 없음.)
+- [x] 월별 정확 export 가능 확인(2026-07-31, 사용자 확인) — Naver 광고관리시스템은 기간을
+      직접 지정해 그 기간만의 총비용을 뽑을 수 있음(Meta처럼 lifetime 균등분배 fallback
+      로직이 기본적으로 필요 없을 가능성 — 계정/캠페인 이관 이력 있는지는 별도 확인 필요).
+- [x] Raw 탭 시트명 확정(2026-07-31, 사용자 확정): **`NaverSA_Raw`** — `AD_001_Config.js`
+      v1.3.0의 `RAW_SHEET["Naver Search"]`에 반영 완료.
+- [x] 실 다운로드 파일 확인(2026-07-31, 사용자 확인) — 다운로드 파일에도 날짜/기간 컬럼이
+      전혀 없음(화면 테이블과 동일 컬럼: ON/OFF/광고 구분/상태/보조 상태/캠페인 ID/캠페인
+      이름/캠페인 분류/노출수/클릭수/클릭률/총 전환수/총 전환율/총 전환당비용/총비용) — Meta의
+      Reporting starts/ends에 해당하는 컬럼이 Naver 쪽엔 원천적으로 없음 확인.
+- [x] 다른 형태(.tsv)의 다운로드 확인(2026-07-31, 사용자 확인) — 캠페인 관리 메뉴에서 받은
+      별개 파일로 확인됨(지출액 리포트가 아니라 캠페인 메타데이터, 헤더 없음, 캠페인
+      생성일 타임스탬프만 있고 총비용 없음). 이후 사용자가 지출액 리포트 자체에서 "기간"
+      항목을 찾았으나 값이 "계속노출"(연속 게재 상태 표시일 뿐 실제 날짜 아님)로 확인 —
+      지출액 리포트에는 결국 사용할 수 있는 기간 컬럼이 없음이 최종 확정됨.
+- [x] **Report Month 수동 컬럼 방식 최종 확정(2026-07-31, 사용자 확인)** — "YYYY-MM" 텍스트
+      (예: "2026-07")로 사용자가 매달 붙여넣을 때 직접 입력. `AD_001_Config.js` v1.4.0에
+      `NAVER_SEARCH.COLUMNS.REPORT_MONTH: "Report Month"` 반영.
+- [x] **`getBusinessSegment()` leadSource override 확정 및 구현(2026-07-31)** —
+      `NAVER_SEARCH.LEAD_SOURCE_OVERRIDE = "naver search"`(`AD_001_Config.js` v1.4.0).
+- [x] **`AD_003_NaverSearch.js` 구현 완료(2026-07-31)** — Meta와 달리 월별 분배 로직 불필요
+      (Report Month가 항상 정확히 한 달, 사용자 확인). 순수 함수
+      `parseReportMonthToFYMonth_()`(YYYY-MM → FY/Month 라벨)/
+      `computeNaverSARowSpendEntry_()`(캠페인+Report Month+총비용 → 1개 항목,
+      leadSource override로 getBusinessSegment() 재사용)/
+      `aggregateNaverSASpendByFYMonthSegment_()`(FY|Month|Segment 합산). IO 래퍼
+      `readNaverSARawRows_()`(sheetToObjects() + `parseCurrencyValue_()`(90_TargetEngine.js)
+      로 "3,765원" 같은 콤마/원 표기 방어적 파싱)/`computeNaverSASpendSummary_()`.
+      수동 실행: `setupNaverSARawSheet()`/`runComputeNaverSASpendSummary()`/
+      `runDebugNaverSARawFirstRow()`(진단). Node 하네스 신규 test 3개
+      (`testParseReportMonthToFYMonth`/`testComputeNaverSARowSpendEntry`/
+      `testAggregateNaverSASpendByFYMonthSegment`) 전부 PASS — `_contact` 캠페인이
+      override 덕분에 Search로, `expo` 캠페인은 override 무관하게 Seminar로 분류되는
+      것까지 검증. `node --check` 통과, `clasp push` 완료(원격 pull로 내용 diff까지
+      재확인).
+- [x] **수동 붙여넣기(NaverSA_Raw) 방식 폐기 → API 방식으로 전면 전환(2026-07-31,
+      사용자 확정)** — 사용자가 네이버 검색광고 API 자격증명(Customer ID/API License
+      Key/Secret Key)을 이미 보유하고 있다고 알려와 방향 전환. API는 조회 기간을 정확히
+      지정할 수 있어 "Report Month 수동 입력" 문제 자체가 사라짐. `AD_001_Config.js`
+      v1.5.0(`NAVER_SEARCH.COLUMNS`/`REPORT_MONTH`/`RAW_SHEET["Naver Search"]` 제거,
+      `NAVER_SEARCH.API`(BASE_URL/자격증명 Script Properties 키 이름) 신규),
+      `AD_003_NaverSearch.js` v2.0.0(수동 붙여넣기 함수 전부 삭제, API 방식으로 재작성).
+      **자격증명은 코드/git에 절대 미포함** — Apps Script 편집기 Project Settings >
+      Script Properties에 `NAVER_SEARCHAD_CUSTOMER_ID`/`NAVER_SEARCHAD_API_KEY`/
+      `NAVER_SEARCHAD_SECRET_KEY` 3개 키로 사용자가 직접 입력(사용자가 채팅으로 실제
+      값을 전달했으나 어떤 파일에도 기록하지 않음).
+- [x] **인증 방식 확인(2026-07-31, 추측 없이 공식 샘플 코드로 검증)** — WebSearch/GitHub
+      API로 `naver/searchad-apidoc` 저장소의 `python-sample/examples/signaturehelper.py`
+      (서명: `Base64(HMAC-SHA256(secretKey, "{timestamp}.{method}.{uri}"))`)와
+      `ad_management_sample.py`(Base URL `https://api.searchad.naver.com`, 헤더
+      `X-Timestamp`/`X-API-KEY`/`X-Customer`/`X-Signature`, `/stats` 엔드포인트의
+      `ids`/`fields`/`timeRange` 파라미터 형식, `salesAmt`=총비용(원 단위) 필드명)를
+      실제로 확인. `/ncc/campaigns` 엔드포인트는 GitHub 이슈 제목으로 존재 확인(응답
+      스키마 예시는 없어 캠페인명 필드가 정확히 "name"인지는 미확정).
+- [x] **`AD_003_NaverSearch.js` 1차 구현(2026-07-31)** — `computeNaverSearchAdSignature_()`
+      (순수, HMAC 서명)/`buildNaverSearchAdQueryString_()`(순수, ids는 반복 파라미터로
+      /fields·timeRange는 호출부가 JSON.stringify()해서 넘긴 문자열 그대로 — Apps
+      Script+이 API 조합에서 파라미터 인코딩 오류가 실제 보고된 바 있어 자동 추측 안 함).
+      IO 래퍼 `getNaverSearchAdCredentials_()`(Script Properties 읽기, 누락 시 명확한
+      에러)/`callNaverSearchAdApi_()`(인증 헤더 생성 + UrlFetchApp 호출).
+      Node 하네스로 `testBuildNaverSearchAdQueryString()` PASS(HMAC 서명 자체는
+      Utilities.*가 Apps Script 전용이라 Node에서 검증 불가 — 실 API 호출로만 검증
+      가능). `node --check` 통과, `clasp push` 완료.
+- [x] **Script Properties 설정 + 실 API 호출 검증 완료(2026-07-31)** — 자격증명 3개
+      등록 후 첫 시도 403 invalid-signature(원인 1: Base URL이 공식 샘플 저장소의
+      예전 값 `api.searchad.naver.com`이었음 — GitHub 이슈 #1319로 `api.naver.com`이
+      맞음을 확인·수정 v1.6.0. 원인 2: 그래도 403 재발 — `runDebugNaverSearchAdSignatureInputs()`
+      신규 진단으로 확인한 결과 사용자가 Script Properties에 붙여넣은 Secret Key 끝의
+      "=="가 누락돼 있었음(길이 50, 정상 52) — 재입력 후 해결). 이후
+      `runDebugNaverSearchAdCampaigns()`(200, 23개 캠페인, 필드 `nccCampaignId`/`name`/
+      `delFlag`/`status` 등 확인)와 `runDebugNaverSearchAdStats()`(200,
+      `{data:[{id,clkCnt,impCnt,salesAmt}], compTm, cycleBaseTm}` 확인, id가
+      nccCampaignId와 매칭) 둘 다 실 응답으로 검증 완료.
+- [x] **최종 집계 함수 구현 완료(2026-07-31, `AD_003_NaverSearch.js` v2.1.0)** —
+      `buildCalendarMonthRange_()`(순수, 연/월→since/until)/
+      `computeNaverSearchAdSpendByFYMonthSegment_()`(순수, campaignMap+statsRows→
+      FY|Month|Segment 합산, Meta의 `aggregateMetaSpendByFYMonthSegment_()`와 동일
+      출력 형태). IO 래퍼 `fetchNaverSearchAdCampaignMap_()`/`fetchNaverSearchAdStats_()`/
+      `computeNaverSearchAdSpendSummaryForMonth_()`. 수동 진입점
+      `runComputeNaverSearchAdSpendForMonth()`(연/월은 함수 상단 상수 직접 수정 후
+      재실행, `runDebugMetaSpendByCampaignForMonth()`와 동일 관례). Node 하네스 신규
+      test 2개 전부 PASS(`testBuildCalendarMonthRange`/
+      `testComputeNaverSearchAdSpendByFYMonthSegment`), `node --check` 통과,
+      `clasp push` 완료.
+- [x] **✅ Naver Search 파이프라인 실 데이터 검증 완료(2026-07-31, 사용자 확인)** —
+      `runComputeNaverSearchAdSpendForMonth()`(2026-07) 결과 `26|JUL|Search: 3737733`,
+      실제 지출(3,737,732, 31일 미포함 기준) 대비 1원 차이(반올림 수준) — 정확히 일치.
+      23개 캠페인 전부 Search로 분류(이 계정 캠페인 특성상 예상대로 — expo 계열은 이번
+      조회 기간에 지출 0). Meta에 이어 2번째 플랫폼 파이프라인 완성(Import→Segment
+      분류→FY/Month 집계까지, API 기반이라 수동 데이터 취합 자체가 없음).
+- [x] **✅ ACQ_REP 합산 지출("Spent") 연결 및 실 검증 완료(2026-07-31, 사용자 확정·확인)** —
+      사용자 결정: Meta+Naver Search를 W열 하나로 합쳐서 연결, 헤더 "Meta Spent"→
+      "Spent"로 변경, Naver 지출(KRW)은 GOOGLEFINANCE("CURRENCY:KRWNZD") 환율로 NZD
+      변환. **구현**: `AD_004_SpendCache.js`(v1.0.0) 신규 — `fetchKrwToNzdRate_()`
+      (Apps Script가 GOOGLEFINANCE를 직접 호출 못 해 숨김 시트에 수식을 심고
+      flush 후 읽는 방식)/`convertSpendSummaryCurrency_()`(순수)/
+      `mergeSpendSummaries_()`(순수, 두 플랫폼 키 합산 — 한쪽에만 있어도 포함)/
+      `refreshAdSpendCache_()`(Meta NZD + Naver Search KRW→NZD 소급 합산 후
+      `Ad_Spend_Cache` 시트 저장)/`runRefreshAdSpendCache()`(수동 진입점)/
+      `readAdSpendCacheMap_()`(Simple Trigger 안전 리더). Naver Search는
+      `AD.NAVER_SEARCH.API.BACKFILL_START`(2022-09, Meta와 동일 범위) 기준
+      `computeNaverSearchAdSpendHistorySummary_()`(AD_003_NaverSearch.js v2.2.0
+      신규, 캠페인 목록 1회 조회 후 매달 /stats 반복 호출)로 전체 이력 소급.
+      **개명**: `CONFIG.ACQ.META_SPENT_COLUMN`→`SPENT_COLUMN`,
+      `META_SPEND_CACHE_SHEET`("Meta_Spend_Cache")→`AD_SPEND_CACHE_SHEET`
+      ("Ad_Spend_Cache")(00_Config.js v1.23.0). `30_ACQReport.js`(v1.13.0)/
+      `32_ACQReportStyles.js`(v1.8.0) 헤더·Note·변수명 반영. `AD_002_Meta.js`
+      (v1.6.0)의 Meta 전용 캐시 함수(`refreshMetaSpendCache_()`/
+      `runRefreshMetaSpendCache()`/`readMetaSpendCacheMap_()`)는 AD_004로
+      통합되며 제거(`computeMetaSpendSummary_()`는 유지, AD_004가 호출).
+      Node 하네스 신규 test 3개(`testConvertSpendSummaryCurrency`/
+      `testMergeSpendSummaries`/`testGenerateCalendarMonthSequence`) 전부 PASS,
+      `node --check`/중복 선언 검사 통과, `clasp push` 완료. **실 시트 검증**:
+      `runRefreshAdSpendCache()` 실행 결과 212행 갱신, 환율 0.0011963(1 NZD≈
+      836원, 합리적 범위) — 사용자 확인. ACQ_REP Generate 재체크 후 W열
+      "Spent" 값 정상 표시 확인(사용자 확인).
+      **옛 `Meta_Spend_Cache` 시트는 이제 안 씀** — 코드가 자동 삭제하지
+      않으므로 사용자가 원하면 직접 삭제 가능(숨김 시트라 방치해도 무해).
+- [ ] **다음 단계(결정 필요)**: (1) 매달 자동 갱신할지(트리거 연결, OpenItems 9번
+      Backend 비동기화 논의와 연관) — API 방식이라 Meta보다 자동화 난이도가 낮음
+      (외부 시트 붙여넣기 자체가 없음). (2) 이 성공 패턴(API 방식)을 Meta에도
+      역적용할지(Meta도 Marketing API 있음) — 사용자 판단 필요, 임의로 진행하지 말 것.
+      (3) 나머지 6개 플랫폼(Naver GFA/Google Search·Display/Naver Offline Cafe/
+      Kakao Moments·Channel) 확장 순서.
 
 ## Surprises & Discoveries
 

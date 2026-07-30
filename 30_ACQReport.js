@@ -17,9 +17,18 @@
  * 20 Reporting
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-07-31)
+ * - **W열 헤더 "Meta Spent" → "Spent", 데이터 소스를 합산 캐시로 교체** —
+ *   Naver Search Ad API 파이프라인(AD_003_NaverSearch.js) 검증 완료 후 사용자가
+ *   ACQ_REP 지출 컬럼에 Meta+Naver Search를 합쳐서 반영하기로 확정.
+ *   `readMetaSpendCacheMap_()` → `readAdSpendCacheMap_()`(AD_004_SpendCache.js
+ *   신규 — Meta(NZD 원본)+Naver Search(KRW→NZD 환율 변환, GOOGLEFINANCE) 합산
+ *   후 `Ad_Spend_Cache` 시트에 저장). `CONFIG.ACQ.META_SPENT_COLUMN`→
+ *   `SPENT_COLUMN` 개명 반영(00_Config.js v1.23.0). 상세: docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md
  * v1.12.0 (2026-07-30)
  * - **버그 수정 — ACQ_REP Generate 체크박스가 Meta Spent 연결 후 조용히 실패**:
  *   Cloud Logs로 확인한 정확한 원인 — "Specified permissions are not sufficient
@@ -396,15 +405,16 @@ function generateACQReport_(){
   // (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고).
   const targetLookup = computeReportTargetLookup_();
 
-  // Meta 캠페인 지출 조회(AD_002_Meta.js) — 8개 플랫폼 중 Meta만 자동화된 상태라
-  // "Meta Spent"로 명확히 구분(총 광고비 아님). **캐시(Meta_Spend_Cache)만 읽음** —
-  // 이 함수(generateACQReport_)는 ACQ_REP Generate 체크박스의 onEdit() Simple
-  // Trigger에서 실행되는데, Simple Trigger는 외부 스프레드시트를 openById()로
-  // 여는 걸 못 해서 computeMetaSpendSummary_()를 직접 호출하면 "Specified
-  // permissions are not sufficient" 에러로 조용히 실패함(실측 확인). 캐시는
-  // 사용자가 runRefreshMetaSpendCache()(AD_002_Meta.js)를 수동 실행해서 미리
-  // 갱신해둬야 함. 상세: docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
-  const metaSpendMap = readMetaSpendCacheMap_();
+  // 캠페인 지출 조회(AD_004_SpendCache.js) — 8개 플랫폼 중 Meta+Naver Search
+  // 2개만 자동화된 상태(합산된 값, "Spent"로 표시 — 총 광고비 아님).
+  // **캐시(Ad_Spend_Cache)만 읽음** — 이 함수(generateACQReport_)는 ACQ_REP
+  // Generate 체크박스의 onEdit() Simple Trigger에서 실행되는데, Simple Trigger는
+  // 외부 스프레드시트/API를 열 수 없어서 원본 요약 함수를 직접 호출하면
+  // "Specified permissions are not sufficient" 에러로 조용히 실패함(실측 확인).
+  // 캐시는 사용자가 runRefreshAdSpendCache()(AD_004_SpendCache.js)를 수동
+  // 실행해서 미리 갱신해둬야 함. 상세: docs/exec-plans/active/
+  // 2026-07-30-campaign-spend-integration.md
+  const spendMap = readAdSpendCacheMap_();
 
   //----------------------------------------------------------
   // 5. Report Area 작성
@@ -412,7 +422,7 @@ function generateACQReport_(){
 
   const outputRows = [];
   const targetOutputRows = [];
-  const metaSpentOutputRows = [];
+  const spentOutputRows = [];
 
   reversedTargetRows.forEach(function(row){
 
@@ -453,10 +463,11 @@ function generateACQReport_(){
 
     targetOutputRows.push([revenueTarget, revenueTargetPct, newP1Target, newP1TargetPct]);
 
-    // Meta 지출이 이 (FY|Month|Segment)에 전혀 없으면(Meta_Raw에 해당 조합 자체가
-    // 없는 경우) hasOwnProperty가 false — "Meta 지출 0"과 구분해 공란 처리.
-    const hasMetaSpend = metaSpendMap.hasOwnProperty(key);
-    metaSpentOutputRows.push([hasMetaSpend ? metaSpendMap[key] : ""]);
+    // 지출 데이터가 이 (FY|Month|Segment)에 전혀 없으면(Meta/Naver Search 어느
+    // 쪽에도 해당 조합 자체가 없는 경우) hasOwnProperty가 false — "지출 0"과
+    // 구분해 공란 처리.
+    const hasSpend = spendMap.hasOwnProperty(key);
+    spentOutputRows.push([hasSpend ? spendMap[key] : ""]);
 
   });
 
@@ -469,9 +480,9 @@ function generateACQReport_(){
     1, CONFIG.ACQ.TARGET_COLUMNS_COUNT
   ).setValues([["Revenue Target", "Revenue Target%", "New P1 Target", "New P1 Target%"]]);
 
-  // Meta Spent 헤더(META_SPENT_COLUMN) — Target 컬럼과 동일하게 코드가 매번 다시 씀.
-  sheet.getRange(CONFIG.ACQ.ROWS.REPORT_HEADER, CONFIG.ACQ.META_SPENT_COLUMN, 1, 1)
-    .setValue("Meta Spent");
+  // Spent 헤더(SPENT_COLUMN) — Target 컬럼과 동일하게 코드가 매번 다시 씀.
+  sheet.getRange(CONFIG.ACQ.ROWS.REPORT_HEADER, CONFIG.ACQ.SPENT_COLUMN, 1, 1)
+    .setValue("Spent");
 
   const lastReportRow = sheet.getLastRow();
 
@@ -490,7 +501,7 @@ function generateACQReport_(){
     ).clearContent();
 
     sheet.getRange(
-      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.META_SPENT_COLUMN,
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.SPENT_COLUMN,
       clearRowCount, 1
     ).clearContent();
 
@@ -509,9 +520,9 @@ function generateACQReport_(){
     ).setValues(targetOutputRows);
 
     sheet.getRange(
-      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.META_SPENT_COLUMN,
-      metaSpentOutputRows.length, 1
-    ).setValues(metaSpentOutputRows);
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.SPENT_COLUMN,
+      spentOutputRows.length, 1
+    ).setValues(spentOutputRows);
 
     applyACQReportStyles_(sheet, outputRows.length);
 
