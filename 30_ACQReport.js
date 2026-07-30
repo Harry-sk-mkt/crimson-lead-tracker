@@ -17,9 +17,29 @@
  * 20 Reporting
  *
  * Version
- * v1.10.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-07-30)
+ * - **버그 수정 — ACQ_REP Generate 체크박스가 Meta Spent 연결 후 조용히 실패**:
+ *   Cloud Logs로 확인한 정확한 원인 — "Specified permissions are not sufficient
+ *   to call SpreadsheetApp.openById". Generate 체크박스는 `onEdit()` Simple
+ *   Trigger로 실행되는데, `computeMetaSpendSummary_()`가 내부에서 캠페인 지출
+ *   외부 시트를 `openById()`로 열어서 Simple Trigger의 제한된 권한과 충돌(Target_REP가
+ *   예전에 겪은 것과 동일 제약). `computeMetaSpendSummary_()` 대신
+ *   `readMetaSpendCacheMap_()`(AD_002_Meta.js v1.5.0, 같은 스프레드시트 안
+ *   `Meta_Spend_Cache` 캐시만 읽음)로 교체 — ACQ_Summary와 동일한 캐시 패턴.
+ *   사용자가 `runRefreshMetaSpendCache()`를 미리 수동 실행해둬야 최신값 반영.
+ * v1.11.0 (2026-07-30)
+ * - "Meta Spent" 컬럼(W열, `CONFIG.ACQ.META_SPENT_COLUMN`) 추가 — 캠페인 지출
+ *   자동 통합 파이프라인(AD_002_Meta.js)의 첫 연결. Target_Engine 연결은 8개
+ *   플랫폼 중 Meta 하나만 자동화돼 총 지출 과소집계 위험이 있어 보류하고,
+ *   Segment×Month grain이 이미 맞는 ACQ_REP에 먼저 연결(사용자 확정,
+ *   2026-07-30) — 헤더명을 "Spent"가 아니라 "Meta Spent"로 명확히 해서 총
+ *   광고비로 오인되지 않게 함. `computeMetaSpendSummary_()`(AD_002_Meta.js)를
+ *   캐시 없이 리포트 생성 시점에 직접 조회 — Target 컬럼과 동일하게
+ *   hasOwnProperty로 "Meta 지출 없음"과 "Meta 지출 0"을 구분. 상세:
+ *   docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
  * v1.10.0 (2026-07-30)
  * - Revenue Target/Revenue Target%/New P1 Target/New P1 Target% 4컬럼 추가
  *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고, 원래
@@ -376,12 +396,23 @@ function generateACQReport_(){
   // (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고).
   const targetLookup = computeReportTargetLookup_();
 
+  // Meta 캠페인 지출 조회(AD_002_Meta.js) — 8개 플랫폼 중 Meta만 자동화된 상태라
+  // "Meta Spent"로 명확히 구분(총 광고비 아님). **캐시(Meta_Spend_Cache)만 읽음** —
+  // 이 함수(generateACQReport_)는 ACQ_REP Generate 체크박스의 onEdit() Simple
+  // Trigger에서 실행되는데, Simple Trigger는 외부 스프레드시트를 openById()로
+  // 여는 걸 못 해서 computeMetaSpendSummary_()를 직접 호출하면 "Specified
+  // permissions are not sufficient" 에러로 조용히 실패함(실측 확인). 캐시는
+  // 사용자가 runRefreshMetaSpendCache()(AD_002_Meta.js)를 수동 실행해서 미리
+  // 갱신해둬야 함. 상세: docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
+  const metaSpendMap = readMetaSpendCacheMap_();
+
   //----------------------------------------------------------
   // 5. Report Area 작성
   //----------------------------------------------------------
 
   const outputRows = [];
   const targetOutputRows = [];
+  const metaSpentOutputRows = [];
 
   reversedTargetRows.forEach(function(row){
 
@@ -422,6 +453,11 @@ function generateACQReport_(){
 
     targetOutputRows.push([revenueTarget, revenueTargetPct, newP1Target, newP1TargetPct]);
 
+    // Meta 지출이 이 (FY|Month|Segment)에 전혀 없으면(Meta_Raw에 해당 조합 자체가
+    // 없는 경우) hasOwnProperty가 false — "Meta 지출 0"과 구분해 공란 처리.
+    const hasMetaSpend = metaSpendMap.hasOwnProperty(key);
+    metaSpentOutputRows.push([hasMetaSpend ? metaSpendMap[key] : ""]);
+
   });
 
   // Target 컬럼 헤더(TARGET_COLUMNS_START_COL부터) — 기존 A:N과 달리 시트에
@@ -432,6 +468,10 @@ function generateACQReport_(){
     CONFIG.ACQ.ROWS.REPORT_HEADER, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
     1, CONFIG.ACQ.TARGET_COLUMNS_COUNT
   ).setValues([["Revenue Target", "Revenue Target%", "New P1 Target", "New P1 Target%"]]);
+
+  // Meta Spent 헤더(META_SPENT_COLUMN) — Target 컬럼과 동일하게 코드가 매번 다시 씀.
+  sheet.getRange(CONFIG.ACQ.ROWS.REPORT_HEADER, CONFIG.ACQ.META_SPENT_COLUMN, 1, 1)
+    .setValue("Meta Spent");
 
   const lastReportRow = sheet.getLastRow();
 
@@ -449,6 +489,11 @@ function generateACQReport_(){
       clearRowCount, CONFIG.ACQ.TARGET_COLUMNS_COUNT
     ).clearContent();
 
+    sheet.getRange(
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.META_SPENT_COLUMN,
+      clearRowCount, 1
+    ).clearContent();
+
   }
 
   if(outputRows.length > 0){
@@ -462,6 +507,11 @@ function generateACQReport_(){
       CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
       targetOutputRows.length, CONFIG.ACQ.TARGET_COLUMNS_COUNT
     ).setValues(targetOutputRows);
+
+    sheet.getRange(
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.META_SPENT_COLUMN,
+      metaSpentOutputRows.length, 1
+    ).setValues(metaSpentOutputRows);
 
     applyACQReportStyles_(sheet, outputRows.length);
 

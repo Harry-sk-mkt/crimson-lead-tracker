@@ -65,25 +65,40 @@ flowchart TB
 Per New P1)을 실측할 수 없다 — `Target_REP`은 지금 목표(target)만 top-down으로 역산할 뿐, 실제
 집행된 광고비 대비 CPNP1 실적과 대조가 안 된다.
 
-**소스**: 외부 Google Sheet(`1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A`) — 채널/계정별로
-`Monthly{채널}` 탭이 분리되어 있음. 확인된 탭:
-- `MonthlyMeta`(gid `1546305708`) — 확인 완료
-- `MonthlyNSA`(Naver Search Ads로 추정)
-- `MonthlyGFA`(Google/Facebook Ads로 추정)
-- 그 외 탭 존재 가능성 있음 — **착수 시 전체 탭 목록 재확인 필요**
+**⚠️ 원래 계획(아래 "(폐기됨) 원래 소스" 참고) 폐기 — 2026-07-30 방향 전환**: 착수 착수하며
+외부 Google Sheet(`Monthly{채널}` 탭들)를 소스로 쓰려 했으나, 이 탭들이 **채널/계정 단위 월
+집계**(캠페인명 컬럼 없음)라는 게 확인됨 — 사용자 확인: "채널 하나를 여러 세그먼트가 공유해서
+쓴다"(예: Meta 광고 하나가 Seminar/Webinar/BOFU 홍보에 동시에 쓰임). 채널 단위 합계로는 세그먼트별
+Spent를 분리할 수 없어(캠페인 단위 지출 데이터 자체가 지금 없음, 사용자 확인) 이 소스로는 Phase 1
+목표(세그먼트별 CPNP1 실측)를 달성 불가 — 폐기.
 
-**확인된 구조(`MonthlyMeta` 기준)**: 월별(2023-01~) 1행 = 1개월, 컬럼은 `allCvR / Clicks /
-Results / Spent / CPL / Rev / ROAS` + 우측 "비고"(캠페인 메모, 자유 텍스트). **캠페인명이 별도
-컬럼으로 없음** — 계정/채널 단위 월 집계이며, 다른 채널 탭도 동일 구조로 추정(착수 시 확인).
+**신규 방향(2026-07-30 확정)**: 각 광고 플랫폼(Meta/Naver Search Ads/Google Ads 등)에서
+**캠페인 단위** 리포트를 직접 주기적으로 export해서 가져온다. 이 프로젝트의 기존 Leads_Raw/
+MTA_Raw 패턴(원본 불변 append-only, 매번 전체가 아니라 겹치는 구간만 export해도 Incremental
+Master Build가 중복 제거하며 병합)을 그대로 재사용 — 캠페인 지출도 동일한 문제(매번 export가
+전체 기간이 아님)를 겪으므로 검증된 해법을 재사용하는 것.
 
-**계획**: 이 탭들의 `Spent`를 OPS 레이어로 가져와 CPNP1 계산 자료로 사용.
+**아키텍처(사용자 확정, 2026-07-30)**: **별도 Google Sheet + 같은 Apps Script 프로젝트**
+(crimson-lead-tracker) — 지금 이 메인 스프레드시트가 이미 무거워서 데이터를 안 얹고, `Deal
+Tracker`처럼 `SpreadsheetApp.openById()`로 별도 시트를 읽고/쓴다(코드는 이 레포에 그대로 둠,
+완전히 새 스프레드시트+새 바운드 스크립트 프로젝트는 아님).
 
 **미정(착수 시 확인 필요, 임의로 처리하지 말 것)**:
-- 전체 탭 목록(위 3개 외에 더 있는지)
-- 각 채널 탭 → Business Segment 매핑(예: `MonthlyMeta` 지출이 어느 세그먼트의 New P1과 짝지어야
-  하는지 — 세그먼트 하나에 대응하는지, 여러 세그먼트에 걸쳐있는지)
-- New P1(Leads_OPS 기반)과 매칭할 그레인 — 월 단위는 확정적이나 세그먼트 단위 매칭 방법은 미정
-- 기존 OPS 시트(예: Target_Engine)에 컬럼 추가로 통합할지, 신규 레이어(예: `Campaign_OPS`)를 만들지
+- 새 캠페인 지출 스프레드시트가 이미 존재하는지, 만들어야 하는지(ID 필요)
+- 각 광고 플랫폼(Meta/Naver SA/Google Ads 등) export의 실제 컬럼 구조(캠페인명/날짜/Spent 등
+  필드명) — Leads/MTA Transformer처럼 플랫폼별 파싱 로직이 필요할 것으로 예상
+- 캠페인명 → Business Segment 매핑 로직 — `getBusinessSegment()`(Salesforce UTM 기준)과 같은
+  방식이 광고 플랫폼 캠페인명에도 통할지, 별도 분류 함수가 필요할지
+- Raw/Master 파일 번호대(기존 00~99 넘버링과 충돌 안 하는 새 구간 필요)
+- New P1(Leads_OPS 기반)과 매칭할 그레인 — 월 단위는 확정적이나 세그먼트 단위 매칭 방법은 세그먼트
+  분류 로직이 정해져야 확정 가능
+- 최종적으로 Target_Engine Block 0의 수동 Spent 입력을 이 파이프라인 결과로 대체할지, 별도
+  참고 지표로만 둘지
+
+**(폐기됨) 원래 소스 — 참고용 보존**: 외부 Google Sheet(`1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A`),
+`Monthly{채널}` 탭(`MonthlyMeta` gid `1546305708` 확인, `MonthlyNSA`/`MonthlyGFA` 등 존재 추정).
+`MonthlyMeta` 확인된 구조: 월별(2023-01~) 1행=1개월, `allCvR/Clicks/Results/Spent/CPL/Rev/ROAS`
++ 비고(자유 텍스트), 캠페인명 컬럼 없음 — 이 구조적 한계 때문에 위와 같이 폐기됨.
 
 ### Phase 2 — Target_REP 전체 세그먼트/예산 반영 재설계
 

@@ -192,6 +192,75 @@ FY 하나만 갖고 있어서 FY26 실적 대비 달성률을 보려면 재생�
 컬럼뿐 아니라 사용자가 시트에 직접 넣어둔 수동 영역도 "기존 컬럼 사용 현황"에 포함해서
 확인해야 한다는 교훈(grep만으로는 못 잡음, 사용자에게 직접 물어봐야 함).
 
+## 캠페인 지출 데이터 통합 착수 — Meta 파일럿 구축 및 실 데이터 검증 (같은 날 후속 세션)
+
+**배경**: 위 세션 종료 후 이어서, `docs/Roadmap.md` End Goal Phase 1(외부 캠페인 지출 데이터
+통합)에 착수. 상세 결정 이력: `docs/exec-plans/active/2026-07-30-campaign-spend-integration.md`.
+
+**원래 계획 폐기, 새 아키텍처로 방향 전환** — Roadmap에 적혀있던 소스(외부 `Monthly{채널}`
+요약 시트)가 채널/계정 단위 월 집계라 세그먼트별 분리가 원천적으로 불가능함을 확인(채널 하나를
+여러 세그먼트가 공유, 사용자 확인)하고 폐기. 대신 **각 광고 플랫폼(Meta/Naver Search/Naver
+GFA/Google Search/Google Display/Naver Offline Cafe/Kakao Moments/Kakao Channel, 8개)에서
+캠페인 단위 리포트를 직접 export**하는 방식으로 전환 — 이 프로젝트의 기존 Leads_Raw/MTA_Raw
+패턴(원본 불변, 부분 export도 안전하게 병합)을 재사용. 저장 위치는 메인 스프레드시트가 이미
+무거워서 **별도 Google Sheet + 같은 Apps Script 프로젝트**(Deal Tracker와 동일하게
+`SpreadsheetApp.openById()` 크로스 접근)로 확정. 새 네이밍 컨벤션(`STAGE_NNN_Name.js`, 3자리)을
+이 파이프라인부터 바로 적용 — 기존 00~99 파일 전체 재정비는 별도 세션으로 보류.
+
+**Meta 파일럿 구현 및 실 데이터 검증 완료** — `AD_001_Config.js`(스프레드시트 ID/8개 플랫폼
+목록/Meta export 컬럼 매핑/활성 Account ID), `AD_002_Meta.js`(Import/Transform/Aggregation).
+세그먼트 분류는 새로 안 만들고 기존 `getBusinessSegment()`를 그대로 재사용 — Meta 캠페인명
+네이밍 규칙(`KR_core_YYYY-MM-DD_slug_tag`)이 Salesforce `MKT UTM Campaign`과 사실상 동일함을
+실 데이터 6개 샘플 전수 검증으로 확인.
+
+**실 데이터 검증 중 발견·수정한 버그 4건**:
+1. Meta_Raw 실제 헤더가 사용자가 채팅에 옮겨 적어준 한국어 샘플이 아니라 **영어**였음
+   (`Reporting starts`/`Campaign name`/`Amount spent (NZD)` 등, 계정별 UI 언어 차이) —
+   `runDebugMetaRawFirstRow()`(신규 진단) 로 확인 후 Config 정정.
+2. 캠페인 자체 종료일(`Ends`)이 처음엔 export 불가능했다가 사용자가 별도 컬럼으로 추가 확보 —
+   "예전 계정 lifetime 합계를 활성 기간에 균등분배"라는 설계 전제가 이걸로 성립.
+3. **계정 ID 기반 분기 로직 폐기** — "현재 계정은 항상 한 달만 본다"는 가정이 사용자가 현재
+   계정도 넓은 기간(2024-09~지금)으로 한 번에 export하고 싶다는 요청으로 깨짐. 추가로 "Amount
+   spent"가 캠페인 전체 생애가 아니라 "Reporting starts~ends"(조회 기간) 안에서 집행된 금액임을
+   확인 — 계정 무관하게 "캠페인 활성 기간 ∩ 보고 조회 기간"에 균등분배하는 단일 로직으로 재작성.
+4. 26|JUL 실제값 대조 중 발견된 15~20%대 오차 — 세그먼트 오분류가 아니라 **종료일 없는 장기
+   에버그린 캠페인의 균등분배 근사 오차**로 확인(`runDebugMetaSpendByCampaignForMonth()` 신규
+   진단으로 확인). **정밀 export 우선 규칙**(`isMetaRowMonthPrecise_()` 신규) 추가 — 같은
+   캠페인의 같은 달을 정밀 행과 장기 분배 행이 동시에 커버하면 분배 행의 그 달 기여분은 버리고
+   정밀값 채택. 이 수정 과정에서 **타임존 버그**도 추가 발견(정밀 export가 왜 정밀로 인식이
+   안 되나 봤더니 `reportStart`가 실제보다 하루 이른 UTC로 읽힘 — 2026-07-28 Deal Tracker에서
+   이미 겪은 것과 동일 버그 클래스) — `normalizeExternalCalendarDate_()`(90_TargetEngine.js)
+   재사용해 해결. 최종 검증: `26|JUL|BOFU: 3906.3`(실제 ≈3,904), `26|JUL|Content: 22926.44`
+   (실제 ≈22,922) — 손으로 검산한 값과 정확히 일치.
+
+**`clasp run-function` 설정 검토(실행 안 함)** — 개인 Google 계정으로도 무료로 가능함을 확인
+(GCP Standard 프로젝트 연결 + Apps Script API 활성화 + API Executable 배포 필요, 빌링 불필요)
+했으나 사용자가 수동 실행 방식 유지를 선택.
+
+**ACQ_REP에 "Meta Spent" 컬럼 연결** — Target_Engine 연결은 8개 플랫폼 중 Meta 하나만
+자동화돼 총 지출 과소집계 위험이 있어 보류, Segment×Month grain이 이미 맞는 ACQ_REP에 먼저
+연결(사용자 확정) — 헤더명을 "Spent"가 아니라 "Meta Spent"로 명확히 해서 오인 방지(W열,
+`CONFIG.ACQ.META_SPENT_COLUMN`).
+
+**연결 직후 버그 발견·수정 — Simple Trigger 권한 제약**: ACQ_REP Generate 체크박스가 조용히
+실패, 사용자가 공유한 Cloud Logs로 "Specified permissions are not sufficient to call
+SpreadsheetApp.openById" 확인 — ACQ_REP Generate가 `onEdit()` Simple Trigger로 실행되는데
+제한된 권한이라 외부 스프레드시트를 못 엶(**Target_REP가 2026-07-27에 이미 겪은 것과 동일한
+제약**). 이번엔 체크박스 UX를 유지하고 싶어 `ACQ_Summary`와 동일한 캐시 패턴으로 해결 —
+`refreshMetaSpendCache_()`/`runRefreshMetaSpendCache()`(수동 실행, 메인 스프레드시트 안
+`Meta_Spend_Cache`에 저장)와 `readMetaSpendCacheMap_()`(같은 스프레드시트만 읽어 Simple
+Trigger 안전). 최종 실 시트 검증 완료(사용자 확인, "응 나와").
+
+**문서화**: `docs/apps-script-gotchas.md` #9(Simple Trigger + 외부 스프레드시트 제약, 두 해법
+정리) 신규. `docs/Roadmap.md` Phase 1 전면 재작성(원래 계획 폐기 기록 보존). 신규 memory 2건:
+`feedback_external_spreadsheet_timezone_dates`(타임존 버그가 이번에 두 번째로 재발한 패턴),
+`feedback_column_collision_check_before_appending`(위 세션에서 이미 기록, W열 배치 전 재확인
+에서도 다시 활용).
+
+**버전 이력**: `00_Config.js` v1.20.0→v1.22.0, `30_ACQReport.js` v1.10.0→v1.12.0,
+`32_ACQReportStyles.js` v1.6.0→v1.7.0, `AD_001_Config.js`/`AD_002_Meta.js` 신규(v1.2.0/v1.5.0
+까지). 전부 `clasp push` 완료.
+
 # Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
 
 ## 하네스 엔지니어링 도입 — clasp push 안전장치, pre-commit 훅, 세션 시작 스크립트, CLAUDE.md 다이어트

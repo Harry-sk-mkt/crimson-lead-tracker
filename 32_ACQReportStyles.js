@@ -12,12 +12,18 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-30)
+ * - "Meta Spent" 컬럼(W열, `CONFIG.ACQ.META_SPENT_COLUMN`) 서식 추가 — 천단위
+ *   콤마, 배경/테두리 range를 A:N + Target 4컬럼(S:V)에 이어 세 번째로 분리
+ *   적용(그 사이 O:R Engine/U:AF 수동 영역은 계속 건너뜀). 헤더 Note로 "8개
+ *   플랫폼 중 Meta만 자동화, 총 광고비 아님" 명시. 상세:
+ *   docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
  * v1.6.0 (2026-07-30)
  * - Revenue Target/Revenue Target%/New P1 Target/New P1 Target% 4컬럼 신규 서식 —
- *   **AH:AK열(`CONFIG.ACQ.TARGET_COLUMNS_START_COL`부터)**에 배치. O:R(숨김 Engine
+ *   **S:V열(`CONFIG.ACQ.TARGET_COLUMNS_START_COL`부터)**에 배치. O:R(숨김 Engine
  *   영역)/U:AF(사용자 수동 수식 영역, 00_Config.js `MANUAL_AREA_NOTE`)를 둘 다
  *   피해야 해서 위치가 두 번 바뀜(00_Config.js v1.20.0/30_ACQReport.js v1.10.0
  *   Change Log 참고) — 그래서 이 파일은 컬럼 번호를 하드코딩하지 않고 전부
@@ -65,27 +71,30 @@ function applyACQReportStyles_(sheet, rowCount){
 
   const startRow = CONFIG.ACQ.ROWS.REPORT_DATA_START;
   const headerRow = CONFIG.ACQ.ROWS.REPORT_HEADER;
-  const dataCols = CONFIG.ACQ.REPORT_DATA_COLUMNS;           // A:N (14)
-  const targetStartCol = CONFIG.ACQ.TARGET_COLUMNS_START_COL; // AH열(34) — O:R(Engine)/U:AF(수동 영역) 둘 다 건너뜀
-  const targetCols = CONFIG.ACQ.TARGET_COLUMNS_COUNT;         // 4
+  const dataCols = CONFIG.ACQ.REPORT_DATA_COLUMNS;             // A:N (14)
+  const targetStartCol = CONFIG.ACQ.TARGET_COLUMNS_START_COL;  // S열(19) — O:R(Engine)/U:AF(수동 영역) 둘 다 건너뜀
+  const targetCols = CONFIG.ACQ.TARGET_COLUMNS_COUNT;          // 4
+  const metaSpentCol = CONFIG.ACQ.META_SPENT_COLUMN;           // W열(23, 2026-07-30 추가)
 
   //----------------------------------------------------------
   // 배경색 우선 초기화 (이전 실행의 줄무늬/강조가 남지 않도록)
-  // A:N과 Target 4컬럼(AH:AK) 사이에 숨김 Engine 영역(O:R)과 사용자 수동 영역
-  // (U:AF)이 껴 있어 range를 분리한다.
+  // A:N / Target 4컬럼(S:V) / Meta Spent(W) 사이에 숨김 Engine 영역(O:R)과
+  // 사용자 수동 영역(U:AF)이 껴 있어 range를 분리한다.
   //----------------------------------------------------------
 
   if(rowCount > 0){
 
     sheet.getRange(startRow, 1, rowCount, dataCols).setBackground(null);
     sheet.getRange(startRow, targetStartCol, rowCount, targetCols).setBackground(null);
+    sheet.getRange(startRow, metaSpentCol, rowCount, 1).setBackground(null);
 
   }
 
   //----------------------------------------------------------
   // % 컬럼: All P1%(6) / New Leads%(8) / New P1%(10) /
   //   Revenue Target%(20) / New P1 Target%(22, 2026-07-30 추가)
-  // Revenue 컬럼: 14 — 천단위 콤마 / Revenue Target(targetStartCol)도 동일
+  // Revenue 컬럼: 14 — 천단위 콤마 / Revenue Target(targetStartCol)/
+  //   Meta Spent(metaSpentCol)도 동일 (2026-07-30 추가)
   //----------------------------------------------------------
 
   if(rowCount > 0){
@@ -99,7 +108,7 @@ function applyACQReportStyles_(sheet, rowCount){
 
     });
 
-    [14, targetStartCol].forEach(function(col){
+    [14, targetStartCol, metaSpentCol].forEach(function(col){
 
       sheet.getRange(startRow, col, rowCount, 1)
         .setNumberFormat("#,##0");
@@ -122,6 +131,7 @@ function applyACQReportStyles_(sheet, rowCount){
 
         sheet.getRange(startRow + i, 1, 1, dataCols).setBackground("#F3F3F3");
         sheet.getRange(startRow + i, targetStartCol, 1, targetCols).setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, metaSpentCol, 1, 1).setBackground("#F3F3F3");
 
       }
 
@@ -160,7 +170,8 @@ function applyACQReportStyles_(sheet, rowCount){
   });
 
   //----------------------------------------------------------
-  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:N + Target 4컬럼(O:R Engine/U:AF 수동 영역은 제외)
+  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:N + Target 4컬럼 + Meta Spent
+  // (O:R Engine/U:AF 수동 영역은 제외)
   //----------------------------------------------------------
 
   sheet.getRange(headerRow, 1, totalRows, dataCols)
@@ -171,6 +182,13 @@ function applyACQReportStyles_(sheet, rowCount){
     );
 
   sheet.getRange(headerRow, targetStartCol, totalRows, targetCols)
+    .setBorder(
+      true, true, true, true, true, true,
+      "#000000",
+      SpreadsheetApp.BorderStyle.SOLID
+    );
+
+  sheet.getRange(headerRow, metaSpentCol, totalRows, 1)
     .setBorder(
       true, true, true, true, true, true,
       "#000000",
@@ -231,6 +249,10 @@ function annotateACQReportMetricNotes_(sheet, headerRow){
       .setNote(targetNotes[col]);
 
   });
+
+  // Meta Spent(2026-07-30 추가) — 하드코딩 없이 CONFIG.ACQ.META_SPENT_COLUMN 기준.
+  sheet.getRange(headerRow, CONFIG.ACQ.META_SPENT_COLUMN)
+    .setNote("Meta Spent — Meta Ads Manager 캠페인 지출 자동 집계(AD_002_Meta.js). 8개 플랫폼 중 Meta만 자동화된 상태라 총 광고비가 아님(나머지 7개 플랫폼은 아직 미포함). Meta_Raw에 없는 (FY|Month|Segment) 조합은 공란.");
 
 }
 

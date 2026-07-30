@@ -78,3 +78,30 @@ MTA_Raw(할당 123,205행 vs 사용 82,715행)와 Leads_OPS_QA(할당 34,983행 
 삭제, 에러 없음. 워크북 전체 9,984,712(99.8%) → **6,593,702(65.9%)**로, 낭비 셀 0으로 정리됨. 앞으로
 비슷한 문제가 재발하면(대형 Raw/Master 시트가 다시 실사용 범위보다 크게 할당되면) 이 두 함수를
 다시 실행하면 됨.
+
+## 9. `onEdit()` Simple Trigger는 외부 스프레드시트를 못 연다 (2026-07-27/2026-07-30 두 번 실측)
+
+체크박스 등으로 `onEdit()` Simple Trigger가 실행하는 함수 안에서 `SpreadsheetApp.openById()`로
+**다른**(이 프로젝트가 바인딩된 스프레드시트가 아닌) 외부 파일을 열면 `"Specified permissions are
+not sufficient to call SpreadsheetApp.openById. Required permissions:
+https://www.googleapis.com/auth/spreadsheets"` 에러로 실패한다. Simple Trigger는 스크립트 소유자의
+전체 권한이 아니라 제한된 권한으로 실행되기 때문 — 에러가 사용자 화면엔 안 뜨고(Simple Trigger는
+UI 경고도 못 띄움) Apps Script 편집기의 **Executions(실행 기록)** 패널에서 Cloud Logs로만 확인 가능해서,
+"체크박스를 눌러도 조용히 아무 일도 안 일어난다"는 증상으로만 나타나 원인 파악이 오래 걸릴 수 있다.
+
+**같은 문제를 두 번 겪음**:
+- 2026-07-27, `Target_REP`: 외부 채널시트/Naver gid를 참조하는 리포트 생성 로직을 체크박스+`onEdit()`
+  으로 구현했다가 발견 — **해결 방식: 체크박스를 버리고 `runGenerateTargetReport()` 수동 실행 진입점
+  으로 전환**(`docs/TargetReportDesign.md` 참고). 직접 Run은 Full Authorization이라 제약이 없음.
+- 2026-07-30, `ACQ_REP`: 캠페인 지출 자동 통합(AD_002_Meta.js)을 ACQ_REP에 연결하며 재발 — 이번엔
+  ACQ_REP의 기존 체크박스 UX(자주 쓰는 워크플로)를 유지하고 싶어서 다른 해법 채택: **`ACQ_Summary`와
+  동일한 캐시 패턴** — 외부 시트를 읽는 계산은 별도 함수(`refreshMetaSpendCache_()`)로 분리해 사용자가
+  수동으로만 실행하고, 그 결과를 같은(바인딩된) 스프레드시트 안 캐시 시트에 저장 → `onEdit()`이
+  실행하는 함수는 그 캐시만 읽는다(`readMetaSpendCacheMap_()`, 외부 열기 없음 → Simple Trigger 안전).
+
+→ **두 가지 해법 중 상황에 맞게 선택**: (1) 체크박스 자체를 버리고 수동 Run 진입점으로 전환(리포트가
+새 것이거나 체크박스 UX가 덜 중요할 때), (2) 외부 읽기를 캐시 갱신용 별도 수동 함수로 분리하고
+Simple Trigger가 실행하는 함수는 같은 스프레드시트의 캐시만 읽게 만들기(기존 체크박스 워크플로를
+유지하고 싶을 때, ACQ_Summary가 이미 쓰던 패턴). 새 리포트/컬럼에 외부 스프레드시트 데이터를 연결할
+땐, 그 리포트의 Generate가 체크박스(`onEdit()`)인지 수동 Run인지부터 먼저 확인할 것 — 체크박스라면
+이 문제를 반드시 고려해야 한다.

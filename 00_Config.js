@@ -9,9 +9,24 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.20.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-07-30)
+ * - `ACQ.META_SPEND_CACHE_SHEET`("Meta_Spend_Cache") 신규 — 실 시트 검증 중 발견된
+ *   버그 수정. ACQ_REP Generate 체크박스가 `onEdit()` Simple Trigger로 실행되는데,
+ *   Meta Spent 연결 코드(`computeMetaSpendSummary_()`)가 캠페인 지출 시트를
+ *   `openById()`로 직접 열어서 "Specified permissions are not sufficient to call
+ *   SpreadsheetApp.openById" 에러로 조용히 실패(Target_REP가 예전에 겪은 것과
+ *   동일한 Simple Trigger 권한 제약). ACQ_Summary와 동일한 캐시 패턴으로 전환 —
+ *   상세: AD_002_Meta.js v1.5.0 Change Log.
+ * v1.21.0 (2026-07-30)
+ * - `ACQ.META_SPENT_COLUMN`(23, W열) 신규 — AD_002_Meta.js 캠페인 지출 파이프라인
+ *   (Meta 파일럿)을 ACQ_REP에 연결하기 위한 컬럼 위치. Target_Engine 연결은 8개
+ *   플랫폼 중 Meta 하나만 자동화된 상태라 보류(총 지출 과소집계 위험) — 대신
+ *   Segment×Month grain이 이미 맞는 ACQ_REP에 "Meta Spent"로 명확히 라벨링해서
+ *   먼저 연결(사용자 확정, 2026-07-30). 상세:
+ *   docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
  * v1.20.0 (2026-07-30)
  * - ACQ_REP/NewP1_REP에 Target 컬럼 추가(Revenue Target/Revenue Target%/New P1
  *   Target/New P1 Target% — ACQ_REP, Spent/CPNP1/New P1 Target/New P1 Target% —
@@ -321,6 +336,25 @@ const CONFIG = {
     //   docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
     TARGET_COLUMNS_START_COL: 19,  // S열
     TARGET_COLUMNS_COUNT: 4,
+
+    // Meta Spent 컬럼(2026-07-30 신규) — AD_002_Meta.js의 캠페인 지출 파이프라인
+    // 결과를 리포트 생성 시점에 조회해서 붙임(Target 컬럼과 동일 패턴). S:V(19~22,
+    // TARGET_COLUMNS_*) 바로 다음인 W열(23)에 배치 — 붙이기 전 사용자에게 W열
+    // 이후 수동 내용 없음을 확인받음(2026-07-30, 오늘 세 번 겪은 컬럼 충돌 재발 방지).
+    // **8개 플랫폼 중 Meta 하나만 자동화된 상태 — "총 광고비"가 아니라 "Meta
+    // 자동집계"라는 뜻으로 헤더명을 "Meta Spent"로 명확히 함**(나머지 7개 플랫폼
+    // 자동화 전까지 총 지출과 혼동하지 않도록, docs/exec-plans/active/
+    // 2026-07-30-campaign-spend-integration.md 참고).
+    META_SPENT_COLUMN: 23,  // W열
+
+    // Meta Spend 캐시 시트(2026-07-30 신규, 같은 메인 스프레드시트 안) — ACQ_REP의
+    // Generate 체크박스가 onEdit() Simple Trigger로 실행되는데, Simple Trigger는
+    // 제한된 권한이라 캠페인 지출 시트를 openById()로 여는 걸 못 함(실측 확인:
+    // "Specified permissions are not sufficient to call SpreadsheetApp.openById").
+    // ACQ_Summary와 동일한 캐시 패턴 — AD_002_Meta.js의 runRefreshMetaSpendCache()가
+    // 수동 실행 시 외부 시트를 읽어 이 캐시 시트(같은 스프레드시트)에 미리 저장해두고,
+    // generateACQReport_()는 이 캐시만 읽는다(외부 열기 없음, Simple Trigger 안전).
+    META_SPEND_CACHE_SHEET: "Meta_Spend_Cache",
 
     SEGMENTS: [
       "Seminar",
