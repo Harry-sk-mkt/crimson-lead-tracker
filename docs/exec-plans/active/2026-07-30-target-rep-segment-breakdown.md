@@ -99,9 +99,10 @@ Target/실적은 이번 phase에서 완성. CPNP1은 사용자가 직접 취합�
          v1.22.0). 기존 테스트가 이 버그를 "정상"(AUG CPNP1=450 기대)으로 잘못 검증하고
          있었음 — OCT(활성, CPNP1=540)/AUG(비활성, CPNP1=0) 양쪽 검증으로 교체.
       Node 하네스로 4/5 항목 전부 재검증 완료(잔재 클리어 왕복, CPNP1 게이트 단위 테스트).
-- [ ] 실 시트로 `runGenerateTargetReport()` 실행 검증 (다음 단계 — Config/Engine/Report/Styles
-      전부 코드 레벨로는 완료됐으나 실제 Apps Script 환경 검증 전)
-- [ ] `clasp push`는 위 실 시트 검증 전까지 보류
+- [x] 실 시트로 `runGenerateTargetReport()` 실행 검증 완료(2026-07-30, 사용자 확인) — 직전
+      라운드에서 잡은 4가지 포인트(헤더 3행 구조/틀고정/세그먼트 배색, CPNP1 `$` 서식, 옛
+      7컬럼 구조 잔재 정리, Seminar 비활성월 CPNP1=0 게이팅) 전부 그대로 정상 반영 확인
+- [x] `clasp push` 완료(2026-07-30)
 
 ### 검증 방법 (2026-07-30, Node 하네스)
 
