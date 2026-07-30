@@ -4,18 +4,35 @@
  * Target Report Styles
  *
  * Responsibility
- * Apply formatting to Target_REP (숫자는 소수점 없이, %만 소수 2자리,
- * 테두리, 짝수 행 배경, 헤더 Note — 2026-07-27 사용자 요청 반영) + Target_Engine
- * Block 0 입력 영역 숫자 서식(2026-07-30 세그먼트 분해 이후 실무자가 직접
- * 값을 입력하는 영역이 늘어나며 추가).
+ * Apply formatting to Target_REP (숫자는 소수점 없이, 헤더 3행 구조 + 세그먼트별
+ * 배색, 테두리, 짝수 행 배경, 헤더 Note) + Target_Engine Block 0 입력 영역 숫자
+ * 서식(2026-07-30 세그먼트 분해 이후 실무자가 직접 값을 입력하는 영역이 늘어나며 추가).
  *
  * 설계 문서
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.5.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-30)
+ * - 사용자 피드백 3건 반영: (1) `applyTargetReportStyles_()`에서 `sheet.setFrozenRows()`로
+ *   헤더 3행(4행까지) 틀 고정 신규 추가. (2) CPNP1 컬럼(Target/Actual 둘 다) 서식을
+ *   `#,##0` → `$#,##0.00`으로 변경("CPNP1에 $ 붙이고 소수점 2자리로"). (3) 세그먼트별
+ *   헤더 배색을 원색에서 파스텔로(00_Config.js v1.19.0 `SEGMENT_HEADER_COLORS`, "색이
+ *   너무 강하다") — 이 파일은 값을 그대로 읽어 쓰므로 코드 변경 없이 CONFIG만 반영.
+ * v1.6.0 (2026-07-30)
+ * - `applyTargetReportStyles_()` 전면 재작성 — 헤더가 1행(REPORT_HEADER)에서 3행
+ *   (SEGMENT_HEADER_ROW/TARGET_ACTUAL_HEADER_ROW/METRIC_HEADER_ROW)으로 확장됨에
+ *   따라 다크 헤더 스타일은 고정 3컬럼의 METRIC_HEADER_ROW에만 적용, 세그먼트
+ *   컬럼(2~4행 전체)은 신규 `CONFIG.TARGET.REPORT.SEGMENT_HEADER_COLORS`(dataviz
+ *   스킬 카테고리컬 팔레트)로 세그먼트별 배색 + 검정 굵은 텍스트. 그룹당 컬럼 서식도
+ *   6컬럼(달성% 제거, Target 4 + Actual 2)으로 갱신. 상세: 00_Config.js v1.18.0,
+ *   91_TargetReport.js v1.6.0.
+ * v1.5.1 (2026-07-30)
+ * - CONFIG.TARGET.INPUT.CPNP1_BENCHMARK_MANUAL → CPNP1_BENCHMARK 이름 변경 반영
+ *   (00_Config.js v1.15.0, 90_TargetEngine.js v1.19.0 — CPNP1 벤치마크가 수동 입력에서
+ *   계산으로 전환됨).
  * v1.5.0 (2026-07-30)
  * - 신규 applyTargetEngineBlockStyles_() — v1.4.0에서 Block 0에만 숫자 서식을
  *   넣고 Block A~D(벤치마크/P1당 가치/딜비중/목표전개)는 빠뜨렸던 걸 사용자가
@@ -62,33 +79,63 @@
 function applyTargetReportStyles_(sheet, rowCount){
 
   const rows = CONFIG.TARGET.REPORT.ROWS;
-  const headers = buildTargetReportHeaders_();
+  const headers = buildTargetReportMetricHeaders_();
   const colCount = headers.length;
 
   if(rowCount <= 0) return;
 
   const dataStartRow = rows.REPORT_DATA_START;
+  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
+  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
+  const segmentColors = CONFIG.TARGET.REPORT.SEGMENT_HEADER_COLORS;
+
+  // 헤더 3행(2~4행)까지 고정 — 사용자 요청("4번째 행까지 틀 고정").
+  sheet.setFrozenRows(rows.METRIC_HEADER_ROW);
 
   /*
   ==========================================================
-  Header
+  Header — 고정 3컬럼(Week Start/Week End/Month)은 4행에만 라벨(2~3행은 공란,
+  사용자 확정) — 기존 다크 헤더 스타일은 4행에만 적용
   ==========================================================
   */
 
-  sheet.getRange(rows.REPORT_HEADER, 1, 1, colCount)
+  sheet.getRange(rows.METRIC_HEADER_ROW, 1, 1, fixedColCount)
     .setBackground("#202124")
     .setFontColor("#FFFFFF")
     .setFontWeight("bold")
     .setHorizontalAlignment("center")
     .setVerticalAlignment("middle");
 
-  sheet.getRange(rows.REPORT_HEADER, 1).setNote(
+  sheet.getRange(rows.METRIC_HEADER_ROW, 1).setNote(
     "기준: 코호트=Create Date(New P1), 통화=NZD. " +
     "Actual CPNP1은 Target_Engine Block 0의 세그먼트별 월별 수동 Spent 입력값 기준 — " +
     "월 단위로만 취합되므로 그 달의 모든 주에 동일한 값이 반복 표시됨(Target CPNP1과 동일 패턴). " +
-    "달성% = Actual ÷ Target. docs/TargetReportDesign.md, " +
+    "달성률(Progress)은 별도 시트에서 확인. docs/TargetReportDesign.md, " +
     "docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md 참고."
   );
+
+  /*
+  ==========================================================
+  Header — 세그먼트별 배색 (2026-07-30 신규, 사용자 요청: "세그먼트마다 다른 색으로
+  구분되게"). 2~4행(세그먼트명/Target·Actual/개별 지표) 전체에 동일 배경, 검정 굵은
+  텍스트 — dataviz 스킬 카테고리컬 팔레트 1~5번 슬롯(GROUP_ORDER 순서와 1:1), 대비
+  계산 결과 5개 색 전부 흰 글자보다 검정 글자가 우세(00_Config.js 주석 참고).
+  ==========================================================
+  */
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
+
+    const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
+    const color = segmentColors[i % segmentColors.length];
+
+    sheet.getRange(rows.SEGMENT_HEADER_ROW, baseCol, 3, groupColCount)
+      .setBackground(color)
+      .setFontColor("#0b0b0b")
+      .setFontWeight("bold")
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle");
+
+  });
 
   /*
   ==========================================================
@@ -116,11 +163,11 @@ function applyTargetReportStyles_(sheet, rowCount){
 
   /*
   ==========================================================
-  Borders
+  Borders — 헤더 3행(2~4행) + 데이터 전체
   ==========================================================
   */
 
-  sheet.getRange(rows.REPORT_HEADER, 1, rowCount + 1, colCount)
+  sheet.getRange(rows.SEGMENT_HEADER_ROW, 1, rowCount + 3, colCount)
     .setBorder(true, true, true, true, true, true, "#CCCCCC", SpreadsheetApp.BorderStyle.SOLID);
 
   /*
@@ -133,27 +180,23 @@ function applyTargetReportStyles_(sheet, rowCount){
 
   /*
   ==========================================================
-  그룹별 7컬럼 서식 (2026-07-27 New/Pipeline 분리 — 숫자는 전부 소수점 없이,
-  달성%만 소수 2자리): Target New P1(정수) / Target Pipeline P1(정수) /
-  Target P1(합계, 정수) / Actual P1(정수) / 달성%(소수2) /
-  Target CPNP1(정수, 금액 콤마) / Actual CPNP1(정수, 금액 콤마)
+  그룹별 6컬럼 서식 (2026-07-30 Target/Actual 그룹핑, 달성% 제거 — P1 카운트는
+  정수, CPNP1은 금액이라 $ + 소수점 2자리 — 사용자 요청): Target New P1(정수) /
+  Target Pipeline P1(정수) / Target P1(합계, 정수) / Target CPNP1($#,##0.00) /
+  Actual P1(정수) / Actual CPNP1($#,##0.00)
   ==========================================================
   */
-
-  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
-  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
 
   CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
 
     const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
 
-    sheet.getRange(dataStartRow, baseCol, rowCount, 1).setNumberFormat("#,##0");      // Target New P1
-    sheet.getRange(dataStartRow, baseCol + 1, rowCount, 1).setNumberFormat("#,##0");  // Target Pipeline P1
-    sheet.getRange(dataStartRow, baseCol + 2, rowCount, 1).setNumberFormat("#,##0");  // Target P1(합계)
-    sheet.getRange(dataStartRow, baseCol + 3, rowCount, 1).setNumberFormat("#,##0");  // Actual P1
-    sheet.getRange(dataStartRow, baseCol + 4, rowCount, 1).setNumberFormat("0.00%");  // 달성%
-    sheet.getRange(dataStartRow, baseCol + 5, rowCount, 1).setNumberFormat("#,##0");  // Target CPNP1
-    sheet.getRange(dataStartRow, baseCol + 6, rowCount, 1).setNumberFormat("#,##0");  // Actual CPNP1
+    sheet.getRange(dataStartRow, baseCol, rowCount, 1).setNumberFormat("#,##0");           // Target New P1
+    sheet.getRange(dataStartRow, baseCol + 1, rowCount, 1).setNumberFormat("#,##0");       // Target Pipeline P1
+    sheet.getRange(dataStartRow, baseCol + 2, rowCount, 1).setNumberFormat("#,##0");       // Target P1(합계)
+    sheet.getRange(dataStartRow, baseCol + 3, rowCount, 1).setNumberFormat("$#,##0.00");   // Target CPNP1
+    sheet.getRange(dataStartRow, baseCol + 4, rowCount, 1).setNumberFormat("#,##0");       // Actual P1
+    sheet.getRange(dataStartRow, baseCol + 5, rowCount, 1).setNumberFormat("$#,##0.00");   // Actual CPNP1
 
   });
 
@@ -193,7 +236,7 @@ function applyTargetEngineInputStyles_(sheet){
   sheet.getRange(input.ROWS.DEAL_SHARE_START, valueCol, groupCount, 1)
     .setNumberFormat("0.00%");
 
-  sheet.getRange(input.CPNP1_BENCHMARK_MANUAL.DATA_START_ROW, valueCol, groupCount, 1)
+  sheet.getRange(input.CPNP1_BENCHMARK.DATA_START_ROW, valueCol, groupCount, 1)
     .setNumberFormat("$#,##0.00");
 
   sheet.getRange(input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW, monthStartCol, 1, monthCount)

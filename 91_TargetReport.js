@@ -19,9 +19,27 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.5.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-07-30)
+ * - 버그 수정(사용자 리포트: "AH:AK 값이 예전 리포트의 잔재로 보인다") — `clearTargetReportArea_()`
+ *   가 실제 헤더 폭(33컬럼)만큼만 지워서 옛 7컬럼/세그먼트 구조(38컬럼) 때의 34~38열
+ *   잔재가 안 지워지던 문제. 45컬럼 버퍼로 지우도록 수정(writeTargetReportHeaders_()의
+ *   HEADER_CLEAR_COLS와 동일 관례) — 다음 Generate 시 자동 정리됨.
+ * v1.6.0 (2026-07-30)
+ * - 헤더를 3행 구조(세그먼트명/Target·Actual/개별 지표)로 재설계 — 사용자 요청("세그먼트당
+ *   7컬럼 플랫 헤더가 너무 넓다"). `buildTargetReportHeaders_()`를 `buildTargetReportMetricHeaders_()`
+ *   (4행, 개별 지표 라벨만)로 교체, 신규 `writeTargetReportSegmentHeaderRow_()`(2행, 세그먼트당
+ *   병합)/`writeTargetReportTargetActualHeaderRow_()`(3행, Target 4컬럼/Actual 2컬럼 각각
+ *   병합)/`writeTargetReportHeaders_()`(2~4행 통합 — 기존 병합 breakApart 후 재작성, setupTargetReport()/
+ *   generateTargetReport_() 공용). 컬럼 순서 재배치 + 달성% 완전 제거(사용자 확인: "Progress는
+ *   다른 시트에서 확인") — 세그먼트당 7컬럼→6컬럼: Target(New P1/Pipeline P1/P1/CPNP1) +
+ *   Actual(P1/CPNP1). `CONFIG.TARGET.REPORT.ROWS`가 REPORT_HEADER/REPORT_DATA_START(2/3)에서
+ *   SEGMENT_HEADER_ROW/TARGET_ACTUAL_HEADER_ROW/METRIC_HEADER_ROW/REPORT_DATA_START(2/3/4/5)로
+ *   재정의됨(00_Config.js v1.18.0)에 맞춰 `generateTargetReport_()`/`updateTargetReportActuals_()`
+ *   컬럼 오프셋 전부 갱신. `resetTargetReportSheet_()`의 RESET_COLS 30→40(실제 컬럼 수
+ *   33 초과 대응). 색상은 92_TargetStyles.js v1.6.0에서 처리.
  * v1.5.0 (2026-07-30)
  * - 세그먼트 구조 전면 분해(3그룹 → 5세그먼트) 대응. `buildTargetReportHeaders_()`/
  *   `generateTargetReport_()`/`updateTargetReportActuals_()`/`clearTargetReportArea_()`는
@@ -106,37 +124,115 @@ function capitalizeGroupLabel_(group){
 
 /**
  * ==========================================================
- * Build Target Report Headers (그룹당 7컬럼 × 3그룹 + 고정 3컬럼)
+ * Build Target Report Metric Headers (4행 — 그룹당 6컬럼 × 5그룹 + 고정 3컬럼)
  *
- * WHY (2026-07-27 New/Pipeline 분리 표시 — 사용자 요청)
- * "Target_REP에서 P1이 합계로만 나온다, New P1 Target과 Pipeline P1 Target을
- * 따로 보고 싶다"는 요청에 따라 Target P1(합계) 앞에 Target New P1 / Target
- * Pipeline P1 두 컬럼을 추가(5컬럼 → 7컬럼). Actual P1은 여전히 실적 리드
- * 카운트 하나뿐(리드 생성 시점엔 New/Pipeline 트랙 구분이 없음 — 목표만
- * 트랙별로 나뉘고 실적/달성%는 계속 합계 기준).
+ * WHY (2026-07-30 헤더 3행 구조로 재설계 — 사용자 요청)
+ * 세그먼트당 7컬럼 플랫 헤더("Seminar Target New P1" 식)가 너무 넓어 가로 스크롤이
+ * 심하다는 지적으로, 세그먼트명(2행)/Target·Actual 구분(3행)/개별 지표(4행) 3단
+ * 헤더로 재설계 — 이 함수는 그중 4행(개별 지표 라벨)만 담당, 세그먼트명/Target·Actual
+ * 배너는 writeTargetReportSegmentHeaderRow_()/writeTargetReportTargetActualHeaderRow_()가
+ * 병합 셀로 별도 처리한다. 달성%는 "다른 시트에서 확인한다"는 사용자 확인으로 제거,
+ * 세그먼트당 7컬럼 → 6컬럼(Target: New P1/Pipeline P1/P1/CPNP1, Actual: P1/CPNP1).
  * ==========================================================
  */
-function buildTargetReportHeaders_(){
+function buildTargetReportMetricHeaders_(){
 
   const headers = CONFIG.TARGET.REPORT.FIXED_HEADERS.slice();
 
-  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
-
-    const label = capitalizeGroupLabel_(group);
-
-    headers.push(
-      label + " Target New P1",
-      label + " Target Pipeline P1",
-      label + " Target P1",
-      label + " Actual P1",
-      label + " 달성%",
-      label + " Target CPNP1",
-      label + " Actual CPNP1"
-    );
-
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(){
+    headers.push("New P1", "Pipeline P1", "P1", "CPNP1", "P1", "CPNP1");
   });
 
   return headers;
+
+}
+
+
+/**
+ * ==========================================================
+ * Write Target Report Segment Header Row (2행 — 세그먼트명 배너, 세그먼트당 병합)
+ * ==========================================================
+ */
+function writeTargetReportSegmentHeaderRow_(sheet){
+
+  const rows = CONFIG.TARGET.REPORT.ROWS;
+  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
+  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
+
+    const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
+    const range = sheet.getRange(rows.SEGMENT_HEADER_ROW, baseCol, 1, groupColCount);
+
+    range.merge();
+    range.setValue(capitalizeGroupLabel_(group));
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Write Target Report Target/Actual Header Row (3행 — Target/Actual 구분 배너,
+ * 세그먼트 내부에서 Target 4컬럼 / Actual 2컬럼으로 각각 병합)
+ * ==========================================================
+ */
+function writeTargetReportTargetActualHeaderRow_(sheet){
+
+  const rows = CONFIG.TARGET.REPORT.ROWS;
+  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
+  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
+  const targetCols = CONFIG.TARGET.REPORT.TARGET_SUBCOLUMN_COUNT;
+  const actualCols = CONFIG.TARGET.REPORT.ACTUAL_SUBCOLUMN_COUNT;
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
+
+    const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
+
+    const targetRange = sheet.getRange(rows.TARGET_ACTUAL_HEADER_ROW, baseCol, 1, targetCols);
+    targetRange.merge();
+    targetRange.setValue("Target");
+
+    const actualRange = sheet.getRange(rows.TARGET_ACTUAL_HEADER_ROW, baseCol + targetCols, 1, actualCols);
+    actualRange.merge();
+    actualRange.setValue("Actual");
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Write Target Report Headers (2~4행 전체 — 병합 해제 후 재작성)
+ *
+ * WHY
+ * setupTargetReport()(최초 1회)와 generateTargetReport_()(매 실행)이 동일한 헤더
+ * 작성 로직을 공유해야 코드 중복 없이 항상 최신 구조로 맞춰진다(v1.4.1에서 겪은
+ * "헤더가 안 갱신되는" 버그 재발 방지 — 매번 다시 씀). 병합 범위가 이전 실행과
+ * 다를 수 있어(세그먼트 수/컬럼 수 변경 등) 먼저 breakApart()로 기존 병합을 전부
+ * 해제한 뒤 다시 병합한다 — 안 그러면 겹치는 병합 범위끼리 충돌해 에러가 난다.
+ * ==========================================================
+ */
+function writeTargetReportHeaders_(sheet){
+
+  const HEADER_CLEAR_COLS = 40;
+  const rows = CONFIG.TARGET.REPORT.ROWS;
+
+  const headerClearRange = sheet.getRange(rows.SEGMENT_HEADER_ROW, 1, 3, HEADER_CLEAR_COLS);
+
+  if(headerClearRange.getMergedRanges().length > 0){
+    headerClearRange.breakApart();
+  }
+
+  headerClearRange.clearContent();
+
+  writeTargetReportSegmentHeaderRow_(sheet);
+  writeTargetReportTargetActualHeaderRow_(sheet);
+
+  const metricHeaders = buildTargetReportMetricHeaders_();
+  sheet.getRange(rows.METRIC_HEADER_ROW, 1, 1, metricHeaders.length).setValues([metricHeaders]);
 
 }
 
@@ -286,20 +382,26 @@ function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
 /**
  * ==========================================================
  * Clear Target Report Area
+ *
+ * WHY (2026-07-30 버그 수정 — 사용자 리포트: "AH:AK 값이 예전 리포트의 잔재로 보인다")
+ * 세그먼트당 컬럼이 7→6으로 줄면서(38컬럼→33컬럼) 실제 헤더 폭(colCount=33)만큼만
+ * clearContent()하면, 옛 7컬럼 구조 때 썼던 34~38열(AH~AL) 데이터가 안 지워지고
+ * 그대로 남는다. HEADER_CLEAR_COLS(writeTargetReportHeaders_())와 동일한 버퍼
+ * 관례로 45컬럼까지 넉넉히 지운다(향후 컬럼 수가 또 줄어도 안전).
  * ==========================================================
  */
 function clearTargetReportArea_(sheet){
 
   const rows = CONFIG.TARGET.REPORT.ROWS;
   const lastRow = sheet.getLastRow();
-  const colCount = buildTargetReportHeaders_().length;
+  const CLEAR_COLS_BUFFER = 45;
 
   if(lastRow >= rows.REPORT_DATA_START){
 
     sheet.getRange(
       rows.REPORT_DATA_START, 1,
       lastRow - rows.REPORT_DATA_START + 1,
-      colCount
+      CLEAR_COLS_BUFFER
     ).clearContent();
 
   }
@@ -324,7 +426,9 @@ function clearTargetReportArea_(sheet){
 function resetTargetReportSheet_(sheet){
 
   const RESET_ROWS = 3000;
-  const RESET_COLS = 30;
+  // 2026-07-30 헤더 3행 구조 도입 후 실제 컬럼 수(3 고정 + 5세그먼트×6 = 33)가 예전
+  // 30을 넘어서 40으로 확장(HEADER_CLEAR_COLS와 동일한 버퍼 관례).
+  const RESET_COLS = 40;
 
   const range = sheet.getRange(1, 1, RESET_ROWS, RESET_COLS);
 
@@ -368,9 +472,6 @@ function setupTargetReport(){
     sheet = ss.insertSheet(CONFIG.TARGET.SHEET);
   }
 
-  const rows = CONFIG.TARGET.REPORT.ROWS;
-  const headers = buildTargetReportHeaders_();
-
   // 구버전(체크박스+파라미터 요약이 1~3행에 있던 레이아웃, 3행은 전체 컬럼
   // 병합 + italic 서식)을 이미 실행해본 시트일 수 있음 — clearContent()만으로는
   // 병합/서식(이탤릭 등)이 안 지워져 새 레이아웃과 충돌(예: A3 폰트만 다르게
@@ -378,7 +479,7 @@ function setupTargetReport(){
   // 넉넉한 범위를 병합 해제 + 서식 초기화 + 내용/유효성 삭제로 완전히 리셋한다.
   resetTargetReportSheet_(sheet);
 
-  sheet.getRange(rows.REPORT_HEADER, 1, 1, headers.length).setValues([headers]);
+  writeTargetReportHeaders_(sheet);
 
   // Target_Engine 최초 생성 + Block 0 기본값 세팅 + Block A~D 1회 계산
   refreshTargetEngine_();
@@ -480,16 +581,18 @@ function generateTargetReport_(){
       const targetPipelineP1 = target.weeklyPipelineP1Target;
       const targetP1 = target.weeklyP1Target;
       const actualP1 = actualCounts[group] || 0;
-      const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
 
       // 그 달의 Actual CPNP1 값을 그 달 모든 주에 동일하게 반복 표시(Target CPNP1과
       // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
       const actualCPNP1Key = group + "|" + week.month;
       const actualCPNP1 = actualCPNP1ByGroupMonth[actualCPNP1Key];
 
+      // 2026-07-30 컬럼 순서 재배치(달성% 제거, 사용자 확인 — "Progress는 다른
+      // 시트에서 확인") — Target 4컬럼(New P1/Pipeline P1/P1/CPNP1) 다음 Actual
+      // 2컬럼(P1/CPNP1), buildTargetReportMetricHeaders_()/헤더 3행 구조와 순서 일치.
       row.push(
-        targetNewP1, targetPipelineP1, targetP1,
-        actualP1, achievementPct, target.weeklyCPNP1Target,
+        targetNewP1, targetPipelineP1, targetP1, target.weeklyCPNP1Target,
+        actualP1,
         actualCPNP1 === undefined ? "" : actualCPNP1
       );
 
@@ -501,24 +604,19 @@ function generateTargetReport_(){
 
   clearTargetReportArea_(sheet);
 
-  const headers = buildTargetReportHeaders_();
-
   // 헤더는 원래 setupTargetReport()(최초 1회)에서만 썼는데, Generate를 반복
-  // 실행해도 헤더가 그때 그대로 남아있어 컬럼 구조가 바뀌면(2026-07-27 New/
-  // Pipeline 분리처럼 5→7컬럼) 헤더와 데이터 폭이 어긋나는 문제가 실측됨
-  // (사용자 리포트: "매칭되는 헤더가 없다"). Generate할 때마다 헤더도 항상
-  // 다시 써서 코드의 현재 buildTargetReportHeaders_()와 무조건 일치시킨다.
-  // 넉넉한 버퍼(40컬럼)까지 먼저 비워서, 향후 컬럼 수가 줄어드는 변경이
-  // 생겨도 옛 헤더 텍스트가 뒤쪽에 안 남도록 방어(Target_Engine wide-clear와
-  // 동일한 교훈, 2026-07-27).
-  const HEADER_CLEAR_COLS = 40;
-  sheet.getRange(CONFIG.TARGET.REPORT.ROWS.REPORT_HEADER, 1, 1, HEADER_CLEAR_COLS).clearContent();
-  sheet.getRange(CONFIG.TARGET.REPORT.ROWS.REPORT_HEADER, 1, 1, headers.length)
-    .setValues([headers]);
+  // 실행해도 헤더가 그때 그대로 남아있어 컬럼 구조가 바뀌면 헤더와 데이터 폭이
+  // 어긋나는 문제가 실측됨(사용자 리포트: "매칭되는 헤더가 없다"). Generate할
+  // 때마다 writeTargetReportHeaders_()로 헤더 3행(세그먼트명/Target·Actual/개별
+  // 지표)을 전부 다시 써서 코드의 현재 구조와 무조건 일치시킨다(2026-07-27 교훈,
+  // 2026-07-30 3행 구조 확장에도 동일 적용).
+  writeTargetReportHeaders_(sheet);
+
+  const metricHeaders = buildTargetReportMetricHeaders_();
 
   sheet.getRange(
     CONFIG.TARGET.REPORT.ROWS.REPORT_DATA_START, 1,
-    outputRows.length, headers.length
+    outputRows.length, metricHeaders.length
   ).setValues(outputRows);
 
   applyTargetReportStyles_(sheet, outputRows.length);
@@ -535,13 +633,13 @@ function generateTargetReport_(){
 
 /**
  * ==========================================================
- * Update Target Report Actuals Only (Engine 재계산 없이 Actual/달성%만 갱신)
+ * Update Target Report Actuals Only (Engine 재계산 없이 Actual만 갱신)
  *
  * WHY
  * §8 "실적 컬럼은 기존 refreshACQSummary_() 호출 지점에서 함께 갱신".
- * Target 컬럼(이미 Generate로 계산됨)은 그대로 두고 Actual P1/달성%/
- * Actual CPNP1만 다시 계산해 덮어쓴다 — Engine 전체 재계산(목표 재산출)은
- * Generate 체크박스에서만 일어난다.
+ * Target 컬럼(이미 Generate로 계산됨)은 그대로 두고 Actual P1/Actual CPNP1만
+ * 다시 계산해 덮어쓴다 — Engine 전체 재계산(목표 재산출)은 Generate 체크박스에서만
+ * 일어난다. 달성%는 2026-07-30부터 이 리포트에서 제거(다른 시트에서 확인, 사용자 확인).
  * ==========================================================
  */
 function updateTargetReportActuals_(sheet){
@@ -581,22 +679,18 @@ function updateTargetReportActuals_(sheet){
 
       const baseCol = fixedColCount + i * groupColCount;
 
-      // 컬럼 순서(2026-07-27 New/Pipeline 분리, 7컬럼): 0=Target New P1,
-      // 1=Target Pipeline P1, 2=Target P1(합계), 3=Actual P1, 4=달성%,
-      // 5=Target CPNP1, 6=Actual CPNP1. 0/1/2/5는 읽기만 하고 그대로 둠(Generate가
-      // 이미 계산해둔 목표값 — 여기선 실적/달성%만 갱신).
-      const targetP1 = row[baseCol + 2];
-
+      // 컬럼 순서(2026-07-30 Target/Actual 그룹핑, 6컬럼): 0=Target New P1,
+      // 1=Target Pipeline P1, 2=Target P1(합계), 3=Target CPNP1, 4=Actual P1,
+      // 5=Actual CPNP1. 0~3은 읽기 대상이 아님(Generate가 이미 계산해둔 목표값 —
+      // 여기선 4/5(Actual)만 갱신).
       const actualP1 = actualCounts[group] || 0;
-      const achievementPct = targetP1 > 0 ? actualP1 / targetP1 : "";
 
       // 그 달의 Actual CPNP1을 그 달 모든 주에 동일하게 반복 표시(generateTargetReport_()와
       // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
       const actualCPNP1 = actualCPNP1ByGroupMonth[group + "|" + month];
 
-      row[baseCol + 3] = actualP1;
-      row[baseCol + 4] = achievementPct;
-      row[baseCol + 6] = actualCPNP1 === undefined ? "" : actualCPNP1;
+      row[baseCol + 4] = actualP1;
+      row[baseCol + 5] = actualCPNP1 === undefined ? "" : actualCPNP1;
 
     });
 

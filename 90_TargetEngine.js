@@ -5,25 +5,79 @@
  *
  * Responsibility
  * Target_Engine 시트(숨김)의 Block A~D 계산/작성. Leads_OPS(New P1/
- * P1당 가치)와 외부 채널시트/Naver 시트(CPNP1 벤치마크 분자)/Deal Tracker
- * (딜 비중)를 원본으로, top-down 목표 역산 체인을 실행한다. Target_REP
- * (91_TargetReport.js)은 이 시트를 조회만 하고 원본을 재스캔하지 않는다
- * (NewP1/Events 패턴과 동일).
+ * P1당 가치)와 Block 0의 세그먼트별 월별 수동 Spent(CPNP1 벤치마크 분자)/
+ * Deal Tracker(딜 비중)를 원본으로, top-down 목표 역산 체인을 실행한다.
+ * Target_REP(91_TargetReport.js)은 이 시트를 조회만 하고 원본을 재스캔하지
+ * 않는다(NewP1/Events 패턴과 동일).
  *
  * 설계 문서
  * docs/TargetReportDesign.md
  *
  * Must NOT
  * - Leads_Master / MTA_Master 직접 조회 (Leads_OPS 단일 소스 원칙, NewP1과 동일)
- * - Target_Engine Block 0(Input) 영역을 덮어쓰기 (읽기만, Events_OPS Manual 패턴 준용)
+ * - Target_Engine Block 0(Input) 영역을 덮어쓰기 (읽기만, Events_OPS Manual 패턴 준용
+ *   — 단 CPNP1_BENCHMARK 섹션은 예외, v1.19.0/v1.20.0 참고)
  *
  * Stage
  * 90 Reporting (Target)
  *
  * Version
- * v1.18.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-07-30)
+ * - 버그 수정(사용자 리포트: "Seminar Target P1이 0인데 CPNP1 컬럼은 채워져 있다") —
+ *   `computeTargetDerivationRows_()`에서 monthlyCPNP1Target이 seasonalityPct(Seminar
+ *   비활성 월 게이트)와 무관하게 Block A 벤치마크만 보고 계산돼, New/Pipeline P1
+ *   Target이 0으로 강제된 Seminar 비활성 월에도 CPNP1 Target 값이 그대로 남아있던
+ *   문제. Seminar이고 seasonalityPct===0(비활성 월)이면 CPNP1 Target도 0으로 통일.
+ *   `testComputeTargetDerivationRows()`에 OCT(활성, CPNP1=540 정상 계산)/AUG(비활성,
+ *   CPNP1=0) 양쪽 검증 추가(기존엔 AUG CPNP1=450을 "정상"으로 잘못 기대하던 테스트가
+ *   이 버그를 그대로 통과시키고 있었음).
+ * v1.21.0 (2026-07-30)
+ * - Seminar Active Campaign Months를 `CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS` 하드코딩에서
+ *   Block 0 신규 섹션 5(체크박스, row 32, `INPUT.SEMINAR_ACTIVE_MONTHS`)로 이동 — 사용자
+ *   요청: "캠페인 계획이 바뀔 때마다 코드를 고치는 게 아니라 시트에서 체크만 바꾸고 싶다".
+ *   `readTargetEngineInputs_()`가 이 체크박스 행을 읽어 `inputs.seminarActiveMonths`
+ *   (체크된 달 배열)로 반환, `computeTargetDerivationRows_()`는 이제 CONFIG 대신 이 값을
+ *   `computeEvenSeasonalityForMonths_()`에 넘긴다. `setupTargetEngineMonthlyGridDefaults_()`에
+ *   체크박스 시딩 로직 신규(최초 실행 시에만 `DEFAULTS.SEMINAR_ACTIVE_MONTHS`로 채움,
+ *   `insertCheckboxes()`가 빈 셀을 unchecked로 초기화해버리므로 "비어있는지" 판정은 그 호출
+ *   전에 먼저 해야 함 — 함수 WHY 참고). Block 0 grid 배치 읽기(`readTargetEngineInputs_()`)
+ *   범위를 `MANUAL_SEGMENT_SPENT` 끝(row 30)에서 `SEMINAR_ACTIVE_MONTHS.ROW`(32)까지 확장.
+ *   `testComputeTargetDerivationRows()`의 픽스처에 `inputs.seminarActiveMonths` 추가.
+ * v1.20.0 (2026-07-30)
+ * - Target CPNP1 벤치마크(Block A) 재활성화 — CONFIG.TARGET.BENCHMARK.CPNP1_FYS/WEIGHTS를
+ *   00_Config.js v1.16.0에서 `[]`→`[26]`/`[1]`로 전환하면서, 분자를 죽은 채널시트/Naver
+ *   참조 대신 Block 0의 세그먼트별 월별 수동 Spent로 교체. 신규
+ *   `buildSpentByGroupFYMonthFromManualInput_()`(순수 함수)가 `inputs.monthlySegmentSpent`를
+ *   `computeBenchmarkBlockRows_()`가 기대하는 group->fy->month 형태로 감싸고,
+ *   `refreshTargetEngine_()`가 이걸로 `spentByGroupFYMonth`를 만든다. 죽은 코드
+ *   `readChannelRawRows_()`/`readNaverRawRows_()`/`computeCombinedSpentByGroupFYMonth_()`
+ *   완전 삭제(3그룹 키 "events"/"contact"/"content" 하드코딩이라 5세그먼트 GROUP_ORDER와도
+ *   이미 안 맞던 죽은 코드였음). `testComputeBenchmarkBlockRows()` 픽스처/기댓값 갱신
+ *   (cpnp1Benchmark가 이제 0이 아니라 실제 계산값이어야 함).
+ * - Seminar 전용 월별 배분 예외 신규 — FY27 Seminar는 Oct/Jan/Apr 3회만 개최되고
+ *   캠페인은 행사 30일 전 시작이라(사용자 지적), Block A의 과거 실적 기반 시즌성을
+ *   그대로 쓰면 비캠페인 월(Aug/Nov 등)에도 New P1 Target이 생겨 비현실적이었음.
+ *   신규 `computeEvenSeasonalityForMonths_()`(순수 함수)가 `CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS`
+ *   (00_Config.js v1.16.0 신규, ["SEP","OCT","DEC","JAN","MAR","APR"])에 균등 분배한
+ *   시즌성 맵을 만들고, `computeTargetDerivationRows_()`가 group==="Seminar"일 때만
+ *   Block A의 실적 기반 seasonalityPct 대신 이 맵을 써서 월별 New/Pipeline P1 Target을
+ *   전개한다(Block A 자체의 시즌성 표시는 참고 지표로 그대로 유지, 건드리지 않음).
+ *   Seminar 전용 하드코딩(다른 세그먼트 필요해지면 그때 일반화, 2026-07-30 사용자 확정).
+ *   `testComputeTargetDerivationRows()`에 OCT(활성 월)/Webinar(통제군) 케이스 추가.
+ * v1.19.0 (2026-07-30)
+ * - 세그먼트별 FY26 CPNP1 Benchmark(Block 0 CPNP1_BENCHMARK 섹션)를 수동 입력에서
+ *   계산으로 전환 — 세그먼트별 월별 Spent 수동 취합이 완료되면서 사용자가 "월별
+ *   Segment Spent 합 ÷ FY26 Segment New P1 합"으로 직접 계산하자고 요청. 신규
+ *   computeCPNP1BenchmarkByGroup_()(순수 함수, newP1CountByGroup은
+ *   computeTargetLeadsOPSAggregates_()가 이미 만들던 값 재사용)를 refreshTargetEngine_()
+ *   에서 호출해 계산 후 writeTargetEngineCPNP1BenchmarkValues_()로 시트에 씀 — 이 섹션은
+ *   Block 0의 "절대 안 덮어씀" 원칙의 유일한 예외가 됨(00_Config.js 주석 참고).
+ *   readTargetEngineInputs_()는 더 이상 이 섹션을 입력으로 읽지 않음(cpnp1BenchmarkByGroup
+ *   필드 제거 — 어차피 아무도 안 쓰고 있었음). CONFIG.TARGET.INPUT.CPNP1_BENCHMARK_MANUAL도
+ *   CPNP1_BENCHMARK로 이름 변경(00_Config.js v1.15.0).
  * v1.18.0 (2026-07-30)
  * - refreshTargetEngine_() 끝에서 신규 applyTargetEngineBlockStyles_()
  *   (92_TargetStyles.js) 호출 — Block A~D에 숫자 서식(천단위 콤마, $/%는
@@ -853,91 +907,6 @@ function openTargetExternalSheetByGid_(spreadsheetId, gid){
 
 /**
  * ==========================================================
- * Read Channel Sheet Raw Rows (전체 행, FY/날짜 필터 없음)
- *
- * WHY
- * 벤치마크(월 합산, FY 필터)와 실적(주 단위, 정확한 날짜 매칭)이 둘 다
- * 채널시트를 원본으로 쓰므로, 원시 행 읽기를 한 곳에 두고 두 용도에서
- * 재사용한다 (91_TargetReport.js의 주간 실적 매칭도 이 함수를 그대로 씀).
- *
- * @return {Array<{startDate:Date, events:number, contact:number, content:number}>}
- * ==========================================================
- */
-function readChannelRawRows_(){
-
-  const sheet = openTargetExternalSheetByGid_(
-    CONFIG.TARGET.EXTERNAL.SPREADSHEET_ID, CONFIG.TARGET.EXTERNAL.CHANNEL_SHEET_GID
-  );
-
-  if(!sheet) return [];
-
-  const cols = CONFIG.TARGET.EXTERNAL.CHANNEL_COLUMNS;
-  const values = sheet.getDataRange().getValues();
-
-  const rows = [];
-
-  for(let r = 1; r < values.length; r++){
-
-    const row = values[r];
-    const startDate = row[cols.START_DATE - 1];
-
-    if(!(startDate instanceof Date) || isNaN(startDate.getTime())) continue;
-
-    rows.push({
-      startDate: startDate,
-      events: parseCurrencyValue_(row[cols.EVENT_SPENT - 1]),
-      contact: parseCurrencyValue_(row[cols.CONTACT_SPENT - 1]),
-      content: parseCurrencyValue_(row[cols.CONTENT_SPENT - 1])
-    });
-
-  }
-
-  return rows;
-
-}
-
-
-/**
- * ==========================================================
- * Read Naver Sheet Raw Rows (전체 행, FY/날짜 필터 없음)
- *
- * @return {Array<{startDate:Date, spentNZD:number}>}
- * ==========================================================
- */
-function readNaverRawRows_(){
-
-  const sheet = openTargetExternalSheetByGid_(
-    CONFIG.TARGET.EXTERNAL.SPREADSHEET_ID, CONFIG.TARGET.EXTERNAL.NAVER_SHEET_GID
-  );
-
-  if(!sheet) return [];
-
-  const cols = CONFIG.TARGET.EXTERNAL.NAVER_COLUMNS;
-  const values = sheet.getDataRange().getValues();
-
-  const rows = [];
-
-  for(let r = 1; r < values.length; r++){
-
-    const row = values[r];
-    const startDate = row[cols.START_DATE - 1];
-
-    if(!(startDate instanceof Date) || isNaN(startDate.getTime())) continue;
-
-    rows.push({
-      startDate: startDate,
-      spentNZD: parseCurrencyValue_(row[cols.SPENT_NZD - 1])
-    });
-
-  }
-
-  return rows;
-
-}
-
-
-/**
- * ==========================================================
  * Parse Deal Tracker Close Date (Plain Text 문자열 우선, Date 객체도 방어)
  *
  * WHY
@@ -1209,58 +1178,56 @@ function testComputeDealTrackerCountsByKey_(){
 
 /**
  * ==========================================================
- * Compute Combined Spent By Group/FY/Month (Block A 벤치마크용 — CPNP1_FYS만)
+ * Build Spent By Group/FY/Month From Manual Input (Block A 벤치마크 분자 — 2026-07-30 재활성화)
  *
- * roughMonthlySum — 각 행의 Start Date가 속한 (fy, month)로 귀속시켜 합산
- * (구방식 일~토/신방식 월~일 무관, docs/TargetReportDesign.md §7).
+ * WHY
+ * CPNP1 벤치마크 분자는 원래 외부 채널시트/Naver 자동집계였으나(구
+ * computeCombinedSpentByGroupFYMonth_(), event/contact/lead 3그룹 단위라 5세그먼트로
+ * 자동 분해가 안 돼 CPNP1_FYS를 빈 배열로 두고 잠정 중단했었음 — 게다가 3그룹 키
+ * 하드코딩이라 5세그먼트 GROUP_ORDER와도 안 맞는 죽은 코드였음, 전부 삭제). 세그먼트별
+ * 월별 Spent 수동 취합(Block 0 MANUAL_SEGMENT_SPENT)이 끝나면서, 그 값을 그대로
+ * computeBenchmarkBlockRows_()가 기대하는 group -> fy -> month 형태로 감싸서 재사용한다
+ * — 이 그리드는 항상 CONFIG.TARGET.P1_VALUE_FY(FY26) 1개 FY만 대표한다(과거 FY
+ * segment-level spend 데이터 없음, CPNP1_WEIGHTS도 [1]로 단일 FY).
  *
- * WHY (2026-07-30 조기 반환 추가)
- * CONFIG.TARGET.BENCHMARK.CPNP1_FYS가 세그먼트 분해로 빈 배열이 되면서(채널시트가
- * 3그룹 단위라 5세그먼트 자동 분해 불가 — exec-plan 참고) 이 함수의 결과는 항상
- * 빈 객체가 된다. 그 결과를 얻으려고 매번 외부 스프레드시트를 2개(채널시트/Naver)
- * 여는 왕복 호출을 하는 건 낭비이므로, CPNP1_FYS가 비어있으면 외부 호출 자체를
- * 건너뛴다(Article 10: Read Once/불필요한 호출 배제).
- *
- * @return {Object}  group -> fy -> month -> spentSum(NZD)
+ * @param {Object} monthlySegmentSpent  group -> {month: spent} (readTargetEngineInputs_() 결과)
+ * @param {number} fy                   이 그리드가 대표하는 FY (CONFIG.TARGET.P1_VALUE_FY)
+ * @return {Object}  group -> fy -> month -> spent (computeBenchmarkBlockRows_() 입력 형태)
  * ==========================================================
  */
-function computeCombinedSpentByGroupFYMonth_(){
+function buildSpentByGroupFYMonthFromManualInput_(monthlySegmentSpent, fy){
 
   const result = {};
-  const cpnp1FYs = CONFIG.TARGET.BENCHMARK.CPNP1_FYS;
 
-  if(cpnp1FYs.length === 0) return result;
-
-  const addToResult = function(group, startDate, spent){
-
-    const fy = Number(getFiscalYear(startDate).replace("FY", ""));
-
-    if(cpnp1FYs.indexOf(fy) === -1) return;
-
-    const month = getFiscalMonthLabel(startDate);
-
-    if(!result[group]) result[group] = {};
-    if(!result[group][fy]) result[group][fy] = {};
-
-    result[group][fy][month] = (result[group][fy][month] || 0) + spent;
-
-  };
-
-  readChannelRawRows_().forEach(function(row){
-
-    addToResult("events", row.startDate, row.events);
-    addToResult("contact", row.startDate, row.contact);
-    addToResult("content", row.startDate, row.content);
-
-  });
-
-  readNaverRawRows_().forEach(function(row){
-
-    addToResult("contact", row.startDate, row.spentNZD);
-
+  Object.keys(monthlySegmentSpent || {}).forEach(function(group){
+    result[group] = {};
+    result[group][fy] = monthlySegmentSpent[group];
   });
 
   return result;
+
+}
+
+
+/**
+ * Test: buildSpentByGroupFYMonthFromManualInput_()
+ */
+function testBuildSpentByGroupFYMonthFromManualInput(){
+
+  const monthlySegmentSpent = {
+    Seminar: { AUG: 1000, SEP: 2000 },
+    Webinar: { AUG: 500 }
+  };
+
+  const result = buildSpentByGroupFYMonthFromManualInput_(monthlySegmentSpent, 26);
+
+  const pass =
+    result.Seminar[26].AUG === 1000 &&
+    result.Seminar[26].SEP === 2000 &&
+    result.Webinar[26].AUG === 500;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1355,15 +1322,86 @@ function computeTargetLeadsOPSAggregates_(){
 
 /**
  * ==========================================================
+ * Compute CPNP1 Benchmark By Group (Block 0 CPNP1_BENCHMARK 섹션 — 예산 기반 도출 체인 전용)
+ *
+ * WHY (2026-07-30, 수동 입력 → 계산 전환)
+ * 세그먼트별 FY26 CPNP1 벤치마크는 원래 사용자가 시트에 직접 입력하는 값이었음
+ * (docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md Decision Log —
+ * "채널시트 자동집계 아님"). 세그먼트별 월별 Spent 수동 취합이 끝나면서 사용자가
+ * "월별 Segment Spent 합 ÷ FY26 Segment New P1 합"으로 직접 계산하자고 요청(2026-07-30).
+ * 분모(newP1CountByGroup)는 computeTargetLeadsOPSAggregates_()가 이미 만들어두던 값을
+ * 그대로 재사용 — FY26(P1_VALUE_FY) 전체 New P1 수(월별 세분 불필요, 연간 총합만 필요).
+ *
+ * @param {Object} monthlySegmentSpent  group -> {month: spent} (readTargetEngineInputs_() 결과)
+ * @param {Object} newP1CountByGroup    group -> FY26 New P1 수 (computeTargetLeadsOPSAggregates_() 결과)
+ * @param {Array<string>} groupOrder    CONFIG.TARGET.GROUP_ORDER
+ * @return {Object}  group -> CPNP1 벤치마크 (New P1이 0이면 0, 분모 방어)
+ * ==========================================================
+ */
+function computeCPNP1BenchmarkByGroup_(monthlySegmentSpent, newP1CountByGroup, groupOrder){
+
+  const result = {};
+
+  groupOrder.forEach(function(group){
+
+    const byMonth = monthlySegmentSpent[group] || {};
+    const totalSpent = Object.keys(byMonth).reduce(function(sum, month){
+      return sum + (Number(byMonth[month]) || 0);
+    }, 0);
+
+    const newP1Count = newP1CountByGroup[group] || 0;
+
+    result[group] = newP1Count > 0 ? totalSpent / newP1Count : 0;
+
+  });
+
+  return result;
+
+}
+
+
+/**
+ * Test: computeCPNP1BenchmarkByGroup_()
+ */
+function testComputeCPNP1BenchmarkByGroup(){
+
+  const monthlySegmentSpent = {
+    Seminar: { AUG: 1000, SEP: 2000, OCT: 0 },
+    Webinar: { AUG: 500, SEP: 500 },
+    BOFU: {}
+  };
+  const newP1CountByGroup = { Seminar: 30, Webinar: 0, BOFU: 10 };
+  const groupOrder = ["Seminar", "Webinar", "BOFU"];
+
+  const result = computeCPNP1BenchmarkByGroup_(monthlySegmentSpent, newP1CountByGroup, groupOrder);
+
+  const expectedSeminar = 3000 / 30; // 100
+  const expectedWebinar = 0; // New P1 분모 0 → 분모 방어로 0
+  const expectedBOFU = 0;    // Spent 0 → 0/10 = 0
+
+  const pass =
+    Math.abs(result.Seminar - expectedSeminar) < 1e-6 &&
+    result.Webinar === expectedWebinar &&
+    result.BOFU === expectedBOFU;
+
+  Logger.log("Seminar CPNP1 Benchmark: " + result.Seminar + " (expected " + expectedSeminar + ")");
+  Logger.log("Webinar CPNP1 Benchmark: " + result.Webinar + " (expected 0, New P1 분모 0)");
+  Logger.log("BOFU CPNP1 Benchmark: " + result.BOFU + " (expected 0, Spent 0)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute CPNP1 Ratio By FY/Month (분모=New P1이 0이면 그 셀은 결측)
  *
  * WHY (2026-07-30 hasOwnProperty 수정)
  * 원래 `spentMonths[month] || 0`는 "그 달 지출 데이터가 없음"과 "그 달 지출이
  * 정확히 0원"을 구분하지 못해, 데이터가 아예 없는 달도 CPNP1 $0으로 잘못
- * 계산됐다. 세그먼트 분해로 CPNP1 벤치마크가 당분간 공란(빈 배열, 위
- * computeCombinedSpentByGroupFYMonth_() 참고)이 되면서 이 구분이 다시 중요해질
- * 수 있어(Phase 1 캠페인 데이터 연동 후 재활성화 시 일부 달만 데이터가 있을
- * 가능성) hasOwnProperty로 명시적 결측 처리를 추가.
+ * 계산됐다. 세그먼트별 월별 Spent 수동 취합 그리드(buildSpentByGroupFYMonthFromManualInput_()
+ * 참고)도 일부 세그먼트가 특정 달에 캠페인이 아예 없는 경우(예: Seminar)가 있어
+ * 이 구분이 여전히 중요 — hasOwnProperty로 명시적 결측 처리를 유지한다.
  *
  * @param {Object} spentByFYMonth       fy -> month -> spent
  * @param {Object} newP1CountsByFYMonth fy -> month -> count
@@ -1501,9 +1539,10 @@ function testComputeBenchmarkBlockRows(){
     }
   };
 
+  // 2026-07-30: CPNP1_FYS가 [26](단일 FY)로 재활성화되면서 25 픽스처는 더 이상
+  // 안 쓰임(가중치 배열에 25가 없으면 computeWeightedAverage_()가 무시함) — 26만 남김.
   const spent = {
     Seminar: {
-      25: { AUG: 2000 },
       26: { AUG: 3000 }
     }
   };
@@ -1513,21 +1552,17 @@ function testComputeBenchmarkBlockRows(){
   const augRow = rows.filter(function(r){ return r.group === "Seminar" && r.month === "AUG"; })[0];
 
   const expectedWeightedAvg = (1 * 10 + 2 * 20 + 3 * 30) / 6; // 23.333...
+  const expectedCpnp1Benchmark = 3000 / 30; // 100 — CPNP1_FYS=[26] 단일 FY(2026-07-30 재활성화)
 
-  // 2026-07-30: CONFIG.TARGET.BENCHMARK.CPNP1_FYS가 빈 배열로 잠정 중단돼(세그먼트
-  // 분해로 채널시트 자동집계 폐기, exec-plan 참고) cpnp1Benchmark는 이제 입력한
-  // spent 픽스처와 무관하게 항상 0이 되는 게 올바른 동작 — computeWeightedAverage_()가
-  // keys=[]일 때 0을 반환하기 때문(denominator 0 방어). New P1 가중평균 로직 자체는
-  // 이 중단과 무관하게 그대로 검증한다.
   const pass =
     rows.length === CONFIG.TARGET.GROUP_ORDER.length * 12 &&
     Math.abs(augRow.weightedAvgNewP1 - expectedWeightedAvg) < 1e-6 &&
-    augRow.cpnp1Benchmark === 0 &&
+    Math.abs(augRow.cpnp1Benchmark - expectedCpnp1Benchmark) < 1e-6 &&
     augRow.seasonalityPct > 0;
 
   Logger.log("Row count: " + rows.length + " (expected " + (CONFIG.TARGET.GROUP_ORDER.length * 12) + ")");
   Logger.log("AUG weightedAvgNewP1: " + augRow.weightedAvgNewP1 + " (expected " + expectedWeightedAvg + ")");
-  Logger.log("AUG cpnp1Benchmark: " + augRow.cpnp1Benchmark + " (expected 0 — CPNP1_FYS 잠정 중단)");
+  Logger.log("AUG cpnp1Benchmark: " + augRow.cpnp1Benchmark + " (expected " + expectedCpnp1Benchmark + ", CPNP1_FYS=[26] 단일 FY)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -2184,6 +2219,65 @@ function testComputeDealShareBlockRows(){
 
 /**
  * ==========================================================
+ * Compute Even Seasonality For Months (활성 월에 균등 분배, 비활성 월은 0)
+ *
+ * WHY (2026-07-30, Seminar 캠페인 월 예외)
+ * Seminar처럼 캠페인이 1년 내내가 아니라 특정 달에만 진행되는 세그먼트는
+ * Block A의 과거 실적 기반 시즌성(FY24:25:26 가중평균 New P1 비중)을 그대로
+ * 쓰면 캠페인이 없는 달에도 New P1 Target이 생겨 비현실적이다(사용자 지적:
+ * "Seminar는 FY27 Oct/Jan/Apr 3회만 개최, 캠페인은 행사 30일 전 시작 —
+ * Aug/Nov 등 비캠페인 월에 Target New P1이 있는 건 nonsense"). 활성 월
+ * 목록(CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS)만 주어지면 그 안에서 균등
+ * 분배하고 나머지 달은 0으로 채운다 — computeTargetDerivationRows_()가
+ * Seminar 그룹의 월별 분배에만 이 함수를 쓰고, Block A 자체(과거 실적
+ * 벤치마크 표시)는 건드리지 않는다(참고 지표로서의 실측 시즌성은 그대로 유지).
+ *
+ * @param {Array<string>} activeMonths  CONFIG.ACQ.FISCAL_MONTH_ORDER 라벨 목록(예: ["SEP","OCT",...])
+ * @return {Object}  month -> weight (활성 월 합 = 1, 12개월 전부 키 존재)
+ * ==========================================================
+ */
+function computeEvenSeasonalityForMonths_(activeMonths){
+
+  const result = {};
+  const weight = activeMonths.length > 0 ? 1 / activeMonths.length : 0;
+
+  CONFIG.ACQ.FISCAL_MONTH_ORDER.forEach(function(month){
+    result[month] = activeMonths.indexOf(month) !== -1 ? weight : 0;
+  });
+
+  return result;
+
+}
+
+
+/**
+ * Test: computeEvenSeasonalityForMonths_()
+ */
+function testComputeEvenSeasonalityForMonths(){
+
+  const result = computeEvenSeasonalityForMonths_(["SEP", "OCT", "DEC", "JAN", "MAR", "APR"]);
+
+  const activeSum = ["SEP", "OCT", "DEC", "JAN", "MAR", "APR"].reduce(function(sum, m){
+    return sum + result[m];
+  }, 0);
+
+  const pass =
+    Math.abs(result.SEP - 1 / 6) < 1e-9 &&
+    result.AUG === 0 &&
+    result.NOV === 0 &&
+    Math.abs(activeSum - 1) < 1e-9 &&
+    Object.keys(result).length === CONFIG.ACQ.FISCAL_MONTH_ORDER.length;
+
+  Logger.log("SEP weight: " + result.SEP + " (expected " + (1 / 6) + ")");
+  Logger.log("AUG weight: " + result.AUG + " (expected 0)");
+  Logger.log("Active months sum: " + activeSum + " (expected 1)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Target Derivation Rows (Block D — FY→월→주 목표 전개)
  *
  * WHY (2026-07-27 New/Pipeline 2트랙 확정 — CLAUDE.md #7 최종 결정)
@@ -2225,6 +2319,15 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
     fyPipelineP1TargetByGroup[row.group] = row.pipelineP1Target;
   });
 
+  // Seminar 전용 예외(2026-07-30 사용자 확정, 같은 날 CONFIG 하드코딩 → Block 0 체크박스로
+  // 전환) — 과거 실적 기반 시즌성 대신 사용자가 시트에서 직접 체크한 활성 캠페인 월
+  // (inputs.seminarActiveMonths, Block 0 섹션 5 SEMINAR_ACTIVE_MONTHS)에만 균등 분배한다.
+  // Block A의 시즌성 표시 자체는 건드리지 않고, 이 함수 내 월별 New/Pipeline P1 Target
+  // 분배에만 적용 — computeEvenSeasonalityForMonths_() WHY 참고.
+  const seminarSeasonalityByMonth = computeEvenSeasonalityForMonths_(
+    inputs.seminarActiveMonths || []
+  );
+
   const monthlyNewP1TargetCache = {};
   const monthlyPipelineP1TargetCache = {};
   const monthlyCPNP1TargetCache = {};
@@ -2242,22 +2345,34 @@ function computeTargetDerivationRows_(targetFY, benchmarkRows, dealShareRows, in
 
       if(monthlyNewP1TargetCache[monthKey] === undefined){
 
-        // New/Pipeline 둘 다 같은 시즌성 비중(월별 New P1 실적 기반)을 적용한다 —
-        // 트랙별로 다른 시즌성 커브를 쓸지는 아직 미정, 필요시 후속 논의(§6 참고).
+        // New/Pipeline 둘 다 같은 시즌성 비중을 적용한다 — 트랙별로 다른 시즌성
+        // 커브를 쓸지는 아직 미정, 필요시 후속 논의(§6 참고). Seminar만 Block A의
+        // 실적 기반 시즌성 대신 활성 캠페인 월 균등 분배로 대체한다.
+        const seasonalityPct = group === "Seminar"
+          ? (seminarSeasonalityByMonth[week.month] || 0)
+          : benchmark.seasonalityPct;
+
         monthlyNewP1TargetCache[monthKey] = computeMonthlyP1Target_(
           fyNewP1TargetByGroup[group],
-          benchmark.seasonalityPct
+          seasonalityPct
         );
 
         monthlyPipelineP1TargetCache[monthKey] = computeMonthlyP1Target_(
           fyPipelineP1TargetByGroup[group],
-          benchmark.seasonalityPct
+          seasonalityPct
         );
 
-        monthlyCPNP1TargetCache[monthKey] = computeMonthlyCPNP1Target_(
-          benchmark.cpnp1Benchmark,
-          improvementFactorByGroup[group] || 1
-        );
+        // WHY (2026-07-30 버그 수정 — 사용자 리포트: "Target P1이 0인데 CPNP1은 채워져
+        // 있다") — CPNP1 Target(cpnp1Benchmark × 개선계수)은 seasonalityPct와 무관하게
+        // Block A의 과거 실적 벤치마크만 보고 계산돼서, Seminar 비활성 월(New/Pipeline
+        // Target이 0으로 강제된 달)에도 그 달 과거 벤치마크가 있으면 그대로 값이 찍혔다.
+        // Target이 없는 달에 "목표 단가"가 존재하는 건 의미가 없으므로, Seminar
+        // 비활성 월은 CPNP1 Target도 0으로 맞춘다(New/Pipeline과 동일한 게이트).
+        const isSeminarInactiveMonth = group === "Seminar" && seasonalityPct === 0;
+
+        monthlyCPNP1TargetCache[monthKey] = isSeminarInactiveMonth
+          ? 0
+          : computeMonthlyCPNP1Target_(benchmark.cpnp1Benchmark, improvementFactorByGroup[group] || 1);
 
       }
 
@@ -2301,8 +2416,11 @@ function testComputeTargetDerivationRows(){
   // 2026-07-30 세그먼트 분해: CONFIG.TARGET.GROUP_ORDER가 실제로 5세그먼트라
   // 픽스처도 그 이름(Seminar/Webinar/BOFU/Search/Content)을 그대로 써야
   // computeTargetDerivationRows_() 내부의 GROUP_ORDER.forEach가 이 데이터를 찾는다.
+  // AUG는 seminarActiveMonths 픽스처(아래 inputs)에 없는 비활성 월, OCT는 활성 월 —
+  // Seminar 전용 균등 분배 오버라이드(2026-07-30, Block 0 체크박스 기반) 검증용으로 둘 다 포함.
   const benchmarkRows = [
     { group: "Seminar", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 500 },
+    { group: "Seminar", month: "OCT", seasonalityPct: 0.1, cpnp1Benchmark: 600 },
     { group: "Webinar", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 300 },
     { group: "BOFU", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 100 },
     { group: "Search", month: "AUG", seasonalityPct: 0.5, cpnp1Benchmark: 120 },
@@ -2321,35 +2439,45 @@ function testComputeTargetDerivationRows(){
     revenueTarget: 1000000,
     improvementFactorByGroup: {
       Seminar: 0.9, Webinar: 0.9, BOFU: 0.9, Search: 0.9, Content: 0.9
-    }
+    },
+    seminarActiveMonths: ["SEP", "OCT", "DEC", "JAN", "MAR", "APR"]
   };
 
   const rows = computeTargetDerivationRows_(27, benchmarkRows, dealShareRows, inputs);
 
   const augSeminarRows = rows.filter(function(r){ return r.group === "Seminar" && r.month === "AUG"; });
+  const octSeminarRows = rows.filter(function(r){ return r.group === "Seminar" && r.month === "OCT"; });
+  const augWebinarRows = rows.filter(function(r){ return r.group === "Webinar" && r.month === "AUG"; });
 
-  const expectedMonthlyNewTarget = 500 * 0.5; // 250
-  const expectedMonthlyPipelineTarget = 200 * 0.5; // 100
-  const expectedMonthlyTotalTarget = expectedMonthlyNewTarget + expectedMonthlyPipelineTarget; // 350
-  const expectedWeeklyNewTarget = expectedMonthlyNewTarget / augSeminarRows.length;
-  const expectedWeeklyPipelineTarget = expectedMonthlyPipelineTarget / augSeminarRows.length;
+  // Webinar(오버라이드 대상 아님)는 그대로 benchmark.seasonalityPct(0.5)를 써야 한다 — 통제군.
+  const expectedAugWebinarMonthlyNewTarget = 200 * 0.5; // 100
+
+  // Seminar는 inputs.seminarActiveMonths 6개월에 균등 분배 — AUG(비활성)는 New/Pipeline/
+  // CPNP1 Target 전부 0이어야 한다(2026-07-30 버그 수정 — 예전엔 CPNP1만 비활성 월에도
+  // 값이 남아있었음, 사용자 리포트). OCT(활성)는 New/Pipeline은 FY Target × 1/6, CPNP1은
+  // Block A 벤치마크(600) × 개선계수(0.9) = 540 그대로 계산돼야 한다. Block A의 실적
+  // 기반 seasonalityPct(0.5/0.1)는 Seminar에 한해 무시된다.
+  const expectedSeminarActiveWeight = 1 / inputs.seminarActiveMonths.length;
+  const expectedOctSeminarMonthlyNewTarget = 500 * expectedSeminarActiveWeight;
+  const expectedOctSeminarMonthlyPipelineTarget = 200 * expectedSeminarActiveWeight;
+  const expectedOctSeminarMonthlyCPNP1Target = 600 * 0.9; // 540
 
   const pass =
     (augSeminarRows.length === 4 || augSeminarRows.length === 5) &&
-    Math.abs(augSeminarRows[0].monthlyNewP1Target - expectedMonthlyNewTarget) < 1e-6 &&
-    Math.abs(augSeminarRows[0].monthlyPipelineP1Target - expectedMonthlyPipelineTarget) < 1e-6 &&
-    Math.abs(augSeminarRows[0].monthlyP1Target - expectedMonthlyTotalTarget) < 1e-6 &&
-    Math.abs(augSeminarRows[0].weeklyNewP1Target - expectedWeeklyNewTarget) < 1e-6 &&
-    Math.abs(augSeminarRows[0].weeklyPipelineP1Target - expectedWeeklyPipelineTarget) < 1e-6 &&
-    Math.abs(augSeminarRows[0].weeklyP1Target - (expectedWeeklyNewTarget + expectedWeeklyPipelineTarget)) < 1e-6 &&
-    Math.abs(augSeminarRows[0].monthlyCPNP1Target - 450) < 1e-6 &&
-    augSeminarRows[0].weeklyCPNP1Target === augSeminarRows[0].monthlyCPNP1Target;
+    augSeminarRows[0].monthlyNewP1Target === 0 &&
+    augSeminarRows[0].monthlyPipelineP1Target === 0 &&
+    augSeminarRows[0].monthlyCPNP1Target === 0 &&
+    Math.abs(octSeminarRows[0].monthlyNewP1Target - expectedOctSeminarMonthlyNewTarget) < 1e-6 &&
+    Math.abs(octSeminarRows[0].monthlyPipelineP1Target - expectedOctSeminarMonthlyPipelineTarget) < 1e-6 &&
+    Math.abs(octSeminarRows[0].monthlyCPNP1Target - expectedOctSeminarMonthlyCPNP1Target) < 1e-6 &&
+    Math.abs(augWebinarRows[0].monthlyNewP1Target - expectedAugWebinarMonthlyNewTarget) < 1e-6;
 
-  Logger.log("AUG Seminar week rows: " + augSeminarRows.length + " (expected 4 or 5)");
-  Logger.log("Weekly New P1 Target: " + augSeminarRows[0].weeklyNewP1Target + " (expected " + expectedWeeklyNewTarget + ")");
-  Logger.log("Weekly Pipeline P1 Target: " + augSeminarRows[0].weeklyPipelineP1Target + " (expected " + expectedWeeklyPipelineTarget + ")");
-  Logger.log("Weekly Total P1 Target: " + augSeminarRows[0].weeklyP1Target);
-  Logger.log("Monthly CPNP1 Target: " + augSeminarRows[0].monthlyCPNP1Target + " (expected 450)");
+  Logger.log("AUG Seminar monthlyNewP1Target: " + augSeminarRows[0].monthlyNewP1Target + " (expected 0, 비활성 월)");
+  Logger.log("AUG Seminar monthlyCPNP1Target: " + augSeminarRows[0].monthlyCPNP1Target + " (expected 0, 비활성 월 — 2026-07-30 버그 수정)");
+  Logger.log("OCT Seminar monthlyCPNP1Target: " + octSeminarRows[0].monthlyCPNP1Target + " (expected " + expectedOctSeminarMonthlyCPNP1Target + ")");
+  Logger.log("OCT Seminar monthlyNewP1Target: " + octSeminarRows[0].monthlyNewP1Target + " (expected " + expectedOctSeminarMonthlyNewTarget + ")");
+  Logger.log("AUG Seminar monthlyCPNP1Target: " + augSeminarRows[0].monthlyCPNP1Target + " (expected 450, seasonality와 무관)");
+  Logger.log("AUG Webinar monthlyNewP1Target: " + augWebinarRows[0].monthlyNewP1Target + " (expected " + expectedAugWebinarMonthlyNewTarget + ", 오버라이드 미적용 통제군)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -2376,26 +2504,25 @@ function readTargetEngineInputs_(sheet){
   const lastRow = input.LAST_ROW;
   const defaults = input.DEFAULTS;
 
-  // 섹션 1(스칼라)+섹션 2(CPNP1 벤치마크 수동입력)는 전부 VALUE_COL 단일 컬럼이라
-  // 한 번의 getRange로 같이 읽는다.
+  // 섹션 1(스칼라)은 VALUE_COL 단일 컬럼이라 한 번의 getRange로 읽는다. 섹션 2(CPNP1
+  // 벤치마크)는 더 이상 입력이 아니라 계산 결과라 여기서 읽지 않음(v1.19.0 —
+  // computeCPNP1BenchmarkByGroup_()/writeTargetEngineCPNP1BenchmarkValues_() 참고).
   const values = sheet.getRange(1, col, lastRow, 1).getValues();
   const get = function(row){ return values[row - 1][0]; };
 
   const improvementFactorByGroup = {};
   const dealShareByGroup = {};
-  const cpnp1BenchmarkByGroup = {};
 
   groupOrder.forEach(function(group, i){
     improvementFactorByGroup[group] = Number(get(rows.IMPROVEMENT_FACTOR_START + i)) || 0;
     dealShareByGroup[group] = Number(get(rows.DEAL_SHARE_START + i)) || 0;
-    cpnp1BenchmarkByGroup[group] = Number(get(input.CPNP1_BENCHMARK_MANUAL.DATA_START_ROW + i)) || 0;
   });
 
-  // 섹션 3(월별 회사 전체 Revenue Target/Budget)+섹션 4(세그먼트별 월별 Spent)는
-  // MONTH_START_COL부터 12개월 폭이라 별도 블록 읽기 — 두 섹션이 연속된 행 범위
-  // (헤더 행 포함, 사이 공백 행 1개)라 한 번의 getRange로 같이 읽는다.
+  // 섹션 3(월별 회사 전체 Revenue Target/Budget)+섹션 4(세그먼트별 월별 Spent)+섹션 5
+  // (Seminar Active Campaign Months 체크박스)는 전부 MONTH_START_COL부터 12개월 폭이고
+  // 연속된 행 범위(헤더 행 포함, 섹션 사이 공백 행 1개)라 한 번의 getRange로 같이 읽는다.
   const gridStartRow = input.MONTHLY_COMPANY_INPUTS.HEADER_ROW;
-  const gridEndRow = input.MANUAL_SEGMENT_SPENT.DATA_START_ROW + groupOrder.length - 1;
+  const gridEndRow = input.SEMINAR_ACTIVE_MONTHS.ROW;
   const gridValues = sheet.getRange(
     gridStartRow, input.MONTHLY_COMPANY_INPUTS.MONTH_START_COL,
     gridEndRow - gridStartRow + 1, monthOrder.length
@@ -2428,6 +2555,13 @@ function readTargetEngineInputs_(sheet){
 
   });
 
+  // 섹션 5 — Seminar Active Campaign Months(체크박스). 체크(true)된 달만 활성 월로 취급 —
+  // computeTargetDerivationRows_()가 Seminar 그룹 월별 배분에 직접 씀(00_Config.js
+  // INPUT.SEMINAR_ACTIVE_MONTHS 참고).
+  const seminarActiveMonths = monthOrder.filter(function(month, mi){
+    return getGridCell(input.SEMINAR_ACTIVE_MONTHS.ROW, mi) === true;
+  });
+
   // revenueTarget(연간 합계) — 기존 §6 top-down 공식 체인(computeDealShareBlockRows_())의
   // 하위호환용. 월별 실제 값이 도입되며 스칼라 입력은 폐기됐지만, 그 체인 자체를
   // 대체하는 예산 기반 도출 체인은 아직 설계 확정 전이라(exec-plan Decision Log 참고)
@@ -2441,11 +2575,11 @@ function readTargetEngineInputs_(sheet){
     cutoverDate: get(rows.CUTOVER_DATE),
     improvementFactorByGroup: improvementFactorByGroup,
     dealShareByGroup: dealShareByGroup,
-    cpnp1BenchmarkByGroup: cpnp1BenchmarkByGroup,
     revenueTarget: revenueTarget,
     monthlyRevenueTarget: monthlyRevenueTarget,
     monthlyBudget: monthlyBudget,
-    monthlySegmentSpent: monthlySegmentSpent
+    monthlySegmentSpent: monthlySegmentSpent,
+    seminarActiveMonths: seminarActiveMonths
   };
 
 }
@@ -2497,10 +2631,13 @@ function setupTargetEngineInputDefaults_(sheet){
     ]);
   });
 
+  // 값 자체는 이 entries의 default(0)가 아니라 refreshTargetEngine_()가
+  // computeCPNP1BenchmarkByGroup_() 결과로 매번 덮어씀 — 여기선 라벨과 최초 실행 전
+  // placeholder(0)만 담당(v1.19.0, CPNP1_BENCHMARK_MANUAL → CPNP1_BENCHMARK로 이름 변경).
   groupOrder.forEach(function(group, i){
     entries.push([
-      input.CPNP1_BENCHMARK_MANUAL.DATA_START_ROW + i,
-      "FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark - " + group + " (수동 입력)",
+      input.CPNP1_BENCHMARK.DATA_START_ROW + i,
+      "FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark - " + group + " (자동 계산)",
       0
     ]);
   });
@@ -2528,8 +2665,9 @@ function setupTargetEngineInputDefaults_(sheet){
 
   });
 
-  labelColumn[input.CPNP1_BENCHMARK_MANUAL.HEADER_ROW - 1] =
-    ["FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark by Segment (수동 입력 — 예산 기반 도출 체인 전용)"];
+  labelColumn[input.CPNP1_BENCHMARK.HEADER_ROW - 1] =
+    ["FY" + CONFIG.TARGET.P1_VALUE_FY + " CPNP1 Benchmark by Segment (자동 계산 = 월별 Segment Spent 합 ÷ FY" +
+     CONFIG.TARGET.P1_VALUE_FY + " Segment New P1 합, 예산 기반 도출 체인 전용)"];
 
   sheet.getRange(1, labelCol, lastRow, 1).setValues(labelColumn);
   sheet.getRange(1, valueCol, lastRow, 1).setValues(valueColumn);
@@ -2550,6 +2688,14 @@ function setupTargetEngineInputDefaults_(sheet){
  * 별도 함수로 분리. setupTargetEngineInputDefaults_()와 동일하게 "값은 비어있을
  * 때만 채운다"(보존형) 원칙을 그대로 따른다 — 2026-07-30 세그먼트 분해/예산
  * 반영으로 신규 도입. docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md 참고.
+ *
+ * WHY (2026-07-30 섹션 5 — Seminar Active Campaign Months 체크박스 추가)
+ * Seminar 캠페인 진행 월을 CONFIG 하드코딩(SEMINAR_CAMPAIGN_MONTHS)으로 관리하면
+ * 계획이 바뀔 때마다 코드를 고쳐야 해서, 사용자가 시트에서 직접 체크/해제하는 방식을
+ * 요청 — insertCheckboxes()로 체크박스 UI 생성. insertCheckboxes()는 값이 없는 셀을
+ * unchecked(false)로 초기화해버리므로(빈 셀이 사라짐), "최초 실행인지" 판정은 반드시
+ * insertCheckboxes() 호출 **전에** 먼저 해야 한다 — 그렇지 않으면 재실행 때마다
+ * "비어있음"으로 오판해 사용자가 체크한 값을 계속 기본값으로 되돌리는 버그가 생긴다.
  * ==========================================================
  */
 function setupTargetEngineMonthlyGridDefaults_(sheet){
@@ -2610,6 +2756,32 @@ function setupTargetEngineMonthlyGridDefaults_(sheet){
   });
 
   sheet.getRange(minRow, monthStartCol, numRows, monthOrder.length).setValues(existing);
+
+  // 섹션 5 — Seminar Active Campaign Months(체크박스, row 32). 불리언 값이라 위 숫자
+  // dataRows 배치와 별도 처리 — "비어있는지" 판정을 insertCheckboxes() 호출 전에 먼저
+  // 해야 하는 이유는 위 함수 WHY 참고.
+  const seminarRow = input.SEMINAR_ACTIVE_MONTHS.ROW;
+  const seminarRange = sheet.getRange(seminarRow, monthStartCol, 1, monthOrder.length);
+
+  sheet.getRange(seminarRow, labelCol).setValue(
+    "Seminar Active Campaign Months (체크된 달만 캠페인 진행 — Target New/Pipeline P1 배분에 반영)"
+  );
+
+  const seminarExisting = seminarRange.getValues()[0];
+  const seminarIsBlank = seminarExisting.every(function(v){ return v === "" || v === null; });
+
+  if(seminarIsBlank){
+
+    seminarRange.insertCheckboxes();
+
+    const seminarDefaults = input.DEFAULTS.SEMINAR_ACTIVE_MONTHS;
+    const seminarDefaultRow = monthOrder.map(function(month){
+      return seminarDefaults.indexOf(month) !== -1;
+    });
+
+    seminarRange.setValues([seminarDefaultRow]);
+
+  }
 
 }
 
@@ -2749,6 +2921,35 @@ function targetDerivationRowsToMatrix_(rows){
 
 /**
  * ==========================================================
+ * Write Target Engine CPNP1 Benchmark Values (Block 0 CPNP1_BENCHMARK 섹션 — 계산값 기록)
+ *
+ * WHY
+ * computeCPNP1BenchmarkByGroup_() 결과를 Block 0의 CPNP1_BENCHMARK VALUE_COL 셀에
+ * 쓴다. 라벨은 setupTargetEngineInputDefaults_()가 이미 써두므로 여기선 값만 기록.
+ * Block 0의 다른 섹션과 달리 이 섹션은 "값이 비어있을 때만 채움"이 아니라 매번
+ * 무조건 덮어쓴다 — 더 이상 사용자 입력이 아니라 계산 결과이기 때문(2026-07-30).
+ *
+ * @param {Sheet} sheet
+ * @param {Object} cpnp1BenchmarkByGroup  group -> CPNP1 벤치마크 (computeCPNP1BenchmarkByGroup_() 결과)
+ * ==========================================================
+ */
+function writeTargetEngineCPNP1BenchmarkValues_(sheet, cpnp1BenchmarkByGroup){
+
+  const input = CONFIG.TARGET.INPUT;
+  const groupOrder = CONFIG.TARGET.GROUP_ORDER;
+
+  const values = groupOrder.map(function(group){
+    return [cpnp1BenchmarkByGroup[group] || 0];
+  });
+
+  sheet.getRange(input.CPNP1_BENCHMARK.DATA_START_ROW, input.VALUE_COL, groupOrder.length, 1)
+    .setValues(values);
+
+}
+
+
+/**
+ * ==========================================================
  * Refresh Target Engine (전체 재계산 → Target_Engine 시트에 저장)
  *
  * WHY
@@ -2775,7 +2976,17 @@ function refreshTargetEngine_(){
   const inputs = readTargetEngineInputs_(sheet);
 
   const leadsAgg = computeTargetLeadsOPSAggregates_();
-  const spentByGroupFYMonth = computeCombinedSpentByGroupFYMonth_();
+  const spentByGroupFYMonth = buildSpentByGroupFYMonthFromManualInput_(
+    inputs.monthlySegmentSpent, CONFIG.TARGET.P1_VALUE_FY
+  );
+
+  // Block 0의 "절대 안 덮어씀" 원칙의 유일한 예외 — CPNP1_BENCHMARK 섹션(rows 14~19)은
+  // 2026-07-30부터 수동 입력이 아니라 "월별 Segment Spent 합 ÷ FY26 Segment New P1 합"
+  // 계산 결과라 매 refresh마다 여기서 덮어쓴다(사용자 확정, 00_Config.js 주석 참고).
+  const cpnp1BenchmarkByGroup = computeCPNP1BenchmarkByGroup_(
+    inputs.monthlySegmentSpent, leadsAgg.newP1CountByGroup, CONFIG.TARGET.GROUP_ORDER
+  );
+  writeTargetEngineCPNP1BenchmarkValues_(sheet, cpnp1BenchmarkByGroup);
 
   const benchmarkRows = computeBenchmarkBlockRows_(
     leadsAgg.newP1CountsByGroupFYMonth,

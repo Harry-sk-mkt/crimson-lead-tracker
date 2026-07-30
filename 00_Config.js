@@ -9,9 +9,46 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.14.0
+ * v1.19.0
  *
  * Change Log
+ * v1.19.0 (2026-07-30)
+ * - `REPORT.SEGMENT_HEADER_COLORS`를 원색(v1.18.0)에서 흰색 75:25 블렌딩 파스텔로
+ *   교체 — "색이 너무 강하다"는 사용자 피드백. hue는 동일 유지, 채도만 낮춤.
+ * v1.18.0 (2026-07-30)
+ * - Target_REP 헤더를 3행 구조(세그먼트명/Target·Actual/개별 지표)로 재설계 — 사용자
+ *   요청("컬럼이 너무 넓다"). `REPORT.ROWS`를 SEGMENT_HEADER_ROW(2)/TARGET_ACTUAL_HEADER_ROW(3)/
+ *   METRIC_HEADER_ROW(4)/REPORT_DATA_START(5)로 재정의(기존 REPORT_HEADER/REPORT_DATA_START
+ *   폐기). `GROUP_COLUMN_COUNT` 7→6 — 달성%는 다른 시트에서 확인한다는 사용자 확인으로
+ *   제거, 컬럼 순서를 Target(New P1/Pipeline P1/P1/CPNP1) + Actual(P1/CPNP1)로 재배치.
+ *   신규 `TARGET_SUBCOLUMN_COUNT`(4)/`ACTUAL_SUBCOLUMN_COUNT`(2)(3행 병합 범위용),
+ *   `SEGMENT_HEADER_COLORS`(dataviz 스킬 카테고리컬 팔레트 1~5번 슬롯, 세그먼트별 헤더
+ *   배색). 구현: `91_TargetReport.js`/`92_TargetStyles.js` v1.6.0.
+ * v1.17.0 (2026-07-30)
+ * - `SEMINAR_CAMPAIGN_MONTHS` 하드코딩 상수를 삭제하고 Block 0 신규 섹션 5
+ *   (`INPUT.SEMINAR_ACTIVE_MONTHS`, row 32, B~M열 체크박스)로 대체 — 사용자 요청:
+ *   "계획이 바뀔 때마다 코드를 고치는 게 아니라 시트에서 체크만 바꾸고 싶다".
+ *   `LAST_ROW` 30→32, `DEFAULTS.SEMINAR_ACTIVE_MONTHS`는 최초 체크박스 시딩값으로만
+ *   쓰이고 이후 계산은 시트 체크박스 값을 직접 읽는다(90_TargetEngine.js v1.21.0).
+ * v1.16.0 (2026-07-30)
+ * - Target CPNP1 벤치마크 재활성화: `BENCHMARK.CPNP1_FYS/WEIGHTS`를 `[]`에서 `[26]`/`[1]`로
+ *   전환 — 세그먼트별 월별 Spent(Block 0 MANUAL_SEGMENT_SPENT) 수동 취합이 끝나면서
+ *   분자를 채널시트 대신 그 그리드로 교체(90_TargetEngine.js `buildSpentByGroupFYMonthFromManualInput_()`
+ *   신규). 이제 안 쓰는 `EXTERNAL.CHANNEL_SHEET_GID`/`CHANNEL_COLUMNS`/`NAVER_SHEET_GID`/
+ *   `NAVER_COLUMNS`/채널·Naver용 `SPREADSHEET_ID` 전부 삭제(`DEAL_TRACKER`는 유지) —
+ *   `readChannelRawRows_()`/`readNaverRawRows_()`/`computeCombinedSpentByGroupFYMonth_()`도
+ *   함께 삭제(90_TargetEngine.js v1.20.0, 3그룹 키 하드코딩이라 5세그먼트와도 안 맞던 죽은 코드).
+ * - 신규 `SEMINAR_CAMPAIGN_MONTHS`(["SEP","OCT","DEC","JAN","MAR","APR"]) — FY27 Seminar가
+ *   Oct/Jan/Apr 3회만 개최되고 캠페인은 행사 30일 전 시작이라, 과거 실적 기반 시즌성을
+ *   그대로 쓰면 비활성 월에도 New P1 Target이 생기는 문제를 Block D에서 이 목록 기준
+ *   균등 분배로 대체(Seminar 전용 하드코딩, 90_TargetEngine.js 참고).
+ * v1.15.0 (2026-07-30)
+ * - CONFIG.TARGET.INPUT.CPNP1_BENCHMARK_MANUAL → CPNP1_BENCHMARK로 이름 변경(행 번호는
+ *   그대로 14/15~19) — 세그먼트별 FY26 CPNP1 벤치마크가 수동 입력에서 "월별 Segment
+ *   Spent 합 ÷ FY26 Segment New P1 합" 자동 계산으로 전환됨(사용자 요청, 세그먼트별
+ *   월별 Spent 수동 취합 완료 후). 계산은 90_TargetEngine.js의 신규
+ *   computeCPNP1BenchmarkByGroup_()가 담당. 상세:
+ *   docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
  * v1.14.0 (2026-07-30)
  * - CONFIG.TARGET.ENGINE Block A~D 시작 컬럼을 전부 +10 이동(4/13/21/28 →
  *   14/23/31/38) — Block 0의 신규 월별 그리드 섹션(B~M열, 12개월)이 기존
@@ -23,7 +60,8 @@
  *   (events/contact/content)에서 5개 실제 Business Segment(Seminar/Webinar/
  *   BOFU/Search/Content)로 교체 — Referral/Other는 계속 제외. BENCHMARK.CPNP1_FYS/
  *   WEIGHTS는 빈 배열로 잠정 중단(채널시트가 3그룹 단위라 5세그먼트 자동 분해 불가 —
- *   대신 세그먼트별 CPNP1은 신규 INPUT.CPNP1_BENCHMARK_MANUAL로 사용자 직접 입력).
+ *   대신 세그먼트별 CPNP1은 신규 INPUT.CPNP1_BENCHMARK로 계산 — v1.15.0에서
+ *   "월별 Segment Spent 합 ÷ FY26 Segment New P1 합" 자동 계산으로 전환).
  *   INPUT 블록을 4개 섹션(스칼라/CPNP1 벤치마크 수동입력/월별 회사 전체 Revenue
  *   Target·Budget/세그먼트별 월별 실제 Spent)으로 확장, IMPROVEMENT_FACTOR/DEAL_SHARE는
  *   named row에서 START행+GROUP_ORDER 인덱스 방식으로 변경(90_TargetEngine.js
@@ -332,13 +370,15 @@ const CONFIG = {
       NEWP1_FYS: [24, 25, 26],
       NEWP1_WEIGHTS: [1, 2, 3],
 
-      // CPNP1 벤치마크(그룹×월 채널시트 자동집계) — 2026-07-30 세그먼트 분해로 잠정
-      // 중단(빈 배열 = 계산 스킵). 채널시트가 3그룹(event/contact/lead) 단위라 5세그먼트로
-      // 자동으로 못 쪼갬 — 세그먼트별 CPNP1은 대신 INPUT.CPNP1_BENCHMARK_MANUAL(사용자
-      // 직접 입력)로 대체. docs/Roadmap.md Phase 1(캠페인 데이터 자동 연동) 완료 시
-      // 재활성화 검토. 상세: docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
-      CPNP1_FYS: [],
-      CPNP1_WEIGHTS: []
+      // CPNP1 벤치마크(그룹×월) — 2026-07-30 세그먼트별 월별 Spent 수동 취합 완료로 재활성화.
+      // 원래 채널시트(event/contact/lead 3그룹 단위) 자동집계였으나 5세그먼트로 못 쪼개
+      // 한동안 빈 배열로 중단했었음. 이제 분자를 Block 0의 세그먼트별 월별 수동 Spent
+      // (INPUT.MANUAL_SEGMENT_SPENT)로 교체(90_TargetEngine.js buildSpentByGroupFYMonthFromManualInput_()) —
+      // 이 그리드는 FY26(P1_VALUE_FY) 1개 FY만 대표하므로 가중치도 단일 FY.
+      // 과거 FY(24·25) segment-level spend 데이터가 없어 확장 불가 — 상세:
+      // docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
+      CPNP1_FYS: [26],
+      CPNP1_WEIGHTS: [1]
 
     },
 
@@ -346,36 +386,21 @@ const CONFIG = {
     // 그 전 마지막 구방식 주는 7/26~8/2로 마감 (docs/TargetReportDesign.md §4).
     CUTOVER_DATE: new Date(2026, 7, 3),
 
-    // 외부 파일 참조 (채널시트/Naver, 이관 안 함 — openById() 직접 참조)
+    // 외부 파일 참조 (Deal Tracker, 이관 안 함 — openById() 직접 참조)
     // 실물 구조 확인: docs/TargetReportDesign.md §3 "외부 시트 실물 구조 확인 (2026-07-27)"
+    //
+    // WHY (2026-07-30 채널시트/Naver 참조 제거)
+    // 채널시트/Naver(event/contact/lead 3그룹 단위)는 5세그먼트로 자동 분해가 안 돼
+    // CPNP1 벤치마크 분자 소스에서 이미 탈락했고(BENCHMARK.CPNP1_FYS 잠정 중단),
+    // Actual CPNP1도 v1.5.0(91_TargetReport.js)에서 Block 0 세그먼트별 월별 수동
+    // Spent 기준으로 전환되며 참조가 완전히 사라졌다. 남아있던 readChannelRawRows_()/
+    // readNaverRawRows_()/computeCombinedSpentByGroupFYMonth_()도 3그룹 키("events"/
+    // "contact"/"content") 하드코딩이라 5세그먼트 GROUP_ORDER와도 안 맞는 죽은 코드였음
+    // — 전부 삭제(90_TargetEngine.js v1.20.0). CPNP1 벤치마크는 이제 buildSpentByGroupFYMonthFromManualInput_()
+    // 로 Block 0의 세그먼트별 월별 Spent를 재사용(CPNP1_FYS=[26]로 재활성화, 아래 참고).
     EXTERNAL: {
 
-      SPREADSHEET_ID: "1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A",
-
-      // 탭 이름이 아닌 gid(sheetId)로 시트를 찾는다 (탭 이름 변경에 안전).
-      CHANNEL_SHEET_GID: 1718473299,
-      NAVER_SHEET_GID: 387972603,
-
-      // 채널시트(Meta) 컬럼 — 헤더 1행, A=Start date, B=End date,
-      // event(C~H)/contact(I~N)/lead(O~T)/traffic(U~W, 제외) 6·6·6·3 블록 반복.
-      // Target Engine이 실제로 쓰는 건 그룹별 Spent 컬럼(E/K/Q)뿐.
-      CHANNEL_COLUMNS: {
-        START_DATE: 1,     // A
-        END_DATE: 2,       // B
-        EVENT_SPENT: 5,    // E  (channel group "event" → events)
-        CONTACT_SPENT: 11, // K  (channel group "contact" → contact)
-        CONTENT_SPENT: 17  // Q  (channel group "lead" → content)
-      },
-
-      // Naver 시트 컬럼 — A=FY, B=Start date, C=End date, D=SpentNZD(전액 contact 합산).
-      NAVER_COLUMNS: {
-        START_DATE: 2,  // B
-        END_DATE: 3,    // C
-        SPENT_NZD: 4    // D
-      },
-
       // Deal Tracker([KOR] Deal Tracking) — Block B(P1당 가치)/C(딜 비중) 실데이터 원천.
-      // 채널시트/Naver와 별도 파일.
       //
       // 2026-07-27 아키텍처 전환(중요): Student Contact Email/Primary Guardian
       // Email/Account Name을 Leads_OPS와 매칭시키는 접근을 전부 폐기했다 —
@@ -435,13 +460,16 @@ const CONFIG = {
 
     // Engine 시트 Block 0 (Inputs) — 절대 덮어쓰지 않는 영역 (읽기만).
     // 조정 시 숨김 해제 후 직접 편집 (docs/TargetReportDesign.md §9).
+    // 예외: 섹션 2(CPNP1_BENCHMARK)는 2026-07-30부터 수동 입력이 아니라 매 refresh마다
+    // 계산되어 덮어써짐 — 아래 섹션 2 설명 참고.
     //
     // 2026-07-30 세그먼트 분해 + 예산 반영으로 4개 섹션으로 확장 (컬럼 범위는 의도적으로
     // 제한 안 함 — 사용자 요청). 상세 설계 배경:
     // docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md
     //   1) 스칼라 입력 (Target FY / Cutover Date / 세그먼트별 개선계수·딜비중 — GROUP_ORDER 순서)
-    //   2) 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, 예산 기반 도출 체인 전용 — 사용자
-    //      시트에 직접 입력, 채널시트 자동집계 아님)
+    //   2) 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, 예산 기반 도출 체인 전용 — 원래 사용자
+    //      직접 입력이었으나 세그먼트별 월별 Spent 수동 취합 완료 후 "월별 Segment Spent 합 ÷
+    //      FY26 Segment New P1 합" 자동 계산으로 전환, refreshTargetEngine_()가 매번 덮어씀)
     //   3) 월별 회사 전체 Revenue Target / Budget (Label=A, 12개월=B..M,
     //      CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
     //   4) 세그먼트별 월별 실제 Spent (수동 취합) — 5세그먼트 × 12개월
@@ -462,8 +490,10 @@ const CONFIG = {
 
       SCALAR_LAST_ROW: 12,
 
-      // 섹션 2 — 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, VALUE_COL 사용)
-      CPNP1_BENCHMARK_MANUAL: {
+      // 섹션 2 — 세그먼트별 FY26 CPNP1 벤치마크 (스칼라 1개씩, VALUE_COL 사용).
+      // 2026-07-30 이후 수동 입력 아님 — computeCPNP1BenchmarkByGroup_()(90_TargetEngine.js)가
+      // "월별 Segment Spent 합 ÷ FY26 Segment New P1 합"으로 계산해 매 refresh마다 덮어씀.
+      CPNP1_BENCHMARK: {
         HEADER_ROW: 14,
         DATA_START_ROW: 15   // 15~19 (GROUP_ORDER 순서, 5행)
       },
@@ -483,13 +513,29 @@ const CONFIG = {
         MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
       },
 
-      LAST_ROW: 30,
+      // 섹션 5 — Seminar Active Campaign Months (체크박스, B~M열 12개월) — 2026-07-30 신규,
+      // CONFIG 하드코딩 대신 도입(사용자 요청: "새 계획이 생기면 코드를 고치는 게 아니라
+      // 시트에서 체크만 바꾸고 싶다"). 체크된 달만 Seminar 캠페인이 진행 중이라고 보고,
+      // computeTargetDerivationRows_()(90_TargetEngine.js)가 Seminar 그룹의 월별 New/
+      // Pipeline P1 Target 배분에 이 값을 직접 읽어 쓴다(체크된 달에 균등 분배,
+      // computeEvenSeasonalityForMonths_() 참고). Block 0 보존 원칙 그대로 — 최초 1회만
+      // DEFAULTS.SEMINAR_ACTIVE_MONTHS로 시딩하고 이후로는 절대 안 덮어씀.
+      SEMINAR_ACTIVE_MONTHS: {
+        ROW: 32,
+        MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
+      },
+
+      LAST_ROW: 32,
 
       // 최초 setupTargetReport() 실행 시 채워지는 기본값 (사용자가 이후 직접 편집).
       DEFAULTS: {
         TARGET_FY: 27,
         IMPROVEMENT_FACTOR: 0.9,
-        DEAL_SHARE: 0.2   // 5세그먼트 균등분배(1/5) placeholder — 사용자가 실측치로 교체
+        DEAL_SHARE: 0.2,   // 5세그먼트 균등분배(1/5) placeholder — 사용자가 실측치로 교체
+        // SEMINAR_ACTIVE_MONTHS 체크박스 최초 시딩용(FY27 계획: Oct/Jan/Apr 개최, 캠페인
+        // 행사 30일 전 시작 → 행사월+직전월 근사) — 이후 시트 체크박스가 Source of Truth,
+        // 계획 바뀌면 시트에서 직접 체크/해제(코드 변경 불필요).
+        SEMINAR_ACTIVE_MONTHS: ["SEP", "OCT", "DEC", "JAN", "MAR", "APR"]
       }
 
     },
@@ -542,18 +588,37 @@ const CONFIG = {
     // 2026-07-27 단순화: Control 영역(Generate 체크박스/파라미터 요약)을 전부 제거.
     // Generate가 수동 실행(runGenerateTargetReport())으로 전환되며 시트 내 안내가
     // 불필요해짐 — 1행은 비워둠(향후 월 소계 행 후보, §12 Open Item #8), 2행부터 헤더.
+    //
+    // 2026-07-30 헤더 3행 구조로 확장(사용자 요청 — 컬럼 폭 축소): 세그먼트당 컬럼이 너무
+    // 넓어서(7컬럼 플랫 헤더) 가로 스크롤이 심하다는 지적 — 세그먼트명(2행)/Target·Actual
+    // 구분(3행)/개별 지표(4행) 3단 헤더로 병합해 세그먼트당 6컬럼(달성%는 다른 시트에서
+    // 확인한다는 사용자 확인으로 제거)으로 축소. 데이터는 5행부터.
     REPORT: {
 
       ROWS: {
-        REPORT_HEADER: 2,
-        REPORT_DATA_START: 3
+        SEGMENT_HEADER_ROW: 2,        // 세그먼트명 배너(세그먼트당 병합)
+        TARGET_ACTUAL_HEADER_ROW: 3,  // Target/Actual 구분 배너(하위 병합)
+        METRIC_HEADER_ROW: 4,         // 개별 지표 라벨(New P1/Pipeline P1/P1/CPNP1/P1/CPNP1) + 고정 3컬럼 라벨
+        REPORT_DATA_START: 5
       },
 
-      // 그룹당 7컬럼(2026-07-27 New/Pipeline 분리 표시 — 사용자 요청): Target New P1 /
-      // Target Pipeline P1 / Target P1(합계) / Actual P1 / 달성% / Target CPNP1 / Actual CPNP1
-      GROUP_COLUMN_COUNT: 7,
+      // 그룹당 6컬럼(2026-07-30 Target/Actual 그룹핑 + 달성% 제거 — "Progress는 다른
+      // 시트에서 확인" 사용자 확인) 순서: Target New P1 / Target Pipeline P1 /
+      // Target P1(합계) / Target CPNP1 / Actual P1 / Actual CPNP1
+      GROUP_COLUMN_COUNT: 6,
 
-      FIXED_HEADERS: ["Week Start", "Week End", "Month"]
+      // 3행 Target/Actual 배너 병합 범위 계산용 — 그룹 6컬럼을 Target 4 + Actual 2로 분할.
+      TARGET_SUBCOLUMN_COUNT: 4,
+      ACTUAL_SUBCOLUMN_COUNT: 2,
+
+      FIXED_HEADERS: ["Week Start", "Week End", "Month"],
+
+      // 세그먼트별 헤더 배경색(GROUP_ORDER 순서와 1:1) — dataviz 스킬 카테고리컬 팔레트
+      // 1~5번 슬롯(파랑/주황/아쿠아/노랑/마젠타)을 흰색과 75:25로 블렌딩한 파스텔 톤
+      // (원색이 "너무 강하다"는 사용자 피드백, 2026-07-30) — 색상 계열(hue)은 원본과
+      // 동일하게 유지해 세그먼트 식별성은 그대로, 채도만 낮춤. 검정 굵은 텍스트 대비
+      // 14~16:1로 원색 대비 오히려 더 여유 있음(재계산 확인).
+      SEGMENT_HEADER_COLORS: ["#caddf5", "#fad9cc", "#c6ebde", "#fbe8bf", "#f9dee8"]
 
     }
 

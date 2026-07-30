@@ -1,5 +1,63 @@
 # Changelog — 2026-07-30
 
+## Target CPNP1 Benchmark 계산 전환 + Seminar 캠페인 월 예외 + Target_REP 헤더 3행 재설계
+
+**배경**: 위 "Target_REP 세그먼트 구조 전면 분해" 세션 이후 후속 세션. 세그먼트별 월별 Spent
+수동 취합이 끝나면서 CPNP1 관련 계산을 실제로 살리고, Seminar처럼 캠페인이 특정 달에만 도는
+세그먼트의 월별 배분 문제를 고치고, Target_REP 리포트 자체(헤더/색상/포맷)를 실사용 가능한
+형태로 다듬은 라운드. 상세 결정 이력: `docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md`.
+
+**FY26 CPNP1 Benchmark by Segment: 수동 입력 → 계산으로 전환** — Block 0 rows 15~19
+(`CPNP1_BENCHMARK_MANUAL` → `CPNP1_BENCHMARK`로 이름 변경)이 원래 사용자가 시트에 직접
+입력하는 스칼라였으나, 월별 Segment Spent 취합이 끝나자 사용자가 "월별 Segment Spent 합 ÷
+FY26 Segment New P1 합"으로 자동 계산하자고 요청. 신규 `computeCPNP1BenchmarkByGroup_()`가
+매 refresh마다 계산해 `writeTargetEngineCPNP1BenchmarkValues_()`로 덮어씀 — Block 0의
+"절대 안 덮어씀" 원칙의 유일한 예외로 문서화.
+
+**Target CPNP1(Block A) 재활성화** — `BENCHMARK.CPNP1_FYS/WEIGHTS`를 `[]`(채널시트 3그룹
+단위라 5세그먼트 자동 분해 불가로 잠정 중단됐던 상태)에서 `[26]`/`[1]`(단일 FY)로 전환,
+분자를 죽은 채널시트/Naver 참조 대신 Block 0의 세그먼트별 월별 수동 Spent로 교체(신규
+`buildSpentByGroupFYMonthFromManualInput_()`). 이미 3그룹 키("events"/"contact"/"content")
+하드코딩이라 5세그먼트와도 안 맞던 죽은 코드 `readChannelRawRows_()`/`readNaverRawRows_()`/
+`computeCombinedSpentByGroupFYMonth_()` 완전 삭제, `CONFIG.TARGET.EXTERNAL`의 채널/Naver
+관련 설정도 함께 삭제(`DEAL_TRACKER`는 유지).
+
+**Seminar 전용 캠페인 월 예외** — FY27 Seminar는 Oct/Jan/Apr 3회만 개최, 캠페인은 행사 30일
+전 시작 → Block A의 과거 실적 기반 시즌성을 그대로 쓰면 비캠페인 월(Aug/Nov 등)에도 New P1
+Target이 생겨 비현실적이라는 사용자 지적. 신규 `computeEvenSeasonalityForMonths_()`가 활성
+월에 균등 분배하도록 `computeTargetDerivationRows_()`에서 Seminar 그룹만 오버라이드(다른
+세그먼트/Block A 자체는 무영향). 최초엔 `CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS` 하드코딩으로
+구현했으나, 사용자가 "계획 바뀔 때마다 코드 고치는 거 말고 시트에서 체크만 바꾸고 싶다"고
+요청 — 같은 세션에 Block 0 신규 섹션 5(체크박스, row 32, B~M열 12개월)로 이동. 최초 1회만
+기본값(Sep/Oct/Dec/Jan/Mar/Apr)으로 시딩, 이후 시트가 Source of Truth.
+
+**버그 수정: Seminar 비활성 월에 CPNP1 Target이 남아있던 문제** — monthlyCPNP1Target이
+seasonalityPct(Seminar 활성 월 게이트)와 무관하게 계산돼, New/Pipeline Target이 0인 달에도
+CPNP1 Target 값이 그대로 표시되던 버그(사용자가 실 시트에서 발견: "Target P1이 0인데
+CPNP1은 채워져 있다"). Seminar이고 비활성 월이면 CPNP1 Target도 0으로 통일.
+
+**Target_REP 헤더 3행 재설계** — 세그먼트당 7컬럼 플랫 헤더("Seminar Target New P1" 식)가
+너무 넓다는 지적으로, 2행(세그먼트명 배너, 세그먼트당 병합)/3행(Target·Actual 구분 배너,
+Target 4컬럼·Actual 2컬럼 각각 병합)/4행(개별 지표 라벨) 3단 헤더로 재설계, 데이터는 5행부터
+(1행은 그대로 비워둠 — 사용자가 직접 수식 넣는 소계 행). 동시에 달성%를 리포트에서 완전히
+제거("Progress는 다른 시트에서 확인" 사용자 확인) — 세그먼트당 7컬럼→6컬럼, 순서를
+Target(New P1/Pipeline P1/P1/CPNP1) + Actual(P1/CPNP1)로 재배치. 세그먼트별 헤더 배경색도
+신규 적용(dataviz 스킬 카테고리컬 팔레트, GROUP_ORDER 순서와 1:1).
+
+**실 시트 검증 중 발견·수정한 버그/피드백 4건**: (1) `clearTargetReportArea_()`가 새 33컬럼
+폭만큼만 지워서 옛 38컬럼 구조(세그먼트당 7컬럼) 때의 34~38열(AH~AL) 잔재가 안 지워지던
+문제 — 45컬럼 버퍼로 수정. (2) 헤더 4행까지 틀 고정 추가. (3) 세그먼트 헤더 색이 너무
+강하다는 피드백 — 원색을 흰색 75:25 블렌딩 파스텔로 교체(hue 유지, 채도만 하향). (4) CPNP1
+컬럼 서식을 `#,##0` → `$#,##0.00`으로 변경.
+
+**검증**: Node vm 하네스로 순수 계산 함수 전수 재검증(22개 testXXXX 전부 PASS, 그중
+`testComputeTargetDerivationRows`는 Seminar 활성/비활성 월 양쪽 케이스로 갱신). 헤더 3행
+레이아웃은 병합(`merge()`/`getMergedRanges()`/`breakApart()`)까지 흉내내는 가짜 in-memory
+시트로 세그먼트 배너 위치/Target·Actual 병합 범위/개별 라벨 순서 전수 검증 + 2회 연속
+재실행해도 병합 충돌 없이 안전한지(idempotency), 옛 컬럼 잔재가 실제로 지워지는지까지 왕복
+확인. 실제 시트에서 `runRefreshTargetEngine()`/`runGenerateTargetReport()` 여러 차례 실행,
+사용자가 발견한 이슈들을 그때그때 수정 → 재검증하는 루프로 진행.
+
 ## 로컬/origin 재동기화 (2026-07-29 하네스 엔지니어링 세션과의 divergence)
 
 세션 시작 시 로컬과 origin이 서로 갈라진 상태(로컬 전용 커밋 1개, origin 전용 6개 — 다른 머신의
@@ -58,10 +116,10 @@ GROUP_ORDER 동적 순회라 설정만으로 자동 확장(3그룹×7컬럼=24 �
   설명한 5단계 로직만 기록됐고 실제 계산 코드는 미구현 — Deal Share 트랙 선택(New/Pipeline)과
   "실질적 조정" 메커니즘(고정 수식인지 수동 판단인지)이 아직 미확정.
 - Block 0(A~M열)과 Block A(N열~) 사이 구분용 빈 컬럼 없음 — 사용자 확인 후 보류, 나중에 요청 시 처리.
-- Target_REP(리포트 시트 자체, Target_Engine이 아니라) 실제 출력물의 5세그먼트 컬럼/서식 최종
-  확인은 아직 안 됨(이번 세션은 Target_Engine 화면만 검토).
-- 사용자가 실제 월별 Revenue Target/Budget/세그먼트별 Spent 값을 아직 Target_Engine에 입력
-  안 함(다음 세션에서 진행 예정, 사용자 확인).
+- ~~Target_REP 실제 출력물의 5세그먼트 컬럼/서식 최종 확인~~ — 후속 세션(위 "Target CPNP1
+  Benchmark 계산 전환 + Seminar 캠페인 월 예외 + Target_REP 헤더 3행 재설계" 참고)에서 완료.
+- ~~사용자가 실제 월별 Revenue Target/Budget/세그먼트별 Spent 값을 아직 Target_Engine에
+  입력 안 함~~ — 후속 세션에서 입력 완료, CPNP1 계산 체인도 그 값 기준으로 재활성화됨.
 
 # Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
 

@@ -31,9 +31,31 @@ Target/실적은 이번 phase에서 완성. CPNP1은 사용자가 직접 취합�
 - [x] Config/Engine 레이어 Node 하네스 검증 완료(2026-07-30) — 순수 함수 테스트 12개 전부 PASS,
       Block 0 읽기/쓰기 왕복(사용자가 준 실제 월별 Revenue Target $13,558,380/Budget 수치 포함)
       전부 정확히 일치 확인. 상세는 아래 "검증 방법" 참고.
-- [ ] **CPNP1_FYS 자동 채널시트 집계는 잠정 중단** — `BENCHMARK.CPNP1_FYS/WEIGHTS`를 빈 배열로
-      전환, `computeCombinedSpentByGroupFYMonth_()`에 조기 반환 추가. Phase 1(캠페인 데이터
-      자동 연동) 완료 후 재검토.
+- [x] **CPNP1_FYS 자동 채널시트 집계 잠정 중단 → 재활성화(2026-07-30, 같은 날 번복)** — 처음엔
+      `BENCHMARK.CPNP1_FYS/WEIGHTS`를 빈 배열로 전환했었으나(채널시트 3그룹 단위라 5세그먼트
+      자동 분해 불가), 세그먼트별 월별 Spent 수동 취합이 끝나면서 사용자가 "Target CPNP1을
+      이제 만들자"고 요청 — `[26]`/`[1]`(단일 FY)로 재활성화, 분자를 Block 0의 세그먼트별
+      월별 수동 Spent로 교체(`buildSpentByGroupFYMonthFromManualInput_()`, 90_TargetEngine.js
+      v1.20.0). 죽은 채널시트/Naver 참조 코드(`readChannelRawRows_()`/`readNaverRawRows_()`/
+      `computeCombinedSpentByGroupFYMonth_()`, 3그룹 키 하드코딩이라 5세그먼트와도 이미
+      안 맞았음) 완전 삭제. 과거 FY(24·25) segment-level spend 데이터가 없어 확장은 불가 —
+      Phase 1(캠페인 데이터 자동 연동) 완료 시 재검토.
+- [x] **Seminar 전용 월별 배분 예외(2026-07-30 신규)** — FY27 Seminar는 Oct/Jan/Apr 3회만
+      개최, 캠페인은 행사 30일 전 시작 → 월 그리드에선 "행사월+직전월"로 근사
+      (`CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS = ["SEP","OCT","DEC","JAN","MAR","APR"]`).
+      Block A의 과거 실적 기반 시즌성을 그대로 쓰면 비캠페인 월에도 New P1 Target이 생겨
+      비현실적이라는 사용자 지적으로, `computeTargetDerivationRows_()`가 Seminar 그룹에
+      한해 신규 `computeEvenSeasonalityForMonths_()`(활성 월 균등 분배)로 대체. Block A
+      자체(참고 지표)는 안 건드림. Seminar 전용 하드코딩(다른 세그먼트 필요해지면 그때
+      일반화, 균등 분배 vs 실적 가중 재정규화 중 균등 분배로 확정).
+      **같은 날 후속 수정**: 활성 월 목록을 `CONFIG.TARGET.SEMINAR_CAMPAIGN_MONTHS` 하드코딩
+      에서 Block 0 신규 섹션 5(체크박스, row 32, `INPUT.SEMINAR_ACTIVE_MONTHS`)로 이동 —
+      사용자 지적: "새 계획이 생기면 코드를 고쳐야 하는 게 아니라 시트에서 체크만 바꾸고
+      싶다." `readTargetEngineInputs_()`가 체크된 달을 `inputs.seminarActiveMonths`로 읽고
+      `computeTargetDerivationRows_()`가 이 값을 씀(00_Config.js v1.17.0/90_TargetEngine.js
+      v1.21.0). 최초 1회만 `DEFAULTS.SEMINAR_ACTIVE_MONTHS`로 체크박스 시딩, 이후 시트가
+      Source of Truth. Node 하네스로 "재실행해도 사용자가 수정한 체크 상태가 안 지워지는지"
+      왕복 검증 완료.
 - [ ] **예산 기반 신규 도출 체인(5단계, Decision Log 참고)은 미구현** — Deal Share 트랙 선택(R1/R2),
       "실질적 조정" 메커니즘 등 세부 확정 후 `computeTargetDerivationRows_()` 등에 반영 필요
 - [x] `91_TargetReport.js`/`92_TargetStyles.js` — 5세그먼트 확장 완료. 헤더/리포트 행 빌더는
@@ -45,6 +67,38 @@ Target/실적은 이번 phase에서 완성. CPNP1은 사용자가 직접 취합�
       월 값을 그 달 모든 주에 반복 — Target CPNP1과 동일 패턴)로 교체. `applyTargetEngineInputStyles_()`
       (92_TargetStyles.js) 신규로 Block 0 숫자 서식(천단위 콤마, $/%는 소수점 2자리) 적용.
       Node 하네스로 `computeTargetActualCPNP1ByGroupMonth_()` 별도 검증 완료(합성 데이터).
+- [x] **Target_REP 헤더 3행 재설계(2026-07-30 신규)** — 세그먼트당 7컬럼 플랫 헤더("Seminar
+      Target New P1" 식)가 너무 넓다는 사용자 지적으로, 2행(세그먼트명 배너)/3행(Target·Actual
+      구분 배너)/4행(개별 지표 라벨) 3단 헤더로 재설계, 데이터는 5행부터. 1행은 그대로 비워둠
+      (사용자가 직접 수식 입력하는 소계 행, 손 안 댐). 동시에 달성%를 리포트에서 완전히
+      제거("Progress는 다른 시트에서 확인" 사용자 확인) — 세그먼트당 7컬럼→6컬럼, 순서를
+      Target(New P1/Pipeline P1/P1/CPNP1) + Actual(P1/CPNP1)로 재배치. 세그먼트별 헤더
+      배경색도 신규 적용(dataviz 스킬 카테고리컬 팔레트 1~5번 슬롯, GROUP_ORDER 순서와 1:1,
+      검정 굵은 텍스트 — 대비 계산 결과 확정). `CONFIG.TARGET.REPORT.ROWS` 전면 재정의
+      (00_Config.js v1.18.0), `91_TargetReport.js`(v1.6.0) 신규 `buildTargetReportMetricHeaders_()`/
+      `writeTargetReportSegmentHeaderRow_()`/`writeTargetReportTargetActualHeaderRow_()`/
+      `writeTargetReportHeaders_()`(병합 breakApart 후 재작성 — 재실행해도 안전), `92_TargetStyles.js`
+      (v1.6.0) `applyTargetReportStyles_()` 전면 재작성. `resetTargetReportSheet_()`의
+      RESET_COLS 30→40(실제 컬럼 수 33 초과 대응). Node 하네스(가짜 병합 지원 in-memory
+      시트)로 헤더 3행 레이아웃(세그먼트 배너 위치/Target·Actual 병합 범위/개별 라벨 순서)
+      전수 검증 + 2회 연속 재실행해도 병합 충돌 없이 안전한지(idempotency) 확인 완료.
+- [x] **실 시트 검증 중 발견된 버그 4건 수정(2026-07-30)** — 사용자가 위 헤더 3행 구조를
+      실제로 `runGenerateTargetReport()` 실행해보고 리포트한 것들:
+      1. AH:AK열에 옛 7컬럼 구조 잔재가 남아있음 — `clearTargetReportArea_()`가 실제
+         헤더 폭(33컬럼)만큼만 지워서 옛 38컬럼 구조 때 썼던 34~38열이 안 지워지던 버그.
+         45컬럼 버퍼로 수정(91_TargetReport.js v1.7.0) — 다음 Generate 시 자동 정리.
+      2. 4번째 행까지 틀 고정 요청 → `applyTargetReportStyles_()`에 `setFrozenRows()`
+         추가(92_TargetStyles.js v1.7.0).
+      3. 세그먼트 헤더 색이 너무 강함 → 원색(v1.18.0)을 흰색 75:25 블렌딩 파스텔로 교체
+         (00_Config.js v1.19.0, hue 유지·채도만 하향).
+      4. CPNP1 컬럼에 $ + 소수점 2자리 요청 → `#,##0` → `$#,##0.00`(92_TargetStyles.js v1.7.0).
+      5. **진짜 버그(사용자 리포트: "Seminar Target P1이 0인데 CPNP1은 채워져 있다")** —
+         `computeTargetDerivationRows_()`의 monthlyCPNP1Target이 Seminar 비활성 월 게이트
+         (seasonalityPct===0)와 무관하게 Block A 과거 벤치마크만 보고 계산되던 문제.
+         New/Pipeline Target이 0인 달은 CPNP1 Target도 0으로 통일(90_TargetEngine.js
+         v1.22.0). 기존 테스트가 이 버그를 "정상"(AUG CPNP1=450 기대)으로 잘못 검증하고
+         있었음 — OCT(활성, CPNP1=540)/AUG(비활성, CPNP1=0) 양쪽 검증으로 교체.
+      Node 하네스로 4/5 항목 전부 재검증 완료(잔재 클리어 왕복, CPNP1 게이트 단위 테스트).
 - [ ] 실 시트로 `runGenerateTargetReport()` 실행 검증 (다음 단계 — Config/Engine/Report/Styles
       전부 코드 레벨로는 완료됐으나 실제 Apps Script 환경 검증 전)
 - [ ] `clasp push`는 위 실 시트 검증 전까지 보류
@@ -125,13 +179,20 @@ Target을 시즌성 벤치마크로 월별 배분)을 대체할 잠재력이 있
   4. 버젯 NP1 × P1당 가치(PerNP1V) = 세그먼트 Revenue 프로젝션
   5. "버젯 NP1"과 "벤치마크 NP1"(Block A 기존 New P1 벤치마크치)의 차이를 구해 실질적으로 조정
      — 예산이 벤치마크보다 커지면 CPL/CPNP1이 자연히 올라간다는 전제(선형 비례가 아님을 반영)
-- **1번 해결(2026-07-30)**: FY26 세그먼트별(5개) CPNP1 벤치마크는 사용자가 **시트에 직접 입력**
+- **1번 해결(2026-07-30, 최초)**: FY26 세그먼트별(5개) CPNP1 벤치마크는 사용자가 **시트에 직접 입력**
   하기로 함(채팅으로 값을 받을 필요 없음) — Block 0에 세그먼트당 1개 스칼라 입력 셀(5개)만
   마련해두면 됨(위 "수동 Spent 입력"과는 별개 — 이건 월별이 아니라 세그먼트당 1개 값).
   - 이전에 "CPNP1 벤치마크는 당분간 공란"이라 결정했던 것과 겉보기엔 상충되지만, 실제로는 범위가
     다름 — 그 결정은 "Block A의 월별×FY 가중평균 자동 계산 체계"를 공란으로 둔다는 뜻이었고,
     지금 이 FY26 단일 벤치마크는 예산 기반 신규 도출 체인(위 5단계) 전용 별도 입력으로, Block A
     벤치마크 표 자체를 대체하지 않음.
+  - **1번 재확정(2026-07-30, 최종)**: 세그먼트별 월별 Spent(위 "수동 Spent 입력") 취합이 끝나면서
+    사용자가 방침을 바꿈 — 이제 스칼라를 직접 입력하지 않고 "월별 Segment Spent 합 ÷ FY26
+    Segment New P1 합"으로 **계산**한다. `CONFIG.TARGET.INPUT.CPNP1_BENCHMARK_MANUAL` →
+    `CPNP1_BENCHMARK`로 이름 변경(`00_Config.js` v1.15.0), 신규
+    `computeCPNP1BenchmarkByGroup_()`/`writeTargetEngineCPNP1BenchmarkValues_()`
+    (`90_TargetEngine.js` v1.19.0)가 `refreshTargetEngine_()`에서 매번 계산해 씀 — Block 0의
+    "절대 안 덮어씀" 원칙의 유일한 예외가 됨(라벨/서식은 그대로 Block 0 스타일 유지).
   - **미해결(다음 세션 확인)**: 2번의 Deal Share는 New 트랙(R1)인지 Pipeline(R2)인지, 아니면
     둘의 합/블렌드인지.
   - 5번의 "실질적으로 조정"이 고정 수식인지(예: 비선형 체감 함수), 아니면 매번 사람이 판단해서
