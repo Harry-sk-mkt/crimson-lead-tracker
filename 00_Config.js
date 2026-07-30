@@ -9,9 +9,23 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.19.0
+ * v1.20.0
  *
  * Change Log
+ * v1.20.0 (2026-07-30)
+ * - ACQ_REP/NewP1_REP에 Target 컬럼 추가(Revenue Target/Revenue Target%/New P1
+ *   Target/New P1 Target% — ACQ_REP, Spent/CPNP1/New P1 Target/New P1 Target% —
+ *   NewP1_REP). 두 시트 다 컬럼 배치를 두 번 고쳐서 최종 확정(둘 다 실 시트
+ *   검증에서 발견, docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
+ *   Surprises 참고):
+ *   - **ACQ_REP**: O열(바로 다음 컬럼)부터 시도 → `ENGINE_START_COL`(15, 숨김
+ *     Engine 영역 O:R)과 충돌 → S열로 이동 → 이번엔 U:AF(21~32, 사용자 수동
+ *     수식/소계 영역, `MANUAL_AREA_NOTE`)와 충돌 → 최종 AH열(34, `TARGET_COLUMNS_START_COL`)로
+ *     확정. `REPORT_DATA_COLUMNS`(14, 기존 하드코딩 `14` 리터럴 교체)도 신규.
+ *   - **NewP1_REP**: N열(바로 다음 컬럼)부터 시도 → N열이 사용자 수동 영역
+ *     (`MANUAL_AREA_NOTE`)이라 충돌 → O열(15, `TARGET_COLUMNS_START_COL`)로
+ *     확정. NewP1_REP은 숨김 Engine 컬럼이 없어(Engine은 별도 시트
+ *     `NewP1_Engine`) 그 문제는 없었음.
  * v1.19.0 (2026-07-30)
  * - `REPORT.SEGMENT_HEADER_COLORS`를 원색(v1.18.0)에서 흰색 75:25 블렌딩 파스텔로
  *   교체 — "색이 너무 강하다"는 사용자 피드백. hue는 동일 유지, 채도만 낮춤.
@@ -285,7 +299,28 @@ const CONFIG = {
       GENERATE: 5       // E (checkbox)
     },
 
-    ENGINE_START_COL: 15,  // O열
+    ENGINE_START_COL: 15,  // O열 (숨김, 폭 4 — O:R)
+
+    // Report Area 원래 데이터 폭(A:N, FY~Revenue) — 기존 하드코딩 `14` 리터럴 교체용.
+    REPORT_DATA_COLUMNS: 14,
+
+    // (과거 기록) U:AF(21~32열)에 사용자가 직접 넣은 수동 수식/소계가 있었으나
+    // 2026-07-30 사용자가 직접 삭제 — 더 이상 이 범위를 피할 필요 없음(아래
+    // TARGET_COLUMNS_START_COL이 다시 S열로 돌아온 이유). 앞으로 이 영역에
+    // 사용자가 다시 수동 내용을 넣을 수 있으므로 코드가 U:AF를 쓰는 건 여전히
+    // 권장 안 함(구두 협의 사항, 강제 아님).
+
+    // Target 컬럼(Revenue Target/Revenue Target%/New P1 Target/New P1 Target%) 위치.
+    // 2026-07-30 컬럼 충돌을 거쳐 확정:
+    // 1차 — 처음엔 O열(15)부터 이어붙이려다 ENGINE_START_COL(15, 숨김 Engine 영역
+    //   O:R, 폭 4)과 겹치는 걸 코드 리뷰로 발견해 S열(19)로 이동.
+    // 2차 — S:V(19~22)로 실 시트 검증했더니 이번엔 U:AF(21~32, 사용자 수동
+    //   수식/소계)와 겹쳐 아무것도 안 보이는 문제 발생(사용자 리포트) — AH열(34)로 재이동.
+    // 3차(최종) — 사용자가 U:AF의 수동 수식/소계를 직접 삭제하면서 다시 여유가
+    //   생겨, S열(19)로 원복(사용자 확정, 2026-07-30). 상세:
+    //   docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
+    TARGET_COLUMNS_START_COL: 19,  // S열
+    TARGET_COLUMNS_COUNT: 4,
 
     SEGMENTS: [
       "Seminar",
@@ -331,7 +366,23 @@ const CONFIG = {
     },
 
     // Fiscal Week 이론상 최댓값(W53) — Sort Index 계산의 고정폭 슬롯 수로 사용.
-    MAX_WEEKS: 53
+    MAX_WEEKS: 53,
+
+    // Report Area 원래 데이터 폭(A:M, FY~Revenue, NEWP1_REPORT_HEADERS 13개) —
+    // 40_NewP1Report.js가 이 값을 직접 계산해 쓰지 않고 NEWP1_REPORT_HEADERS.length를
+    // 쓰므로 여긴 참고용 상수 아님(실제 폭 소스는 그 배열).
+
+    // (과거 기록) N열(14)에 사용자가 직접 넣은 수동 내용이 있었으나 2026-07-30
+    // 사용자가 직접 삭제 — 더 이상 이 컬럼을 피할 필요 없음(아래
+    // TARGET_COLUMNS_START_COL이 다시 N열로 돌아온 이유).
+
+    // Target 컬럼(Spent/CPNP1/New P1 Target/New P1 Target%) 위치. 2026-07-30
+    // 처음엔 N열(14, A:M 바로 뒤)부터 이어붙였다가 → N열 수동 영역과 겹쳐 O열(15)로
+    // 피함(사용자 리포트: "N:Q 안 나타나") → 사용자가 N열 수동 내용을 직접 삭제하면서
+    // 다시 N열(14)로 원복(사용자 확정, 2026-07-30 — ACQ_REP S열 원복과 동일 맥락).
+    // 상세: docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
+    TARGET_COLUMNS_START_COL: 14,  // N열
+    TARGET_COLUMNS_COUNT: 4
 
   },
 

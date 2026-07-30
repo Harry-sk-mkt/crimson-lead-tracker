@@ -101,7 +101,7 @@ FY > Month > Fiscal Week > Segment 계층을 **한 시트에 flat하게 전부 �
     토요일 시작 — 8/1 요일이 매년 바뀌므로). 캘린더 주(월~일)를 기대한 사용자에게 혼동을 유발함이
     확인되어 Week 축 자체를 제거하기로 결정.
 
-## 5. Metric Columns (A:M, 13 columns — 2026-07-22 Week 제거로 14→13)
+## 5. Metric Columns (A:M 13 columns + Target 4 columns — 2026-07-22 Week 제거로 14→13, 2026-07-30 Target 4컬럼 추가)
 
 %는 건수와 **완전 분리된 별도 컬럼** (사용자 확정).
 
@@ -120,12 +120,25 @@ FY > Month > Fiscal Week > Segment 계층을 **한 시트에 flat하게 전부 �
 | K | Won | `Revenue` > 0 |
 | L | Won% | K / D |
 | M | Revenue | `Revenue` 합산 |
+| **(N열은 사용자 수동 영역 — 코드가 안 씀)** | | |
+| O (`TARGET_COLUMNS_START_COL`) | Spent | Target_Engine Block 0 세그먼트별 월별 수동 Spent (2026-07-30 추가) |
+| P | CPNP1 | Spent(O) ÷ New P1(D) (실적, 2026-07-30 추가) |
+| Q | New P1 Target | Target_Engine Block D (2026-07-30 추가, ACQ_REP과 동일 값 — `docs/ACQReportDesign.md` "오해 방지" 섹션 참고) |
+| R | New P1 Target% | New P1(D) ÷ New P1 Target(Q), 100% 이상이면 초록 하이라이트 (2026-07-30 추가) |
 
+- **A:M과 Target 4컬럼(O:R) 사이 N열은 건드리지 않는다** — 사용자가 직접 쓰던 수동 영역이라
+  실 시트 검증 중 충돌이 발견돼(원래 N열부터 이어붙이려 했음) O열로 옮김. `NEWP1_REPORT_HEADERS`
+  (A:M, 13개)와 `NEWP1_TARGET_HEADERS`(O:R, 4개, `CONFIG.NEWP1.TARGET_COLUMNS_START_COL`)가
+  코드상 별도 배열/range로 분리돼 있다 — 상세: `docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md`.
 - **모든 %의 분모는 해당 행의 New P1(D)** — 코호트 진행률이므로.
 - D = 0인 행의 % 처리: 0으로 나누기 금지, 빈 값으로 표시 (구현 완료 — `generateNewP1Report_()`에서 `""`).
 - SAL 참고: `Total IC Requests`에는 백필 하한 보정(IC Booked Date 존재 + 카운터 0 → 1)이
   이미 적용되어 있어, 트래킹 도입 이전 Lead도 SAL로 잡히며 퍼널 순서(SAL ≥ IC Booked)가
   논리적으로 유지된다. 의도된 동작으로 보고 그대로 활용한다.
+- **O~R(Spent/CPNP1/New P1 Target/New P1 Target%)는 Target_Engine이 마지막으로 Generate한
+  Target FY 1개만 값이 채워짐** — 그 외 FY와 Referral/Other 세그먼트는 공란(`Target_Engine`의
+  `GROUP_ORDER`가 5개 세그먼트만 포함하기 때문, 의도된 동작). Pipeline P1 Target은 이번 확장에
+  포함 안 함 — 상세: `docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md`.
 
 ## 6. Engine — `NewP1_Engine` 숨김 시트 (Summary 통합)
 

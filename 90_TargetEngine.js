@@ -22,9 +22,23 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.22.0
+ * v1.23.0
  *
  * Change Log
+ * v1.23.0 (2026-07-30)
+ * - ACQ_REP/NewP1_REP에 Target 컬럼을 붙이기 위한 공용 조회 함수 신규
+ *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고,
+ *   원래 별도 FY_REP으로 설계했던 걸 기존 두 리포트 확장으로 방향 전환).
+ *   `readTargetEngineDealShareRows_()`(Block C 조회 — 지금까지 Block D처럼
+ *   시트에서 직접 읽는 리더가 없었음) 신규. `computeReportTargetLookupFromInputs_()`
+ *   (순수 함수 — Block 0 Revenue Target/Spent × Block C Deal Share × Block D
+ *   New P1 Target을 (targetFY|Month|Group) 키로 병합)와 그 IO 래퍼
+ *   `computeReportTargetLookup_()` 추가. Revenue Target = 월별 회사 전체
+ *   Revenue Target × 세그먼트 Deal Share(코호트1/R1/New 트랙, 위 exec-plan
+ *   Decision Log에서 재확인). "타겟 없음"과 "타겟 0"을 구분하기 위해
+ *   hasOwnProperty로 조회하도록 설계(90_TargetEngine.js 기존
+ *   computeCPNP1RatioByFYMonth_() 관례와 동일) — 소비 측(30_ACQReport.js/
+ *   40_NewP1Report.js)에서 반드시 hasOwnProperty 체크 후 사용할 것.
  * v1.22.0 (2026-07-30)
  * - 버그 수정(사용자 리포트: "Seminar Target P1이 0인데 CPNP1 컬럼은 채워져 있다") —
  *   `computeTargetDerivationRows_()`에서 monthlyCPNP1Target이 seasonalityPct(Seminar
@@ -3120,5 +3134,207 @@ function readTargetEngineDerivationRows_(){
       };
 
     });
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Target Engine Deal Share Rows (Block C 조회 — ACQ_REP/NewP1_REP용)
+ *
+ * WHY (2026-07-30)
+ * Block C(딜 비중)는 지금까지 쓰는 곳이 refreshTargetEngine_() 내부뿐이라
+ * 시트에서 직접 읽는 리더가 없었음 — computeReportTargetLookup_()가 Revenue
+ * Target 계산에 필요한 세그먼트 Deal Share(코호트1/R1/New 트랙)를 가져오기
+ * 위해 신규 추가. Block D 리더(readTargetEngineDerivationRows_())와 동일 패턴
+ * (그룹당 1행, GROUP_ORDER 순서 고정).
+ * ==========================================================
+ */
+function readTargetEngineDealShareRows_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!sheet) return [];
+
+  const startCol = CONFIG.TARGET.ENGINE.BLOCK_C_START_COL;
+  const colCount = CONFIG.TARGET.ENGINE.BLOCK_C_COLUMNS;
+  const groupCount = CONFIG.TARGET.GROUP_ORDER.length;
+
+  const lastRow = sheet.getLastRow();
+
+  if(lastRow < 2) return [];
+
+  const values = sheet.getRange(2, startCol, groupCount, colCount).getValues();
+
+  return values
+    .filter(function(row){ return row[0]; })
+    .map(function(row){
+
+      return {
+        group: row[0],
+        dealShare: row[1],
+        pipelineShare: row[2],
+        newP1Target: row[3],
+        pipelineP1Target: row[4],
+        totalP1Target: row[5]
+      };
+
+    });
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Report Target Lookup From Inputs (순수 함수 — ACQ_REP/NewP1_REP 공용)
+ *
+ * WHY (2026-07-30, docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고)
+ * ACQ_REP(Revenue Target)과 NewP1_REP(New P1 Target/Spent/CPNP1)이 각자
+ * Target_Engine을 재스캔하지 않도록, Block 0 입력값/Block C 딜 비중/Block D
+ * 목표 전개를 (targetFY|Month|Group) 키 하나로 병합해 한 번만 계산한다.
+ *
+ * - Revenue Target = 월별 회사 전체 Revenue Target × 세그먼트 Deal Share
+ *   (dealShareRows의 dealShare, 코호트1/R1/New 트랙 — exec-plan Decision Log
+ *   "Target 매핑" 참고). Pipeline Share는 이번 확장에서 안 씀(같은 exec-plan,
+ *   Pipeline P1 Target 제외 결정과 동일 이유).
+ * - New P1 Target = Block D의 monthlyNewP1Target — 주 단위로 반복 저장돼
+ *   있어 (Group, Month) 조합당 첫 값만 채택(dedupe).
+ * - Spent = Block 0 세그먼트별 월별 수동 Spent 그대로.
+ * - Target_Engine은 한 번에 Target FY 하나만 갖고 있으므로, 그 FY 외의
+ *   (Month, Segment) 조합은 키 자체가 없다 — "타겟 없음"과 "타겟 0"을
+ *   구분하기 위해 소비 측은 반드시 hasOwnProperty로 조회할 것
+ *   (computeCPNP1RatioByFYMonth_()의 기존 관례와 동일 이유).
+ *
+ * INPUT
+ * inputs : Object  readTargetEngineInputs_() 반환값(targetFY/monthlyRevenueTarget/
+ *   monthlySegmentSpent 사용)
+ * dealShareRows : Array<Object>  readTargetEngineDealShareRows_() 반환값
+ * derivationRows : Array<Object>  readTargetEngineDerivationRows_() 반환값
+ *
+ * OUTPUT
+ * { targetFY, revenueTarget, newP1Target, spent }  각 맵의 키:
+ *   targetFY + "|" + month + "|" + group
+ *
+ * TEST
+ * testComputeReportTargetLookupFromInputs() 참고
+ * ==========================================================
+ */
+function computeReportTargetLookupFromInputs_(inputs, dealShareRows, derivationRows){
+
+  const dealShareByGroup = {};
+
+  dealShareRows.forEach(function(r){
+    dealShareByGroup[r.group] = r.dealShare;
+  });
+
+  const revenueTarget = {};
+  const spent = {};
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
+
+    const groupSpent = inputs.monthlySegmentSpent[group] || {};
+
+    CONFIG.ACQ.FISCAL_MONTH_ORDER.forEach(function(month){
+
+      const key = inputs.targetFY + "|" + month + "|" + group;
+
+      revenueTarget[key] =
+        (inputs.monthlyRevenueTarget[month] || 0) * (dealShareByGroup[group] || 0);
+
+      spent[key] = groupSpent[month] || 0;
+
+    });
+
+  });
+
+  const newP1Target = {};
+  const seenMonthGroup = {};
+
+  derivationRows.forEach(function(row){
+
+    const dedupeKey = row.group + "|" + row.month;
+
+    if(seenMonthGroup[dedupeKey]) return;
+
+    seenMonthGroup[dedupeKey] = true;
+
+    newP1Target[inputs.targetFY + "|" + row.month + "|" + row.group] = row.monthlyNewP1Target;
+
+  });
+
+  return {
+    targetFY: inputs.targetFY,
+    revenueTarget: revenueTarget,
+    newP1Target: newP1Target,
+    spent: spent
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeReportTargetLookupFromInputs_()
+ * ==========================================================
+ */
+function testComputeReportTargetLookupFromInputs(){
+
+  const inputs = {
+    targetFY: 27,
+    monthlyRevenueTarget: { AUG: 100000, SEP: 200000 },
+    monthlySegmentSpent: {
+      Seminar: { AUG: 5000, SEP: 6000 },
+      Webinar: { AUG: 1000, SEP: 1200 }
+    }
+  };
+
+  const dealShareRows = [
+    { group: "Seminar", dealShare: 0.3 },
+    { group: "Webinar", dealShare: 0.1 }
+  ];
+
+  const derivationRows = [
+    { month: "AUG", group: "Seminar", monthlyNewP1Target: 50 },
+    { month: "AUG", group: "Seminar", monthlyNewP1Target: 50 }, // 같은 (Month,Group) 중복 — dedupe 확인
+    { month: "SEP", group: "Seminar", monthlyNewP1Target: 40 }
+  ];
+
+  const result = computeReportTargetLookupFromInputs_(inputs, dealShareRows, derivationRows);
+
+  const pass =
+    result.revenueTarget["27|AUG|Seminar"] === 30000 &&
+    result.revenueTarget["27|SEP|Webinar"] === 20000 &&
+    result.spent["27|AUG|Seminar"] === 5000 &&
+    result.spent["27|AUG|BOFU"] === 0 &&
+    result.newP1Target["27|AUG|Seminar"] === 50 &&
+    result.newP1Target["27|SEP|Seminar"] === 40 &&
+    !result.newP1Target.hasOwnProperty("27|OCT|Seminar");
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Report Target Lookup (IO 래퍼 — ACQ_REP/NewP1_REP용)
+ * ==========================================================
+ */
+function computeReportTargetLookup_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!sheet){
+    return { targetFY: null, revenueTarget: {}, newP1Target: {}, spent: {} };
+  }
+
+  const inputs = readTargetEngineInputs_(sheet);
+  const dealShareRows = readTargetEngineDealShareRows_();
+  const derivationRows = readTargetEngineDerivationRows_();
+
+  return computeReportTargetLookupFromInputs_(inputs, dealShareRows, derivationRows);
 
 }

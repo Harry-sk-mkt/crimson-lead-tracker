@@ -12,9 +12,22 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-07-30)
+ * - Revenue Target/Revenue Target%/New P1 Target/New P1 Target% 4컬럼 신규 서식 —
+ *   **AH:AK열(`CONFIG.ACQ.TARGET_COLUMNS_START_COL`부터)**에 배치. O:R(숨김 Engine
+ *   영역)/U:AF(사용자 수동 수식 영역, 00_Config.js `MANUAL_AREA_NOTE`)를 둘 다
+ *   피해야 해서 위치가 두 번 바뀜(00_Config.js v1.20.0/30_ACQReport.js v1.10.0
+ *   Change Log 참고) — 그래서 이 파일은 컬럼 번호를 하드코딩하지 않고 전부
+ *   `CONFIG.ACQ.TARGET_COLUMNS_START_COL` 기준 상대 위치로 계산(헤더 Note 포함).
+ *   기존에 A:N 1개 range로 처리하던 배경 초기화/월블록 배경/테두리를
+ *   A:N(REPORT_DATA_COLUMNS) + Target 4컬럼(TARGET_COLUMNS_START_COL~) 2개
+ *   range로 분리 적용. Target% 컬럼 100% 이상 하이라이트는
+ *   `highlightAtOrAboveThreshold_()` 신규(기존 `highlightAboveMedian_()`은
+ *   중앙값 기준이라 재사용 불가). 상세:
+ *   docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
  * v1.5.0 (2026-07-25)
  * - SAL 헤더 Note 갱신 — 데이터 소스가 MTA_Master(Lead Record Type)에서
  *   Leads_OPS(Sales Accepted Date)로 전환됨 반영.
@@ -52,26 +65,32 @@ function applyACQReportStyles_(sheet, rowCount){
 
   const startRow = CONFIG.ACQ.ROWS.REPORT_DATA_START;
   const headerRow = CONFIG.ACQ.ROWS.REPORT_HEADER;
+  const dataCols = CONFIG.ACQ.REPORT_DATA_COLUMNS;           // A:N (14)
+  const targetStartCol = CONFIG.ACQ.TARGET_COLUMNS_START_COL; // AH열(34) — O:R(Engine)/U:AF(수동 영역) 둘 다 건너뜀
+  const targetCols = CONFIG.ACQ.TARGET_COLUMNS_COUNT;         // 4
 
   //----------------------------------------------------------
   // 배경색 우선 초기화 (이전 실행의 줄무늬/강조가 남지 않도록)
+  // A:N과 Target 4컬럼(AH:AK) 사이에 숨김 Engine 영역(O:R)과 사용자 수동 영역
+  // (U:AF)이 껴 있어 range를 분리한다.
   //----------------------------------------------------------
 
   if(rowCount > 0){
 
-    sheet.getRange(startRow, 1, rowCount, 14)
-      .setBackground(null);
+    sheet.getRange(startRow, 1, rowCount, dataCols).setBackground(null);
+    sheet.getRange(startRow, targetStartCol, rowCount, targetCols).setBackground(null);
 
   }
 
   //----------------------------------------------------------
-  // % 컬럼: All P1%(6) / New Leads%(8) / New P1%(10)
-  // Revenue 컬럼: 14 — 천단위 콤마
+  // % 컬럼: All P1%(6) / New Leads%(8) / New P1%(10) /
+  //   Revenue Target%(20) / New P1 Target%(22, 2026-07-30 추가)
+  // Revenue 컬럼: 14 — 천단위 콤마 / Revenue Target(targetStartCol)도 동일
   //----------------------------------------------------------
 
   if(rowCount > 0){
 
-    const percentColumns = [6, 8, 10];
+    const percentColumns = [6, 8, 10, targetStartCol + 1, targetStartCol + 3];
 
     percentColumns.forEach(function(col){
 
@@ -80,8 +99,12 @@ function applyACQReportStyles_(sheet, rowCount){
 
     });
 
-    sheet.getRange(startRow, 14, rowCount, 1)
-      .setNumberFormat("#,##0");
+    [14, targetStartCol].forEach(function(col){
+
+      sheet.getRange(startRow, col, rowCount, 1)
+        .setNumberFormat("#,##0");
+
+    });
 
     //----------------------------------------------------------
     // 월 블록 단위 배경색 (같은 달의 세그먼트끼리는 같은 색,
@@ -97,8 +120,8 @@ function applyACQReportStyles_(sheet, rowCount){
 
       if(isEvenBlock){
 
-        sheet.getRange(startRow + i, 1, 1, 14)
-          .setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, 1, 1, dataCols).setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, targetStartCol, 1, targetCols).setBackground("#F3F3F3");
 
       }
 
@@ -111,6 +134,14 @@ function applyACQReportStyles_(sheet, rowCount){
     highlightAboveMedian_(sheet, startRow, rowCount, 6);   // All P1 %
     highlightAboveMedian_(sheet, startRow, rowCount, 8);   // New Leads %
     highlightAboveMedian_(sheet, startRow, rowCount, 10);  // New P1 %
+
+    //----------------------------------------------------------
+    // Target 달성(100% 이상) 강조 — Revenue Target%(20) / New P1 Target%(22)
+    // 2026-07-30 추가 (중앙값 기준이 아니라 100% 고정 기준이라 별도 함수)
+    //----------------------------------------------------------
+
+    highlightAtOrAboveThreshold_(sheet, startRow, rowCount, targetStartCol + 1, 1);
+    highlightAtOrAboveThreshold_(sheet, startRow, rowCount, targetStartCol + 3, 1);
 
   }
 
@@ -129,10 +160,17 @@ function applyACQReportStyles_(sheet, rowCount){
   });
 
   //----------------------------------------------------------
-  // 테두리 — 헤더(4행) + 데이터 영역(5행~) 전체, A~N(14컬럼)
+  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:N + Target 4컬럼(O:R Engine/U:AF 수동 영역은 제외)
   //----------------------------------------------------------
 
-  sheet.getRange(headerRow, 1, totalRows, 14)
+  sheet.getRange(headerRow, 1, totalRows, dataCols)
+    .setBorder(
+      true, true, true, true, true, true,
+      "#000000",
+      SpreadsheetApp.BorderStyle.SOLID
+    );
+
+  sheet.getRange(headerRow, targetStartCol, totalRows, targetCols)
     .setBorder(
       true, true, true, true, true, true,
       "#000000",
@@ -177,6 +215,23 @@ function annotateACQReportMetricNotes_(sheet, headerRow){
 
   });
 
+  // Target 4컬럼(2026-07-30 추가) — 컬럼 위치가 두 번 바뀐 전례(위 Change Log 참고)가
+  // 있어, 하드코딩 키 대신 CONFIG.ACQ.TARGET_COLUMNS_START_COL 기준 상대 위치로 부착.
+  const t = CONFIG.ACQ.TARGET_COLUMNS_START_COL;
+
+  const targetNotes = {};
+  targetNotes[t] = "Revenue Target — 월별 회사 전체 Revenue Target × 세그먼트 Deal Share(Target_Engine). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. O:R(숨김 Engine)/U:AF(사용자 수동 영역)를 피해 이 위치에 배치.";
+  targetNotes[t + 1] = "Revenue Target% — Revenue(14) ÷ Revenue Target. 100% 이상이면 초록 하이라이트.";
+  targetNotes[t + 2] = "New P1 Target — Target_Engine Block D(New P1 Target). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. NewP1_REP의 New P1 Target과 같은 값(같은 Business Segment 컬럼 소스, docs/ACQReportDesign.md \"오해 방지\" 섹션 참고).";
+  targetNotes[t + 3] = "New P1 Target% — New P1(9) ÷ New P1 Target. 100% 이상이면 초록 하이라이트.";
+
+  Object.keys(targetNotes).forEach(function(col){
+
+    sheet.getRange(headerRow, Number(col))
+      .setNote(targetNotes[col]);
+
+  });
+
 }
 
 
@@ -216,6 +271,52 @@ function highlightAboveMedian_(sheet, startRow, rowCount, col){
 
       sheet.getRange(startRow + i, col)
         .setBackground("#C6E0B4");   // 옅은 초록 — 강조색
+
+    }
+
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Highlight Cells At Or Above Threshold (고정 기준값 이상 강조)
+ *
+ * WHY (2026-07-30)
+ * Target 달성률(Revenue Target%/New P1 Target%)은 중앙값이 아니라 100%라는
+ * 고정 기준으로 강조해야 해서 `highlightAboveMedian_()`을 재사용할 수 없음 —
+ * 같은 강조색(#C6E0B4, ACQ_REP 기존 관례)을 그대로 쓰는 별도 함수.
+ *
+ * INPUT
+ * sheet : Sheet
+ * startRow : Number  (데이터 시작 행)
+ * rowCount : Number  (데이터 행 수)
+ * col : Number  (대상 컬럼, 1-based)
+ * threshold : Number  (이 값 이상이면 강조, 예: 1 = 100%)
+ *
+ * TEST
+ * testHighlightAtOrAboveThreshold_()는 시트 I/O라 단위 테스트 대상 아님
+ * (읽기 전용 헬퍼 `computeMedian_()`과 달리 이 함수는 getValues/setBackground를
+ * 직접 호출 — 90_TargetEngine.js의 readXXX_()류와 동일 관례).
+ * ==========================================================
+ */
+function highlightAtOrAboveThreshold_(sheet, startRow, rowCount, col, threshold){
+
+  if(rowCount === 0) return;
+
+  const values = sheet
+    .getRange(startRow, col, rowCount, 1)
+    .getValues();
+
+  for(let i = 0; i < rowCount; i++){
+
+    const raw = values[i][0];
+
+    if(raw !== "" && Number(raw) >= threshold){
+
+      sheet.getRange(startRow + i, col)
+        .setBackground("#C6E0B4");   // 옅은 초록 — 강조색 (highlightAboveMedian_()과 동일)
 
     }
 

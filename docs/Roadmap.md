@@ -99,11 +99,21 @@ Results / Spent / CPL / Rev / ROAS` + 우측 "비고"(캠페인 메모, 자유 �
 
 ## 계획 중 (End Goal과 별개)
 
-### FY별 Sales Funnel 대시보드
+### FY별 Sales Funnel 대시보드 → ACQ_REP/NewP1_REP Target 확장으로 방향 전환
 
 리드 → SAL → IC Booked → IC Complete → Won 등 세일스 퍼널 전 단계를 FY(Fiscal Year)별로 보는
-대시보드 구축 필요(2026-07-30 사용자 확정). 상세 설계(어느 시트/데이터 기준으로 만들지, 세그먼트
-분해 여부 등)는 미정 — 착수 시 별도로 확정.
+대시보드 구축 필요(2026-07-30 사용자 확정). **설계 착수 후 별도 신규 리포트(FY_REP) 대신
+기존 리포트 확장으로 방향 전환(2026-07-30, 같은 세션)** — `docs/FYReportDesign.md`(superseded,
+검토 과정 보존)의 원래 설계는 채택 안 함. 대신:
+
+- **`ACQ_REP`**: Revenue Target/Target% + New P1 Target/Target% 컬럼 추가 (달성 시 하이라이트)
+- **`NewP1_REP`**: New P1 Target/Target% + Spent + CPNP1(실적) 컬럼 추가
+
+Target 원천은 `Target_Engine`(Block C Deal Share, Block D New P1 Target — 이미 계산 중)을
+재사용. Pipeline P1 Target(구 코호트 딜의 이번 FY 전환분)은 이번 확장에서 **제외** — 실제
+클로징 여부가 불확실한 영역이라 New P1(리드 생성 카운트) 목표와 성격이 다르다는 사용자 판단
+(2026-07-30). 상세 설계는 `docs/ACQReportDesign.md`/`docs/NewP1ReportDesign.md`에 구현 시 추가
+예정, 진행 중이면 `docs/exec-plans/active/`에 대응 문서.
 
 ## 진행 중 (exec-plans/active/에 대응 문서 있음)
 

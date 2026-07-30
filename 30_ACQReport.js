@@ -17,9 +17,30 @@
  * 20 Reporting
  *
  * Version
- * v1.9.3
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-07-30)
+ * - Revenue Target/Revenue Target%/New P1 Target/New P1 Target% 4컬럼 추가
+ *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고, 원래
+ *   별도 FY_REP으로 설계했던 걸 기존 두 리포트 확장으로 방향 전환). **컬럼 위치가
+ *   두 번 충돌해서 재조정됨** — 처음엔 O열(기존 A:N 바로 뒤)부터 이어붙이려
+ *   했으나 O:R이 이미 `CONFIG.ACQ.ENGINE_START_COL`(숨김 Engine 영역,
+ *   sortIndex/FY/Month/Segment)로 쓰이고 있어 겹치는 걸 코드 리뷰로 발견 → S열로
+ *   옮겼으나 이번엔 실 시트 검증 중 U:AF(21~32열, 사용자 수동 수식/소계 영역)와
+ *   겹쳐서 아무 것도 안 보이는 문제 발생(사용자 리포트) → 최종
+ *   `CONFIG.ACQ.TARGET_COLUMNS_START_COL`(AH열=34, 00_Config.js v1.20.0)로 확정.
+ *   데이터 write/clear를 A:N(`REPORT_DATA_COLUMNS`)과 Target 4컬럼
+ *   (`TARGET_COLUMNS_START_COL`~) 두 range로 분리(그 사이 O:R/U:AF는 손대지
+ *   않음). Target 값은 ACQ_Summary(캐시)가 아니라
+ *   `computeReportTargetLookup_()`(90_TargetEngine.js)로 리포트 생성 시점에
+ *   조회 — Target은 Master/OPS 변경이 아니라 Target_Engine 갱신에 종속되는
+ *   별개 축이라 캐시 레이어에 안 섞음. 기존 A:N 헤더는 시트에 수동 입력된
+ *   값이라 코드가 안 건드리지만(주석 참고), 새로 추가되는 Target 헤더는 수동
+ *   입력된 적이 없으므로 generateACQReport_()가 매번 다시 씀(멱등).
+ *   Referral/Other 세그먼트와 마지막으로 Generate한 Target FY가 아닌 행은
+ *   Target_Engine의 GROUP_ORDER(5개)/단일 FY 제약으로 공란 처리(의도된 동작).
+ *   하드코딩 `14` 리터럴을 `CONFIG.ACQ.REPORT_DATA_COLUMNS`로 교체.
  * v1.9.3 (2026-07-28)
  * - computeACQDealRevenueFromRows_()가 "N/A"(출처 불명, 대부분 2022년 이전
  *   딜) 세그먼트도 Upsell과 동일하게 "Other"로 접어 넣도록 수정 — 그대로
@@ -350,11 +371,19 @@ function generateACQReport_(){
 
   const summaryMap = readACQSummaryMap_();
 
+  // Target 조회(90_TargetEngine.js) — Revenue Target/New P1 Target은 ACQ_Summary
+  // 캐시가 아니라 Target_Engine의 마지막 Generate 결과를 리포트 생성 시점에 붙임
+  // (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고).
+  const targetLookup = computeReportTargetLookup_();
+
   //----------------------------------------------------------
   // 5. Report Area 작성
   //----------------------------------------------------------
 
-  const outputRows = reversedTargetRows.map(function(row){
+  const outputRows = [];
+  const targetOutputRows = [];
+
+  reversedTargetRows.forEach(function(row){
 
     const key = row.fy + "|" + row.month + "|" + row.segment;
     const s = summaryMap[key] || {
@@ -362,7 +391,7 @@ function generateACQReport_(){
       sal: 0, icBooked: 0, icComplete: 0, revenue: 0
     };
 
-    return [
+    outputRows.push([
       "FY" + String(row.fy).slice(-2),
       row.month,
       row.segment,
@@ -377,18 +406,47 @@ function generateACQReport_(){
       s.icBooked,
       s.icComplete,
       s.revenue
-    ];
+    ]);
+
+    // Target_Engine은 한 번에 Target FY 하나만 갖고 있어, 그 FY/GROUP_ORDER(5개
+    // 세그먼트)에 없는 행은 hasOwnProperty가 false — "타겟 0"과 구분해 공란 처리.
+    const hasRevenueTarget = targetLookup.revenueTarget.hasOwnProperty(key);
+    const revenueTarget = hasRevenueTarget ? targetLookup.revenueTarget[key] : "";
+    const revenueTargetPct = (hasRevenueTarget && revenueTarget > 0)
+      ? s.revenue / revenueTarget : "";
+
+    const hasNewP1Target = targetLookup.newP1Target.hasOwnProperty(key);
+    const newP1Target = hasNewP1Target ? targetLookup.newP1Target[key] : "";
+    const newP1TargetPct = (hasNewP1Target && newP1Target > 0)
+      ? s.newP1 / newP1Target : "";
+
+    targetOutputRows.push([revenueTarget, revenueTargetPct, newP1Target, newP1TargetPct]);
 
   });
+
+  // Target 컬럼 헤더(TARGET_COLUMNS_START_COL부터) — 기존 A:N과 달리 시트에
+  // 수동 입력된 적이 없어 코드가 매번 다시 씀(멱등, A:N은 그대로 안 건드림).
+  // O:R(ENGINE_START_COL, 숨김 Engine)/U:AF(사용자 수동 영역)는 그 사이 비워둔
+  // 채 건너뜀 (위 Change Log — 00_Config.js v1.20.0 참고).
+  sheet.getRange(
+    CONFIG.ACQ.ROWS.REPORT_HEADER, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
+    1, CONFIG.ACQ.TARGET_COLUMNS_COUNT
+  ).setValues([["Revenue Target", "Revenue Target%", "New P1 Target", "New P1 Target%"]]);
 
   const lastReportRow = sheet.getLastRow();
 
   if(lastReportRow >= CONFIG.ACQ.ROWS.REPORT_DATA_START){
 
+    const clearRowCount = lastReportRow - CONFIG.ACQ.ROWS.REPORT_DATA_START + 1;
+
     sheet.getRange(
       CONFIG.ACQ.ROWS.REPORT_DATA_START, 1,
-      lastReportRow - CONFIG.ACQ.ROWS.REPORT_DATA_START + 1,
-      14
+      clearRowCount, CONFIG.ACQ.REPORT_DATA_COLUMNS
+    ).clearContent();
+
+    sheet.getRange(
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
+      clearRowCount, CONFIG.ACQ.TARGET_COLUMNS_COUNT
     ).clearContent();
 
   }
@@ -397,8 +455,13 @@ function generateACQReport_(){
 
     sheet.getRange(
       CONFIG.ACQ.ROWS.REPORT_DATA_START, 1,
-      outputRows.length, 14
+      outputRows.length, CONFIG.ACQ.REPORT_DATA_COLUMNS
     ).setValues(outputRows);
+
+    sheet.getRange(
+      CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
+      targetOutputRows.length, CONFIG.ACQ.TARGET_COLUMNS_COUNT
+    ).setValues(targetOutputRows);
 
     applyACQReportStyles_(sheet, outputRows.length);
 

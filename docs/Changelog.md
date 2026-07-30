@@ -121,6 +121,77 @@ GROUP_ORDER 동적 순회라 설정만으로 자동 확장(3그룹×7컬럼=24 �
 - ~~사용자가 실제 월별 Revenue Target/Budget/세그먼트별 Spent 값을 아직 Target_Engine에
   입력 안 함~~ — 후속 세션에서 입력 완료, CPNP1 계산 체인도 그 값 기준으로 재활성화됨.
 
+## Target_REP 실 시트 최종 검증 + ACQ_REP/NewP1_REP Target 달성률 컬럼 추가 (후속 세션)
+
+**배경**: 위 "Target CPNP1 Benchmark 계산 전환 + Seminar 캠페인 월 예외 + Target_REP 헤더 3행
+재설계" 세션 이후 같은 날 후속 세션. Target_REP 실 시트 검증 마무리 후, "FY별 Sales Funnel
+대시보드"(Roadmap 항목) 설계에 착수했다가 기존 리포트 확장으로 방향을 바꿔 구현까지 완료.
+
+**Target_REP 실 시트 검증 완료** — 직전 세션에서 잡은 4가지(헤더 3행 구조/틀고정/세그먼트
+배색, CPNP1 `$` 서식, 옛 7컬럼 구조 잔재 정리, Seminar 비활성월 CPNP1=0 게이팅) 전부 실 시트에
+정상 반영 확인(사용자 확인). exec-plan `docs/exec-plans/active/2026-07-30-target-rep-segment-breakdown.md`
+는 예산 기반 도출 체인(§ 미구현 1건)이 남아있어 완료 처리는 안 함.
+
+**FY_REP 설계 착수 → 채택 안 함(superseded)** — "리드→SAL→IC Booked→IC Complete→Won FY별
+대시보드"를 별도 신규 리포트로 설계(`docs/FYReportDesign.md`, 원본 외부 FY_REP 리포트를
+편입 + 세그먼트별 달성률 뷰 추가하는 안, Validation Rules 섹션 포함)했으나, 검토 중 "ACQ_REP/
+NewP1_REP이 이미 FY×Month×Segment로 같은 원시 지표를 갖고 있으니 Target만 얹으면 되는 것
+아니냐"는 사용자 지적으로 방향 전환 — 새 리포트를 만들면 이미 검증된 지표를 중복 계산하게
+됨(Single Responsibility 위반). `docs/FYReportDesign.md`는 검토 과정 기록으로 보존, Status를
+"superseded"로 표시.
+
+**오해 발견·정정: ACQ_REP과 NewP1_REP의 New P1은 같은 값** — `docs/ACQReportDesign.md`의
+"Attribution 불일치" 표를 "ACQ_REP이 NewP1_REP과 다른 방식으로 Segment를 재계산한다"로
+잘못 일반화해서 한때 "같은 Target을 양쪽에 붙이면 실적이 달라질 수 있다"고 판단했으나,
+`30_ACQReport.js`의 `computeOPSAggregates_()`를 직접 읽어보니 `headers.indexOf("Business
+Segment")`로 NewP1_REP과 동일 컬럼을 그대로 읽고 있음을 확인 — 그 표는 MTA_Master 기반
+지표(All Leads/All P1/SAL, 진짜 다른 컬럼)와 Leads_OPS 기반 지표를 대조한 것이었을 뿐.
+`docs/ACQReportDesign.md`에 "오해 방지" 섹션으로 정정 기록.
+
+**ACQ_REP/NewP1_REP에 Target 컬럼 구현 완료** — 상세 설계/결정 이력은
+`docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md`.
+- **ACQ_REP**(`30_ACQReport.js` v1.10.0, `32_ACQReportStyles.js` v1.6.0): S:V열에 Revenue
+  Target/Revenue Target%/New P1 Target/New P1 Target% 4컬럼 추가. Revenue Target = 월별 회사
+  전체 Revenue Target × 세그먼트 Deal Share(Target_Engine Block C, 코호트1/R1/New 트랙).
+- **NewP1_REP**(`40_NewP1Report.js` v1.3.0, `41_NewP1ReportStyles.js` v1.3.0): N:Q열에 Spent/
+  CPNP1(실적)/New P1 Target/New P1 Target% 4컬럼 추가. Spent는 Target_Engine Block 0 세그먼트별
+  월별 수동 입력, CPNP1 = Spent ÷ New P1(실적).
+- **공용**: `90_TargetEngine.js`(v1.23.0) 신규 `readTargetEngineDealShareRows_()`(Block C 조회,
+  기존에 없었음)/`computeReportTargetLookupFromInputs_()`(순수 함수, Block 0/C/D를
+  `targetFY|Month|Group` 키로 병합)/`computeReportTargetLookup_()`(IO 래퍼) — 두 리포트가
+  같은 함수를 재사용. "타겟 없음"과 "타겟 0"을 hasOwnProperty로 구분(기존
+  `computeCPNP1RatioByFYMonth_()` 관례). Target% ≥100%면 `highlightAtOrAboveThreshold_()`
+  (32_ACQReportStyles.js 신규)로 `#C6E0B4` 하이라이트. Pipeline P1 Target은 제외 — "구
+  코호트 딜의 이번 FY 전환은 클로징 여부가 불확실해 New P1 카운트 목표와 성격이 다르다"는
+  사용자 판단.
+
+**실 시트 검증 중 컬럼 충돌 3회 + 배포 누락 1회 발견·수정**:
+1. 최초 시도(ACQ_REP O열, NewP1_REP N열, 각각 A:N/A:M 바로 뒤)가 ACQ_REP의 숨김 Engine
+   영역(`CONFIG.ACQ.ENGINE_START_COL`, O:R)과 겹치는 걸 코드 리뷰로 발견 → ACQ_REP만 S열로 이동.
+2. S열로 실 시트 검증했더니 이번엔 사용자가 U:AF(ACQ_REP)/N열(NewP1_REP)에 넣어둔 **수동
+   수식/소계**(코드베이스 어디에도 없어 grep으로는 못 잡는 영역)와 겹쳐 "값이 안 보인다"는
+   리포트 — ACQ_REP은 AH열, NewP1_REP은 O열로 재이동.
+3. 사용자가 U:AF/N열의 수동 내용을 직접 삭제한 뒤 "이제 원래 위치로 옮겨도 된다"고 확인 —
+   ACQ_REP은 S열, NewP1_REP은 N열로 최종 원복. 헤더 Note는 이후 위치가 또 바뀌어도 안 깨지게
+   하드코딩 컬럼 번호 대신 `CONFIG.*.TARGET_COLUMNS_START_COL` 기준 상대 위치로 전환.
+4. 컬럼 위치를 두 번 고치는 동안 실제로는 `clasp push`를 한 번도 안 해서, 사용자가 계속 옛
+   코드로 검증하고 있었던 게 뒤늦게 발견됨(원인의 상당 부분) — `scripts/safe-clasp-push.sh`로
+   push, 이후 수정마다 즉시 push하는 것으로 정정(이 exec-plan에 한해 "검증 전 보류" 방침을
+   썼던 게 오히려 혼란을 키움 — 프로젝트 기본값은 "수정 후 매번 바로 push").
+
+**🔴 새 미해결 항목 — Target_Engine 단일 FY 구조 한계 발견(`docs/OpenItems.md` #17)**: 컬럼
+위치를 다 고친 뒤에도 데이터 행이 전부 공란이길래 조사한 결과, `Target_Engine`이 FY27(다음
+해 계획용)로 설정돼 있어 사용자가 확인하던 FY26(실적 있는 진행 중인 해) 행과 매칭되는 Target
+자체가 없는 게 원인(버그 아님, 의도된 hasOwnProperty 기반 공란 처리 정상 동작). Target_Engine이
+FY 하나만 갖고 있어서 FY26 실적 대비 달성률을 보려면 재생성해야 하고, 그러면 지금의 FY27 계획
+입력값을 덮어써야 하는 근본적 설계 충돌 — Target_Engine을 여러 FY 동시 지원 구조로 재설계해야
+근본 해결. **사용자 결정**: "타겟 설계를 바꿔봐야 할 것 같지만 캠페인 구축이 먼저" — 지금은
+보류, 임의로 처리하지 말 것.
+
+**memory 신규**: `feedback_column_collision_check_before_appending` — 코드가 관리하는 숨김
+컬럼뿐 아니라 사용자가 시트에 직접 넣어둔 수동 영역도 "기존 컬럼 사용 현황"에 포함해서
+확인해야 한다는 교훈(grep만으로는 못 잡음, 사용자에게 직접 물어봐야 함).
+
 # Changelog — 2026-07-29 (하네스 엔지니어링 ①~④)
 
 ## 하네스 엔지니어링 도입 — clasp push 안전장치, pre-commit 훅, 세션 시작 스크립트, CLAUDE.md 다이어트

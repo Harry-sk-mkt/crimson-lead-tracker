@@ -12,9 +12,22 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-30)
+ * - Spent/CPNP1/New P1 Target/New P1 Target% 4컬럼 신규 서식. **처음엔
+ *   `NEWP1_REPORT_HEADERS` 배열 자체를 13→17로 늘려 N열부터 이어붙이려
+ *   했으나, 실 시트 검증 중 N열이 사용자 수동 영역(00_Config.js
+ *   `CONFIG.NEWP1.MANUAL_AREA_NOTE`)인 게 발견돼(사용자 리포트) N열을
+ *   건너뛰고 O열(`CONFIG.NEWP1.TARGET_COLUMNS_START_COL`)부터 별도 range로
+ *   분리** — `NEWP1_REPORT_HEADERS`는 13개(A:M)로 되돌아가 `totalCols`도
+ *   다시 13 기준, Target 4컬럼은 별도 `targetStartCol` 변수로 배경 초기화/
+ *   %·숫자 포맷/줄무늬 배경/테두리를 전부 별도 계산(ACQ_REP의 동일 유형
+ *   충돌 수정과 같은 패턴, 32_ACQReportStyles.js 참고). Target% 하이라이트는
+ *   `highlightAtOrAboveThreshold_()`(32_ACQReportStyles.js, 2026-07-30 신규)
+ *   재사용(GAS 전역 스코프, 중복 정의 안 함). 상세:
+ *   docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
  * v1.2.0 (2026-07-22)
  * - 40_NewP1Report.js에서 Week 축 제거됨에 따라 컬럼 배치가
  *   14 → 13개로 줄어듦 (Week 컬럼 삭제). % 컬럼/Revenue 컬럼 인덱스,
@@ -47,23 +60,27 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
   const startRow = CONFIG.NEWP1.ROWS.REPORT_DATA_START;
   const headerRow = CONFIG.NEWP1.ROWS.REPORT_HEADER;
-  const totalCols = NEWP1_REPORT_HEADERS.length;
+  const totalCols = NEWP1_REPORT_HEADERS.length;                    // A:M (13)
+  const targetStartCol = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;     // O열(15) — N열(수동 영역)은 건너뜀
+  const targetCols = NEWP1_TARGET_HEADERS.length;                   // 4
 
   //----------------------------------------------------------
   // 배경색 우선 초기화 (이전 실행의 줄무늬가 남지 않도록)
+  // A:M과 Target 4컬럼은 사이에 사용자 수동 영역(N열)이 껴 있어 range를 분리한다.
   //----------------------------------------------------------
 
   if(rowCount > 0){
 
-    sheet.getRange(startRow, 1, rowCount, totalCols)
-      .setBackground(null);
+    sheet.getRange(startRow, 1, rowCount, totalCols).setBackground(null);
+    sheet.getRange(startRow, targetStartCol, rowCount, targetCols).setBackground(null);
 
     //----------------------------------------------------------
-    // % 컬럼: SAL%(6) / IC Booked%(8) / IC Complete%(10) / Won%(12)
-    // Revenue 컬럼: 13 — 천단위 콤마
+    // % 컬럼: SAL%(6) / IC Booked%(8) / IC Complete%(10) / Won%(12) /
+    //   New P1 Target%(targetStartCol+3, 2026-07-30 추가)
+    // Revenue(13)/Spent/CPNP1 컬럼: 천단위 콤마
     //----------------------------------------------------------
 
-    const percentColumns = [6, 8, 10, 12];
+    const percentColumns = [6, 8, 10, 12, targetStartCol + 3];
 
     percentColumns.forEach(function(col){
 
@@ -72,8 +89,19 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
     });
 
-    sheet.getRange(startRow, 13, rowCount, 1)
-      .setNumberFormat("#,##0");
+    [13, targetStartCol, targetStartCol + 1].forEach(function(col){
+
+      sheet.getRange(startRow, col, rowCount, 1)
+        .setNumberFormat("#,##0");
+
+    });
+
+    //----------------------------------------------------------
+    // Target 달성(100% 이상) 강조 — New P1 Target%(targetStartCol+3). 2026-07-30
+    // 추가, highlightAtOrAboveThreshold_()는 32_ACQReportStyles.js 정의 재사용.
+    //----------------------------------------------------------
+
+    highlightAtOrAboveThreshold_(sheet, startRow, rowCount, targetStartCol + 3, 1);
 
     //----------------------------------------------------------
     // FY+Month 블록 단위 배경색 (블록 크기 가변 — 실제 값 변화로 경계 판단)
@@ -95,8 +123,8 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
       if(blockIndex % 2 === 1){
 
-        sheet.getRange(startRow + i, 1, 1, totalCols)
-          .setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, 1, 1, totalCols).setBackground("#F3F3F3");
+        sheet.getRange(startRow + i, targetStartCol, 1, targetCols).setBackground("#F3F3F3");
 
       }
 
@@ -105,12 +133,19 @@ function applyNewP1ReportStyles_(sheet, rowCount){
   }
 
   //----------------------------------------------------------
-  // 테두리 — 헤더(4행) + 데이터 영역(5행~) 전체
+  // 테두리 — 헤더(4행) + 데이터 영역(5행~), A:M + Target 4컬럼(N열 수동 영역 제외)
   //----------------------------------------------------------
 
   const totalRows = 1 + rowCount;
 
   sheet.getRange(headerRow, 1, totalRows, totalCols)
+    .setBorder(
+      true, true, true, true, true, true,
+      "#000000",
+      SpreadsheetApp.BorderStyle.SOLID
+    );
+
+  sheet.getRange(headerRow, targetStartCol, totalRows, targetCols)
     .setBorder(
       true, true, true, true, true, true,
       "#000000",
@@ -156,6 +191,24 @@ function annotateNewP1ReportMetricNotes_(sheet, headerRow){
 
     sheet.getRange(headerRow, Number(col))
       .setNote(notes[col]);
+
+  });
+
+  // Target 4컬럼(2026-07-30 추가) — N열(사용자 수동 영역) 충돌로 위치가 한 번
+  // 바뀐 전례가 있어, 하드코딩 키 대신 CONFIG.NEWP1.TARGET_COLUMNS_START_COL
+  // 기준 상대 위치로 부착(32_ACQReportStyles.js의 동일 수정과 같은 패턴).
+  const t = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;
+
+  const targetNotes = {};
+  targetNotes[t] = "Spent — Target_Engine Block 0의 세그먼트별 월별 수동 Spent. Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. N열(사용자 수동 영역)을 피해 O열부터 배치.";
+  targetNotes[t + 1] = "CPNP1(실적) — Spent ÷ New P1(4).";
+  targetNotes[t + 2] = "New P1 Target — Target_Engine Block D(New P1 Target). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. ACQ_REP의 New P1 Target과 같은 값(같은 Business Segment 컬럼 소스, docs/ACQReportDesign.md \"오해 방지\" 섹션 참고). Pipeline P1 Target은 포함 안 함(사용자 판단 — 클로징 여부 불확실 영역).";
+  targetNotes[t + 3] = "New P1 Target% — New P1(4) ÷ New P1 Target. 100% 이상이면 초록 하이라이트.";
+
+  Object.keys(targetNotes).forEach(function(col){
+
+    sheet.getRange(headerRow, Number(col))
+      .setNote(targetNotes[col]);
 
   });
 

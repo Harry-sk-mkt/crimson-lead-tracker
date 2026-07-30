@@ -23,9 +23,25 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-07-30)
+ * - Spent/CPNP1(실적)/New P1 Target/New P1 Target% 4컬럼 추가
+ *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고, 원래
+ *   별도 FY_REP으로 설계했던 걸 기존 두 리포트 확장으로 방향 전환). **처음엔
+ *   N열(A:M 바로 뒤)부터 이어붙이려 `NEWP1_REPORT_HEADERS` 배열 자체를
+ *   13→17로 확장했으나, 실 시트 검증 중 N열이 사용자 수동 영역(00_Config.js
+ *   `CONFIG.NEWP1.MANUAL_AREA_NOTE`)인 게 발견돼(사용자 리포트: "N:Q 안
+ *   나타나") N열을 건너뛰고 O열부터 별도 `NEWP1_TARGET_HEADERS` 배열 +
+ *   별도 range(write/clear 둘 다)로 분리** — `NEWP1_REPORT_HEADERS`는 원래
+ *   13개(A:M)로 되돌림. Spent는 Target_Engine Block 0 세그먼트별 월별 수동
+ *   입력, New P1 Target은 Block D — 둘 다 `computeReportTargetLookup_()`
+ *   (90_TargetEngine.js)로 조회. CPNP1(실적) = Spent ÷ New P1(실적, D열).
+ *   Pipeline P1 Target은 이번 확장에서 제외(사용자 판단 — 클로징 여부가
+ *   불확실한 영역이라 New P1 카운트 목표와 성격이 다름, exec-plan 참고).
+ *   Referral/Other 세그먼트와 Target_Engine이 마지막으로 Generate한 FY가
+ *   아닌 행은 공란 처리(의도된 동작, hasOwnProperty 기반).
  * v1.2.0 (2026-07-28)
  * - Won/Revenue(K/M열)를 Leads_OPS 리드 단위(Revenue>0) 판정에서 Deal
  *   Tracker 기반(Created Date + 수동 Segment 컬럼으로 FY|Month|Segment
@@ -59,6 +75,23 @@ const NEWP1_REPORT_HEADERS = [
   "IC Complete", "IC Complete%",
   "Won", "Won%",
   "Revenue"
+];
+
+
+/**
+ * ==========================================================
+ * Report Area Target Columns (2026-07-30 신규 — Spent/CPNP1/
+ * New P1 Target/New P1 Target%, `CONFIG.NEWP1.TARGET_COLUMNS_START_COL`부터)
+ *
+ * WHY
+ * A:M 바로 뒤(N열)에 이어붙이려 했으나 N열은 사용자가 직접 쓰던 수동 영역
+ * (00_Config.js `CONFIG.NEWP1.MANUAL_AREA_NOTE`)이라 실 시트 검증 중 충돌
+ * 발견 — N열 하나를 건너뛰고 O열부터 별도 range로 분리(NEWP1_REPORT_HEADERS에
+ * 합치지 않음). 상세: docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md
+ * ==========================================================
+ */
+const NEWP1_TARGET_HEADERS = [
+  "Spent", "CPNP1", "New P1 Target", "New P1 Target%"
 ];
 
 
@@ -673,6 +706,11 @@ function setupNewP1Report(){
   sheet.getRange(CONFIG.NEWP1.ROWS.REPORT_HEADER, 1, 1, NEWP1_REPORT_HEADERS.length)
     .setValues([NEWP1_REPORT_HEADERS]);
 
+  sheet.getRange(
+    CONFIG.NEWP1.ROWS.REPORT_HEADER, CONFIG.NEWP1.TARGET_COLUMNS_START_COL,
+    1, NEWP1_TARGET_HEADERS.length
+  ).setValues([NEWP1_TARGET_HEADERS]);
+
   setupNewP1Dropdowns_(sheet);
 
   Logger.log(CONFIG.LOG.PREFIX + " NewP1_REP sheet initialized.");
@@ -767,10 +805,18 @@ function clearNewP1ReportArea_(sheet){
 
   if(lastRow >= CONFIG.NEWP1.ROWS.REPORT_DATA_START){
 
+    const rowCount = lastRow - CONFIG.NEWP1.ROWS.REPORT_DATA_START + 1;
+
     sheet.getRange(
       CONFIG.NEWP1.ROWS.REPORT_DATA_START, 1,
-      lastRow - CONFIG.NEWP1.ROWS.REPORT_DATA_START + 1,
-      NEWP1_REPORT_HEADERS.length
+      rowCount, NEWP1_REPORT_HEADERS.length
+    ).clearContent();
+
+    // Target 4컬럼(N열 사용자 수동 영역을 건너뛴 O열부터, 위 NEWP1_TARGET_HEADERS
+    // WHY 참고) — A:M과 사이가 떨어져 있어 별도 clear 필요.
+    sheet.getRange(
+      CONFIG.NEWP1.ROWS.REPORT_DATA_START, CONFIG.NEWP1.TARGET_COLUMNS_START_COL,
+      rowCount, NEWP1_TARGET_HEADERS.length
     ).clearContent();
 
   }
@@ -875,11 +921,20 @@ function generateNewP1Report_(){
   // 5. Report Area 작성 (% 컬럼은 여기서 계산, Engine엔 저장 안 함)
   //----------------------------------------------------------
 
-  const outputRows = reversedTargetRows.map(function(row){
+  // Target 조회(90_TargetEngine.js) — Spent/New P1 Target은 NewP1_Engine 캐시가
+  // 아니라 Target_Engine의 마지막 Generate 결과를 리포트 생성 시점에 붙임
+  // (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고).
+  const targetLookup = computeReportTargetLookup_();
+
+  const outputRows = [];
+  const targetOutputRows = [];
+
+  reversedTargetRows.forEach(function(row){
 
     const newP1 = row.newP1;
+    const key = row.fy + "|" + row.month + "|" + row.segment;
 
-    return [
+    outputRows.push([
       "FY" + String(row.fy).slice(-2),
       row.month,
       row.segment,
@@ -893,7 +948,20 @@ function generateNewP1Report_(){
       row.won,
       newP1 > 0 ? row.won / newP1 : "",
       row.revenue
-    ];
+    ]);
+
+    // Target_Engine은 한 번에 Target FY 하나만 갖고 있어, 그 FY/GROUP_ORDER(5개
+    // 세그먼트)에 없는 행은 hasOwnProperty가 false — "0"과 구분해 공란 처리.
+    const hasSpent = targetLookup.spent.hasOwnProperty(key);
+    const spent = hasSpent ? targetLookup.spent[key] : "";
+    const cpnp1 = (hasSpent && newP1 > 0) ? spent / newP1 : "";
+
+    const hasNewP1Target = targetLookup.newP1Target.hasOwnProperty(key);
+    const newP1Target = hasNewP1Target ? targetLookup.newP1Target[key] : "";
+    const newP1TargetPct = (hasNewP1Target && newP1Target > 0)
+      ? newP1 / newP1Target : "";
+
+    targetOutputRows.push([spent, cpnp1, newP1Target, newP1TargetPct]);
 
   });
 
@@ -905,6 +973,11 @@ function generateNewP1Report_(){
       CONFIG.NEWP1.ROWS.REPORT_DATA_START, 1,
       outputRows.length, NEWP1_REPORT_HEADERS.length
     ).setValues(outputRows);
+
+    sheet.getRange(
+      CONFIG.NEWP1.ROWS.REPORT_DATA_START, CONFIG.NEWP1.TARGET_COLUMNS_START_COL,
+      targetOutputRows.length, NEWP1_TARGET_HEADERS.length
+    ).setValues(targetOutputRows);
 
     applyNewP1ReportStyles_(sheet, outputRows.length);
 

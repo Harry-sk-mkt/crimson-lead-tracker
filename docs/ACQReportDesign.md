@@ -47,6 +47,30 @@ FY25 OCT에 각각 귀속된다 (예전엔 전부 AUG 하나로 귀속됐었음)
 
 → **보류된 결정 (2026-07-21)**: SAL을 First Touch 기준으로 통일할지 여부는 이번엔 손대지 않기로 함 — "파이프라인/리포트 단계에서 맞추면 될 것 같다"는 방향으로 추후 별도 논의.
 
+### ⚠️ 오해 방지 — "New Leads/New P1"의 First Touch는 `NewP1_REP`과 동일한 컬럼이다 (2026-07-30 명확화)
+
+**이 표(위)가 자주 오해를 부르는 지점**: "New Leads/New P1 = Leads_OPS, First Touch 기준"이라는
+표현이 마치 ACQ_REP이 `docs/NewP1ReportDesign.md`의 New P1과 **다른 방식**으로 Segment를
+재계산하는 것처럼 읽힌다 — 실제로 이 세션에서 그렇게 오해해서 "ACQ_REP과 NewP1_REP에 같은
+New P1 Target을 붙이면 실적 숫자가 서로 달라질 수 있다"고 잘못 판단한 적이 있다.
+
+**실제로는 동일하다** — 코드로 확인(2026-07-30):
+- `30_ACQReport.js`의 `computeOPSAggregates_()`가 New Leads/New P1을 계산할 때
+  `headers.indexOf("Business Segment")`로 **Leads_OPS의 `Business Segment` 컬럼 값을 그대로
+  읽는다** (재계산도, `FT Override` 적용도 없음).
+- `docs/NewP1ReportDesign.md`의 New P1도 정확히 같은 컬럼(`Business Segment` 컬럼 값 그대로,
+  `FT Override` 재판정 없음)을 읽는다.
+- 즉 위 표의 "First Touch"는 **"이 컬럼 자체가 Leads_Master 빌드 시점에 First Touch
+  Attribution으로 계산돼 있다"는 뜻**이지("Leads_Master — First Touch Attribution",
+  `docs/BusinessSegmentClassification.md` 참고), **"ACQ_REP이 NewP1_REP과 다른 로직으로
+  재계산한다"는 뜻이 아니다.** 두 리포트의 New P1은 **같은 소스, 같은 값**이어야 정상이다.
+- 반면 All Leads/All P1/SAL(MTA_Master 기반)은 정말로 **다른 컬럼**(MTA_Master 자체의
+  `Business Segment`, Per-Touch Attribution)을 읽으므로 New Leads/New P1과 값이 다를 수 있다 —
+  이 부분만 진짜 "Attribution 불일치"다.
+
+**교훈**: 이 표를 "지표 소스가 다르다"는 것만으로 다른 지표에 대한 재계산/재정의를 추측하지
+말 것 — 실제로 같은 컬럼을 읽는지는 코드(`headers.indexOf(...)` 호출부)로 확인해야 한다.
+
 ## ✅ All Leads/SAL — Segment "터치 시점 채널" 한계 해결됨 (2026-07-22)
 
 **해결**: Salesforce MTA 리포트의 추출 필드를 `Last MKT UTM Campaign`(Lead 레벨) → `MKT UTM Campaign`
@@ -162,14 +186,25 @@ Funnel 진행률을 보고 싶으면(예전 이 리포트가 하려던 것) 추�
 - New P1 % = New P1 / New Leads
 
 ## Engine Architecture (구현 완료, 2026-07-21)
-- **Report Area**: `ACQ_REP` 시트, A4:N4 헤더 + A5부터 데이터 (FY/Month/Segment/지표 14개 컬럼)
+- **Report Area**: `ACQ_REP` 시트, A4:N4 헤더 + A5부터 데이터 (FY/Month/Segment/지표 14개 컬럼).
+  **2026-07-30 추가**: AH4:AK4 헤더 + AH5부터 Revenue Target/Revenue Target%/New P1 Target/
+  New P1 Target% 4컬럼(`CONFIG.ACQ.TARGET_COLUMNS_START_COL`, Target_Engine 조회 기반,
+  `docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md` 참고) — O:R열(Engine Area,
+  아래 참고)과 U:AF열(사용자 수동 수식/소계 영역, 아래 참고)을 둘 다 피해 그 뒤로 배치.
 - **Control Area**: A1:E1 헤더(Start FY/Start Month/End FY/End Month/Generate Report), A2:E2 값
   - Start FY/End FY, Start Month/End Month는 각각 별도 드롭다운으로 분리 (기존엔 "FY26 JUL"처럼 합쳐진 하나의
     드롭다운이라 FY18부터 스크롤해야 하는 문제가 있어 분리함)
   - FY 드롭다운 범위는 Leads_OPS/MTA_Master 실제 데이터의 min~현재 FY로 동적 계산 (하드코딩 없음)
   - E2는 체크박스, 체크 시 `onEdit()` Simple Trigger가 `generateACQReport_()` 실행 후 자동으로 체크 해제
-- **Engine Area**: 같은 시트의 숨김 컬럼(O:R) — 선택된 Start FY~End FY 구간만 매번 재생성 (전체 기간 아님, 성능 목적)
-  - Sort Index로 Start/End Month 구간을 빠르게 슬라이싱
+- **Engine Area**: 같은 시트의 숨김 컬럼(O:R, `CONFIG.ACQ.ENGINE_START_COL`) — 선택된 Start FY~End FY
+  구간만 매번 재생성 (전체 기간 아님, 성능 목적). Sort Index로 Start/End Month 구간을 빠르게 슬라이싱.
+- **사용자 수동 영역**: U:AF열(21~32) — 사용자가 직접 넣은 수동 수식/소계(코드 아님,
+  `CONFIG.ACQ.MANUAL_AREA_NOTE`). 코드가 절대 쓰면 안 됨.
+  **주의(2026-07-30)**: 이 시트에 새 컬럼 블록을 추가할 때 A:N 바로 뒤(O열)를 가정하면 이 숨김
+  Engine 영역과 겹치고, 그 뒤(S열)를 가정해도 이 수동 영역과 겹친다 — 실제로 Target 컬럼
+  추가 시 이 두 충돌을 순서대로 발견해(1차는 코드 리뷰, 2차는 실 시트 검증 중 사용자 리포트)
+  최종 AH열로 옮긴 적 있음(위 exec-plan 참고). 새 블록 추가 전 항상 `CONFIG.ACQ`의 기존 컬럼
+  상수(`ENGINE_START_COL`/`MANUAL_AREA_NOTE`)를 먼저 확인할 것.
 
 ## ⚡ 성능 아키텍처 — ACQ Summary (Aggregate Table), 2026-07-21 추가
 
