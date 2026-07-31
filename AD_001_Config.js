@@ -21,9 +21,31 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.7.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-07-31)
+ * - `RAW_SHEET["Kakao Channel"]`("KakaoSMS_Raw") + `KAKAO_CHANNEL.SYNC_COLUMNS`
+ *   신규 — 캠페인 지출 스프레드시트(AD.SPREADSHEET_ID)에 Performance 원본을
+ *   그대로 보여주는 뷰 탭 추가(사용자 요청, "API로 가져오더라도 어차피
+ *   performance는 봐야해서"). `SYNC_COLUMNS`는 목적지 컬럼 순서를 그대로
+ *   나타냄 — `PIC`(원본에 없는 신규 컬럼, B/C 사이 삽입, 사용자가 매 행
+ *   직접 입력) + `CTR`/`CvR`(원본엔 있으나 수식값이라 값 복사 안 함, 헤더만
+ *   유지)는 `source:null`로 표시해 값 대신 빈 문자열이 채워지게 함
+ *   (`computeKakaoChannelSyncRow_()`, AD_005_KakaoChannel.js 참고).
+ * v1.8.0 (2026-07-31)
+ * - `KAKAO_CHANNEL` 신규 — 3번째 플랫폼(카카오톡 채널 푸시). 사용자가 이미
+ *   수기로 관리해온 별도 스프레드시트(`18Ld85fuR76tsVxshEuzZ17SV00c0BEI6Rtl3HjA20RI`,
+ *   탭 "Performance")를 그대로 소스로 사용 — Meta/Naver Search처럼 AD.SPREADSHEET_ID
+ *   안이 아니라 완전히 다른 스프레드시트라 별도 SPREADSHEET_ID 필드로 관리.
+ *   1행=subtotal(사용자 직접 수식), 2행=헤더, 3행부터 데이터(사용자 확인,
+ *   Meta_Raw/NaverSA_Raw의 "1행=헤더" 관례와 다름 — HEADER_ROW/DATA_START_ROW로
+ *   명시). Event type 컬럼 값을 캠페인명 기반 getBusinessSegment() 없이 직접
+ *   Business Segment로 사용(사용자가 기존 "Direct Consult"를 전부 "BOFU"로
+ *   이미 정정 완료 — Seminar/Webinar/BOFU 3개뿐, Search/Content 해당 없음).
+ *   Cost는 KRW(사용자 확인) — Naver Search와 동일하게 AD_004_SpendCache.js에서
+ *   NZD 변환 후 합산 예정. 상세: docs/exec-plans/active/
+ *   2026-07-30-campaign-spend-integration.md
  * v1.7.0 (2026-07-31)
  * - `NAVER_SEARCH.API.BACKFILL_START`(2022-09, Meta 파이프라인의 실제 첫
  *   데이터 시점과 동일 범위 — 사용자 확정) + `FX`(GOOGLEFINANCE 기반 KRW→NZD
@@ -130,7 +152,8 @@ const AD = {
   */
 
   RAW_SHEET: {
-    Meta: "Meta_Raw"
+    Meta: "Meta_Raw",
+    "Kakao Channel": "KakaoSMS_Raw"
   },
 
   /*
@@ -221,6 +244,81 @@ const AD = {
     */
 
     LEAD_SOURCE_OVERRIDE: "naver search"
+
+  },
+
+  /*
+  ==========================================================
+  KAKAO CHANNEL — 카카오톡 채널 푸시 발송 성과 시트(사용자가 기존에 수기로
+  관리해온 별도 스프레드시트, 2026-07-31 착수). Meta/Naver Search와 달리
+  AD.SPREADSHEET_ID 안이 아니라 별도 스프레드시트 — 이 섹션에 자체
+  SPREADSHEET_ID를 둔다. 카카오모먼트(API)로 이관되면 이 시트는 폐기 예정
+  (사용자 확인)이지만, 그 전까지의 과거/현재 지출은 이 시트가 유일한 소스.
+  ==========================================================
+  */
+
+  KAKAO_CHANNEL: {
+
+    SPREADSHEET_ID: "18Ld85fuR76tsVxshEuzZ17SV00c0BEI6Rtl3HjA20RI",
+    SHEET_NAME: "Performance",
+
+    /*
+    ==========================================================
+    ROW LAYOUT (2026-07-31 사용자 확인)
+    1행=subtotal(사용자가 직접 넣는 합계 수식, Target_Engine Block 0의 "1행은
+    비워서 사용자 수식용"과 동일 관례), 2행=헤더, 3행부터 실제 데이터.
+    ==========================================================
+    */
+
+    HEADER_ROW: 2,
+    DATA_START_ROW: 3,
+
+    /*
+    ==========================================================
+    COLUMNS (2026-07-31 사용자 확인)
+    Event type 값이 이미 Business Segment 이름과 동일(Seminar/Webinar/BOFU) —
+    사용자가 기존 "Direct Consult"를 전부 "BOFU"로 정정 완료해서, 캠페인명 기반
+    getBusinessSegment() 없이 이 값을 그대로 Segment로 사용한다(Search/Content는
+    이 채널에 해당 없음). Cost는 KRW.
+    ==========================================================
+    */
+
+    COLUMNS: {
+      EVENT_TYPE: "Event type",
+      SENT_AT: "SentAt",
+      COST: "Cost"
+    },
+
+    /*
+    ==========================================================
+    SYNC COLUMNS (2026-07-31 사용자 요청)
+    `KakaoSMS_Raw` 뷰 탭(AD.SPREADSHEET_ID 안, RAW_SHEET["Kakao Channel"])의
+    컬럼 순서 — 원본 Performance 시트 전체 컬럼 + 신규 "PIC"(B/C 사이 삽입,
+    원본에 없음, 사용자가 매 행 직접 입력). `source:null`이면 값을 복사하지
+    않고 빈 문자열로 채움(PIC — 애초에 원본에 없음, CTR/CvR — 원본 수식값이라
+    그대로 복사하면 의미 없는 스냅샷이 되므로 사용자 확인 하에 헤더만 유지).
+    ==========================================================
+    */
+
+    SYNC_COLUMNS: [
+      { header: "FY", source: "FY" },
+      { header: "Event type", source: "Event type" },
+      { header: "PIC", source: null },
+      { header: "SentAt", source: "SentAt" },
+      { header: "Time", source: "Time" },
+      { header: "Keyword", source: "Keyword" },
+      { header: "Push", source: "Push" },
+      { header: "Sent", source: "Sent" },
+      { header: "Reach", source: "Reach" },
+      { header: "Click", source: "Click" },
+      { header: "Responsed", source: "Responsed" },
+      { header: "Cost", source: "Cost" },
+      { header: "CTR", source: null },
+      { header: "CvR", source: null },
+      { header: "CPL", source: "CPL" },
+      { header: "비고", source: "비고" },
+      { header: "Marketo program", source: "Marketo program" }
+    ]
 
   },
 

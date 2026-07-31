@@ -4,11 +4,12 @@
  * Ad Spend — 플랫폼 합산 캐시 (ACQ_REP 소비 레이어)
  *
  * Responsibility
- * Meta(AD_002_Meta.js, NZD 원본)와 Naver Search(AD_003_NaverSearch.js, KRW
- * 원본)의 캠페인 지출 요약을 합산해 `Ad_Spend_Cache` 시트(메인 스프레드시트
- * 안)에 저장한다. `30_ACQReport.js`의 `generateACQReport_()`는 이 캐시만
- * 읽는다(외부 스프레드시트/API 호출 없음 — ACQ_REP Generate 체크박스는
- * `onEdit()` Simple Trigger로 실행되는데, Simple Trigger는 제한된 권한이라
+ * Meta(AD_002_Meta.js, NZD 원본)/Naver Search(AD_003_NaverSearch.js, KRW
+ * 원본)/Kakao Channel(AD_005_KakaoChannel.js, KRW 원본)의 캠페인 지출 요약을
+ * 합산해 `Ad_Spend_Cache` 시트(메인 스프레드시트 안)에 저장한다.
+ * `30_ACQReport.js`의 `generateACQReport_()`는 이 캐시만 읽는다(외부
+ * 스프레드시트/API 호출 없음 — ACQ_REP Generate 체크박스는 `onEdit()` Simple
+ * Trigger로 실행되는데, Simple Trigger는 제한된 권한이라
  * `SpreadsheetApp.openById()`나 `UrlFetchApp`을 못 씀, 2026-07-30 Meta 연결
  * 때 실측 확인 — 그때 도입한 캐시 패턴을 여러 플랫폼 합산용으로 그대로
  * 확장).
@@ -21,11 +22,13 @@
  *
  * **소급 범위(2026-07-31, 사용자 확정)**: Naver Search는 Meta와 동일한
  * 범위(`AD.NAVER_SEARCH.API.BACKFILL_START`, FY23 SEP~현재월)까지 소급.
+ * Kakao Channel은 자체 소급 로직이 없음 — Performance 시트에 있는 모든 행을
+ * 그대로 집계(시트 자체가 2024-08-13부터 사용자 확인).
  *
  * Must NOT
- * - Meta/Naver Search 각 플랫폼의 원본 집계 로직을 다시 구현 (각자의
- *   `computeMetaSpendSummary_()`/`computeNaverSearchAdSpendHistorySummary_()`
- *   재사용)
+ * - Meta/Naver Search/Kakao Channel 각 플랫폼의 원본 집계 로직을 다시 구현
+ *   (각자의 `computeMetaSpendSummary_()`/`computeNaverSearchAdSpendHistorySummary_()`/
+ *   `computeKakaoChannelSpendSummary_()` 재사용)
  * - Target_Engine에는 아직 연결하지 않음(8개 플랫폼 전체 자동화 후 재검토,
  *   docs/exec-plans/active/2026-07-30-campaign-spend-integration.md 참고)
  *
@@ -33,9 +36,15 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-07-31)
+ * - **Kakao Channel(3번째 플랫폼) 합산 추가** — `refreshAdSpendCache_()`가
+ *   `computeKakaoChannelSpendSummary_()`(AD_005_KakaoChannel.js, KRW 원본)도
+ *   호출해 Meta(NZD)+Naver Search(KRW→NZD)+Kakao Channel(KRW→NZD) 3개
+ *   플랫폼을 합산하도록 확장. 카카오모먼트 API 이관 전까지의 임시 소스
+ *   (사용자 확인 — 이관 시 이 파이프라인 폐기 예정).
  * v1.1.0 (2026-07-31)
  * - `runDeleteMetaSpendCacheSheet()` 신규(수동 실행, 1회성 정리용) — 옛
  *   "Meta_Spend_Cache" 시트(이 파일의 `Ad_Spend_Cache`로 대체됨)를 사용자
@@ -233,10 +242,13 @@ function refreshAdSpendCache_(){
     naverBackfill.YEAR, naverBackfill.MONTH
   );
 
+  const kakaoChannelSummaryKRW = computeKakaoChannelSpendSummary_();
+
   const rate = fetchKrwToNzdRate_();
   const naverSummaryNZD = convertSpendSummaryCurrency_(naverSummaryKRW, rate);
+  const kakaoChannelSummaryNZD = convertSpendSummaryCurrency_(kakaoChannelSummaryKRW, rate);
 
-  const combined = mergeSpendSummaries_([metaSummaryNZD, naverSummaryNZD]);
+  const combined = mergeSpendSummaries_([metaSummaryNZD, naverSummaryNZD, kakaoChannelSummaryNZD]);
 
   const rows = Object.keys(combined).map(function(key){
 

@@ -353,12 +353,137 @@
       "Spent" 값 정상 표시 확인(사용자 확인).
       **옛 `Meta_Spend_Cache` 시트는 이제 안 씀** — 코드가 자동 삭제하지
       않으므로 사용자가 원하면 직접 삭제 가능(숨김 시트라 방치해도 무해).
+- [x] **Meta API 역적용 여부 확정(2026-07-31, 사용자 확인) — 불가, 기존 수동 방식 유지**:
+      사용자 확인 결과 Meta API(Marketing API) 권한 없음 — Naver Search에서 검증된 API
+      패턴을 Meta에 적용하는 건 불가능. `AD_002_Meta.js`의 기존 수동 방식(`Meta_Raw` 시트에
+      사용자가 Meta Ads Manager export를 직접 붙여넣는 방식)을 그대로 유지, 추가 작업 없음.
+- [x] **Kakao 플랫폼 구성 변경 확인(2026-07-31, 사용자 확인)** — 기존엔 "카카오 채널"로
+      광고를 관리해 API를 못 썼으나, 앞으로는 "카카오 모먼트"로 전환해서 운영 예정 — 모먼트는
+      API로 데이터 수집 가능. 즉 원래 대상 플랫폼 목록의 "Kakao Moments, Kakao Channel"
+      2개 항목은 실질적으로 Kakao Moments API 연동 1개로 통합됨(Kakao Channel은 더 이상
+      추가 작업 대상 아님 — 과거 채널 운영 기간의 과거 데이터를 소급할지는 미정, 필요시 별도
+      확인).
 - [ ] **다음 단계(결정 필요)**: (1) 매달 자동 갱신할지(트리거 연결, OpenItems 9번
-      Backend 비동기화 논의와 연관) — API 방식이라 Meta보다 자동화 난이도가 낮음
-      (외부 시트 붙여넣기 자체가 없음). (2) 이 성공 패턴(API 방식)을 Meta에도
-      역적용할지(Meta도 Marketing API 있음) — 사용자 판단 필요, 임의로 진행하지 말 것.
-      (3) 나머지 6개 플랫폼(Naver GFA/Google Search·Display/Naver Offline Cafe/
-      Kakao Moments·Channel) 확장 순서.
+      Backend 비동기화 논의와 연관) — API 방식(Naver Search/향후 Kakao Moments)이라 Meta보다
+      자동화 난이도가 낮음(외부 시트 붙여넣기 자체가 없음). (2) 나머지 플랫폼 확장 순서 —
+      Naver GFA/Google Search/Google Display/Naver Offline Cafe/Kakao Moments(API 가능
+      확인됨, 위 항목 참고) — Meta는 이미 완료, Kakao Channel은 목록에서 제외.
+- [ ] **미해결 — Meta API 재도입(2026-07-31, 보류)**: 사용자가 Meta API 권한이 곧 reinstate될
+      예정이라고 알려옴. 필요 사항(Meta측: Marketing API 앱+`ads_read` 권한+System User
+      Access Token+Ad Account ID / 프로젝트측: 신규 API 연동 파일, 자격증명 Script Properties
+      등록, 과거 데이터 소급 범위 확인, 기존 수동 `Meta_Raw` 파이프라인과의 병행/대체 여부 결정)
+      은 채팅으로 안내 완료 — **지금 착수 안 함, 자격증명 실제 확보되면 재논의**(사용자 확정,
+      임의로 진행하지 말 것). 이번 세션은 Kakao 작업으로 전환.
+
+### Kakao Moments (착수 2026-07-31)
+
+- [x] **기존 카카오 채널 푸시 성과 시트는 이 작업과 무관 확인(2026-07-31, 사용자 확인)** —
+      기존 시트(컬럼: FY/Event type/SentAt/Time/Keyword/Push/Sent/Reach/Click/Responsed/Cost/
+      CTR/CvR/CPL/비고/Marketo program, `1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`)는
+      별개 푸시 발송 성과 리포트 — 세그먼트는 이미 "type" 컬럼(B열)으로 분류돼 있으나
+      Business Segment 명칭과 다름(예: BOFU가 "direct consult"로 표기, Seminar/Webinar는
+      동일). 카카오모먼트 이관 시 **이 시트는 완전 폐기**(사용자 확정) — 이관 시 명칭도
+      Business Segment 기준으로 맞출 예정.
+- [x] **캠페인 네이밍 컨벤션 확정 방향(2026-07-31, 사용자 확인)** — 팀 내 합의 전이지만
+      `KR_core_...`(Meta/Naver Search와 동일 패턴)으로 만들 수 있다고 확인 — `getBusinessSegment()`
+      재사용 가능할 전망(실제 팀 합의 이후 실 캠페인명으로 재검증 필요).
+- [x] **신규 요구사항(2026-07-31, 사용자 확인)** — 캠페인 지출(Spend) 외에 **푸시 성과
+      데이터도 실제로 봐야 해서** 캠페인 지출 스프레드시트(`1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`)에
+      **새 탭으로 API를 통해 데이터를 가져오는 것도 필요**함 — 즉 Kakao Moments 파이프라인은
+      (1) 광고비 Spend 집계 + (2) 푸시 성과 raw 데이터 탭, 두 갈래 모두 필요. 리포트 API의
+      `metricsGroup=MESSAGE` 옵션이 이 푸시 지표 쪽으로 보이나 실제 호출로 확인 전.
+- [x] **Kakao Moments Open API 공식 문서 확인(2026-07-31, 추측 없이 WebFetch로 검증)** —
+      Naver Search의 고정 API Key/Secret 방식과 달리 **OAuth 2.0 Business Auth 플로우** 필요
+      (브라우저 동의 → Authorization Code → Business Token 교환, `moment_management` 등
+      scope). 엔드포인트: 캠페인 목록 `/openapi/v4/campaigns`(GET), 리포트
+      `/openapi/v4/campaigns/report`(GET, 5회/5초 제한, `start`/`end`=yyyyMMdd로 월 단위
+      정밀 조회 가능 — Meta식 균등분배 불필요). **중요 함정**: 리포트 응답에 캠페인명이
+      없고 `campaign_id`만 있어 캠페인 목록과 별도 join 필요(Naver Search의 campaignMap
+      패턴과 유사하나 필수).
+- [ ] **블로커 발견(2026-07-31, 사용자 확인)** — "광고계정 관리" 메뉴에 API 관련 항목
+      자체가 없음. 공식 문서상 "카카오모먼트 오픈API는 카카오 광고 공식대행사에 한하여
+      권한 부여, 카카오 채널 담당자를 통해 모먼트 권한신청 진행, 비즈앱 설정 완료 후
+      권한 부여 가능"이라 일반 광고주 계정엔 신청 메뉴 자체가 노출 안 되는 것으로 보임.
+      비즈앱 전환은 이후 사용자가 완료(2026-07-31).
+- [ ] **챗봇 고객센터 문의 결과(2026-07-31, 사용자 확인)** — 키워드광고(검색광고) API
+      안내만 나옴, 메시지 광고(모먼트) API 안내 없음 — 챗봇이 모먼트 권한신청 절차를
+      다루지 않는 것으로 보임(아래 절차 변경과 관련 추정).
+- [ ] **신청 경로 재확인(2026-07-31, WebSearch로 확인, 사용자 재검증 필요)** — 예전
+      구글폼("모먼트 오픈API 신청")은 현재 폐쇄(CLOSE). devtalk 검색 결과 **"5월 8일부터
+      카카오 디벨로퍼스 '내 애플리케이션' > '앱 권한 신청'에서 신청하도록 변경"**됐다는
+      정보 확인 — 사용자에게 이 메뉴 확인 요청함(결과 대기 중). 대안 경로: 담당 카카오
+      마케터를 통한 신청, 또는 "카카오광고 통합 에이전시 > 문의게시판 > 카테고리:
+      카카오모먼트 > 운영 > API 권한신청". 신청 시 필요 정보로 보이는 것: 디벨로퍼스 앱
+      ID, 광고계정 ID, 광고계정 마스터/멤버 권한 있는 카카오계정.
+      **이 부분은 코드로 우회 불가, 사용자의 대외 커뮤니케이션/콘솔 조작 필요** — 권한
+      확보 전까지 Kakao Moments 구현 작업 보류.
+- [ ] **진행 상황(2026-07-31)**: "추가 기능 신청" 메뉴 확인(정확한 메뉴명, 이전에
+      "앱 권한 신청"으로 잘못 안내했던 것 정정) → 카카오모먼트 오픈API 권한 심사 신청
+      완료. **카카오 측 심사 기간 약 3일(사용자 확인, 예상 2026-08-03경 결과)** — 승인
+      결과 나올 때까지 Kakao Moments 구현 작업 대기.
+- [ ] Kakao 로그인 상품 활성화 + Redirect URI 등록(권한 확보 후 진행) — Redirect URI는
+      Apps Script Web App 배포로 해결 예정(제안만 한 상태, 실제 진행 안 함)
+
+### Kakao Channel (기존 수기 데이터, 모먼트 권한 대기 중 병행 착수, 2026-07-31)
+
+- [x] **시트 구조 확인 완료(2026-07-31, 사용자 확인)** — 별도 스프레드시트
+      `18Ld85fuR76tsVxshEuzZ17SV00c0BEI6Rtl3HjA20RI`(탭 "Performance"),
+      1행=subtotal/2행=헤더/3행부터 데이터. Event type 컬럼은 기존
+      "Direct Consult"를 전부 "BOFU"로 사용자가 정정 완료 —
+      Seminar/Webinar/BOFU 3개뿐이라 Business Segment 이름과 1:1 일치,
+      캠페인명 기반 getBusinessSegment() 불필요. SentAt은 정확한 단일
+      발송일(Meta식 lifetime 균등분배 불필요). Cost는 KRW. 데이터는
+      2024-08-13부터 존재(사용자 확인).
+- [x] **`AD_005_KakaoChannel.js` 구현 완료(2026-07-31)** — 순수 함수
+      `computeKakaoChannelRowSpendEntry_()`(행 1개 → FY|Month|Segment
+      항목)/`aggregateKakaoChannelSpendByFYMonthSegment_()`(합산). IO
+      래퍼 `readKakaoChannelRawRows_()`(`sheetToObjects()`가 "1행=헤더"를
+      가정해 이 시트 구조에 안 맞아 전용 리더 신규 작성 — 헤더 행/데이터
+      시작 행을 `AD.KAKAO_CHANNEL`에서 읽음, 타임존 정규화는
+      `normalizeExternalCalendarDate_()` 재사용, Cost는 `parseCurrencyValue_()`
+      로 방어적 파싱)/`computeKakaoChannelSpendSummary_()`. 수동 실행:
+      `runComputeKakaoChannelSpendSummary()`/`runDebugKakaoChannelRawFirstRow()`
+      (진단, Meta 패턴과 동일). `AD_001_Config.js`(v1.8.0)에 `KAKAO_CHANNEL`
+      섹션(자체 SPREADSHEET_ID — Meta/Naver Search와 달리 AD.SPREADSHEET_ID
+      밖의 별도 스프레드시트) 신규. Node 하네스 신규 test 2개
+      (`testComputeKakaoChannelRowSpendEntry`/
+      `testAggregateKakaoChannelSpendByFYMonthSegment`) 전부 PASS,
+      `node --check`/중복 선언/네이밍/버전헤더 검사 전부 통과, `clasp push` 완료.
+- [x] **`Ad_Spend_Cache` 3개 플랫폼 합산으로 확장(2026-07-31)** —
+      `AD_004_SpendCache.js`(v1.2.0) `refreshAdSpendCache_()`가
+      `computeKakaoChannelSpendSummary_()`(KRW)도 호출해 Meta(NZD)+
+      Naver Search(KRW→NZD)+Kakao Channel(KRW→NZD) 합산하도록 확장.
+- [x] **✅ 실 시트 검증 완료(2026-07-31, 사용자 확인)** — `runRefreshAdSpendCache()`
+      재실행 후 ACQ_REP Generate 재체크, W열 "Spent"에 Kakao Channel 몫까지
+      정상 반영 확인. Meta+Naver Search+Kakao Channel 3개 플랫폼 합산 배선
+      전체 검증 끝남.
+- [ ] **카카오모먼트 이관 시 이 파이프라인 폐기 예정(사용자 확정, 위 기록
+      참고)** — 모먼트 API 권한 승인 후 별도 파일로 대체하면서
+      `AD_005_KakaoChannel.js`/`AD.KAKAO_CHANNEL` 제거 검토.
+- [x] **`KakaoSMS_Raw` 뷰 탭 신규(2026-07-31, 사용자 요청 — "API로
+      가져오더라도 어차피 performance는 봐야해서")** — 캠페인 지출
+      스프레드시트(AD.SPREADSHEET_ID, Meta_Raw/NaverSA_Raw와 같은 곳)에
+      Performance 원본 전체 컬럼을 그대로 보여주는 뷰 탭 추가. 지출 집계
+      로직은 그대로 원본을 직접 읽음(이 탭은 순수 뷰용). **PIC 컬럼
+      신규(B/C 사이 삽입, 원본엔 없음, 매 행 사용자 직접 입력)** — 매번
+      전체 재작성하면 PIC가 날아가므로 **append-only**(Leads_Raw/MTA_Raw와
+      동일 기존 관행 — 이미 복사된 행은 안 건드리고 새 행만 이어붙임)로
+      구현(사용자 확인 — "이미 복사된 과거 행을 원본에서 나중에 수정해도
+      반영 안 되는 건 괜찮다"). **CTR/CvR은 헤더만 복사, 값은 항상
+      빈칸**(원본 수식값이라 스냅샷 복사 의미 없음, 사용자 확인).
+      `AD_005_KakaoChannel.js`(v1.1.0) — 순수 함수
+      `computeKakaoChannelSyncRow_()` 신규, 기존 리더는 공용
+      `readKakaoChannelPerformanceSheetData_()`로 리팩터링(중복 제거,
+      동작 변화 없음). IO 래퍼 `syncKakaoChannelPerformanceToAD_()` +
+      수동 진입점 `runSyncKakaoChannelPerformanceToAD()`.
+      `AD_001_Config.js`(v1.9.0)에 `RAW_SHEET["Kakao Channel"]`
+      ("KakaoSMS_Raw")/`KAKAO_CHANNEL.SYNC_COLUMNS` 추가. Node 하네스
+      신규 test 1개(`testComputeKakaoChannelSyncRow`) PASS, 기존 test
+      2개 재검증 PASS, `node --check`/중복선언/네이밍/버전헤더 검사
+      전부 통과, `clasp push` 완료.
+- [x] **실 시트 검증 완료(2026-07-31, 사용자 확인)** — `runSyncKakaoChannelPerformanceToAD()`
+      최초 실행 후 `KakaoSMS_Raw` 탭 정상 생성, PIC에 수동 입력 후 재실행해도
+      append-only 동작으로 기존 값 보존 확인.
 
 ## Surprises & Discoveries
 

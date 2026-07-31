@@ -1,5 +1,55 @@
 # Changelog — 2026-07-31
 
+## 캠페인 지출 통합 Phase 1 — Kakao 플랫폼(Moments 권한신청 + Channel 파이프라인 구현) + Meta API 재도입 보류
+
+**배경**: 위 "Naver Search API 파이프라인" 세션 이후 이어지는 라운드. 3번째 플랫폼으로
+카카오를 다루면서, 앞으로는 "카카오 채널" 대신 "카카오모먼트"로 광고를 운영할 예정이라는
+사용자 확인에 따라 두 갈래로 진행. 상세 결정 이력: `docs/exec-plans/active/
+2026-07-30-campaign-spend-integration.md`.
+
+**Meta API 재도입 — 보류(사용자 확정)**: 사용자가 Meta API 권한이 reinstate될 예정이라고
+알려와 필요 사항(Marketing API 앱/`ads_read` 권한/System User Token/Ad Account ID 등)을
+안내했으나, 자격증명이 실제 확보되기 전까지는 착수하지 않기로 확정 — exec-plan에 미해결
+항목으로만 기록.
+
+**카카오모먼트 — Open API 권한 심사 신청까지 진행, 승인 대기 중**: 공식 문서 확인 결과
+Naver Search Ad API와 달리 OAuth 2.0 Business Auth 플로우 필요, 일반 광고주 계정엔 신청
+메뉴 자체가 안 보이는 게 정상(공식대행사/사전 협의 광고주 대상)이라는 걸 확인. 카카오
+디벨로퍼스 콘솔 "추가 기능 신청" 메뉴(최초엔 "앱 권한 신청"으로 잘못 안내했다가 정정)를
+찾아 카카오모먼트 오픈API 권한 심사를 실제로 신청 완료 — 카카오 측 심사 기간 약 3일
+(2026-08-03경 결과 예상). 승인 전까지 모먼트 구현은 보류.
+
+**카카오 채널(기존 수기 데이터) — 3번째 플랫폼으로 파이프라인 완성 및 실 검증 끝**: 모먼트
+승인 대기 중 병행 착수. 기존에 사용자가 별도 스프레드시트(`18Ld85fuR76tsVxshEuzZ17SV00c0BEI6Rtl3HjA20RI`,
+"Performance" 탭)로 수기 관리해온 카카오톡 채널 푸시 발송 성과 데이터를 소스로 확정 —
+Event type 컬럼이 이미 Business Segment 이름과 일치(사용자가 기존 "Direct Consult"를
+전부 "BOFU"로 정정 완료, Seminar/Webinar/BOFU 3개뿐)해서 캠페인명 기반 `getBusinessSegment()`
+없이 그대로 사용, SentAt이 정확한 단일 발송일이라 Meta식 lifetime 균등분배도 불필요 —
+Naver Search보다도 단순한 구조. `AD_005_KakaoChannel.js` 신규 — 순수 함수
+`computeKakaoChannelRowSpendEntry_()`/`aggregateKakaoChannelSpendByFYMonthSegment_()`,
+1행=subtotal/2행=헤더/3행부터 데이터인 원본 구조 때문에 `sheetToObjects()`(1행=헤더 가정)를
+못 써서 전용 리더 `readKakaoChannelPerformanceSheetData_()` 신규 작성. `AD_004_SpendCache.js`
+가 Kakao Channel 몫(KRW→NZD 변환)도 합산하도록 확장 — Meta+Naver Search+Kakao Channel
+3개 플랫폼 합산이 ACQ_REP W열 "Spent"에 정상 반영되는 것까지 실 시트 검증 완료(사용자 확인).
+
+**`KakaoSMS_Raw` 뷰 탭 추가(사용자 요청)** — "API로 가져오더라도 어차피 performance는
+봐야해서" 캠페인 지출 스프레드시트에 원본 Performance 전체 컬럼을 그대로 보여주는 뷰 탭
+신설. 신규 "PIC" 컬럼(B/C 사이 삽입, 원본엔 없음)은 사용자가 매 행 직접 입력하는 값이라,
+매번 전체 재작성하면 날아가는 문제를 막기 위해 **append-only**(Leads_Raw/MTA_Raw와 동일
+기존 관행 — 이미 복사된 행은 안 건드리고 새 행만 이어붙임)로 구현, 실 시트에서 PIC 수동
+입력 후 재실행해도 값이 보존되는 것까지 확인. CTR/CvR은 원본이 수식값이라 헤더만 복사하고
+값은 항상 빈칸 처리.
+
+**검증**: Node vm 하네스로 신규 순수 함수 전부 테스트(`testComputeKakaoChannelRowSpendEntry`/
+`testAggregateKakaoChannelSpendByFYMonthSegment`/`testComputeKakaoChannelSyncRow` 전부
+PASS), `node --check`/중복 선언/네이밍/버전헤더 검사 통과, 매 라운드 `clasp push` 완료.
+
+**남은 결정 사항(TODO, 임의로 처리하지 말 것)**: (1) 카카오모먼트 API 권한 심사 결과
+대기(~2026-08-03) — 승인되면 카카오 로그인 활성화/Redirect URI 등록부터 이어감, 승인 후
+카카오 채널 파이프라인(`AD_005_KakaoChannel.js`)은 폐기 예정. (2) Meta API 재도입은
+자격증명 확보 전까지 보류. (3) 매달 자동 갱신 트리거 연결 여부. (4) 나머지 플랫폼(Naver
+GFA/Google Search·Display/Naver Offline Cafe) 확장 순서.
+
 ## 캠페인 지출 통합 Phase 1 — Naver Search API 파이프라인 신설 + ACQ_REP 합산 Spent 연결
 
 **배경**: 이전 세션(2026-07-30)에서 Meta 파일럿까지 실사용 검증을 마친 상태에서 이어감. 상세 이력:
