@@ -9,9 +9,20 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.23.0
+ * v1.25.0
  *
  * Change Log
+ * v1.25.0 (2026-08-04)
+ * - `DATE.DISPLAY_TIMEZONE`("Asia/Seoul") 신규 — Pipeline Status(08_PipelineAsync.js)
+ *   Last Started/Finished 타임스탬프가 스크립트 타임존(America/New_York, appsscript.json)
+ *   기준으로 찍혀 사용자가 혼동한 문제 수정(2026-08-04 실사용 피드백). `DATE.TIMEZONE`
+ *   (스크립트/실행 타임존)과는 별개 용도.
+ * v1.24.0 (2026-08-04)
+ * - `SHEETS.README` 신규("README"), `PROPERTIES`에 `PIPELINE_LOCK`/
+ *   `PIPELINE_LAST_FAILED_TYPE`/`PIPELINE_STATUS_LEADS`/`PIPELINE_STATUS_MTA` 4개
+ *   신규, `PIPELINE` 블록 신규(`TYPES`/`TRIGGER_DELAY_MS`/`STATUS_ANCHOR_ROW`/
+ *   `STATUS_ANCHOR_COL`) — `appendNewLeads()`/`appendNewMTA()` 백그라운드 트리거
+ *   비동기화(`08_PipelineAsync.js` 신규, `docs/OpenItems.md` #9) 지원용.
  * v1.23.0 (2026-07-31)
  * - **`ACQ.META_SPENT_COLUMN` → `ACQ.SPENT_COLUMN`, `ACQ.META_SPEND_CACHE_SHEET`
  *   ("Meta_Spend_Cache") → `ACQ.AD_SPEND_CACHE_SHEET`("Ad_Spend_Cache") 개명** —
@@ -198,7 +209,11 @@ const CONFIG = {
 
     // Master
     LEADS_MASTER: "Leads_Master",
-    MTA_MASTER: "MTA_Master"
+    MTA_MASTER: "MTA_Master",
+
+    // Ops / Docs
+    // 2026-08-04 추가 — 백그라운드 파이프라인 진행상태 표시용(08_PipelineAsync.js)
+    README: "README"
 
   },
 
@@ -258,7 +273,35 @@ const CONFIG = {
   PROPERTIES: {
 
     LEADS_LAST_ROW: "LEADS_LAST_PROCESSED_ROW",
-    MTA_LAST_ROW: "MTA_LAST_PROCESSED_ROW"
+    MTA_LAST_ROW: "MTA_LAST_PROCESSED_ROW",
+
+    // 2026-08-04 추가 — 백그라운드 파이프라인 트리거 비동기화(08_PipelineAsync.js)
+    PIPELINE_LOCK: "PIPELINE_CHAIN_LOCK",
+    PIPELINE_LAST_FAILED_TYPE: "PIPELINE_LAST_FAILED_TYPE",
+    PIPELINE_STATUS_LEADS: "PIPELINE_STATUS_LEADS",
+    PIPELINE_STATUS_MTA: "PIPELINE_STATUS_MTA"
+
+  },
+
+  /**
+   * Pipeline Async (Background Trigger Chain)
+   *
+   * 2026-08-04 추가 — appendNewLeads()/appendNewMTA()의 refresh 체인을
+   * 설치형 1회성 트리거로 백그라운드 처리하기 위한 설정(08_PipelineAsync.js).
+   * STATUS_ANCHOR_ROW/COL은 CONFIG.SHEETS.README 탭에 Pipeline Status
+   * 7행×3열 블록을 쓰는 시작 좌표(1-indexed, A1).
+   */
+  PIPELINE: {
+
+    TYPES: {
+      LEADS: "LEADS",
+      MTA: "MTA"
+    },
+
+    TRIGGER_DELAY_MS: 1000,
+
+    STATUS_ANCHOR_ROW: 1,
+    STATUS_ANCHOR_COL: 1
 
   },
 
@@ -297,7 +340,13 @@ const CONFIG = {
   DATE: {
 
     TIMEZONE: Session.getScriptTimeZone(),
-    FORMAT: "yyyy-MM-dd"
+    FORMAT: "yyyy-MM-dd",
+
+    // 2026-08-04 추가 — 스크립트 타임존(appsscript.json: America/New_York)과 무관하게
+    // 사용자에게 보여주는 타임스탬프(예: Pipeline Status Last Started/Finished)는
+    // 항상 KST로 표시하기 위한 상수. TIMEZONE(스크립트/실행 타임존)과는 용도가 다름 —
+    // 혼동 금지.
+    DISPLAY_TIMEZONE: "Asia/Seoul"
 
   },
   

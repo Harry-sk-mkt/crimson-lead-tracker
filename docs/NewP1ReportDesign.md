@@ -2,6 +2,12 @@
 
 > Status: 구현 완료 (2026-07-22) — `40_NewP1Report.js`, `41_NewP1ReportStyles.js`, `CONFIG.NEWP1`(`00_Config.js`).
 > 최초 시트 세팅은 `setupNewP1Report()`를 편집기에서 1회 수동 실행 (NewP1_REP 시트 생성 + Control/Report 헤더 + 드롭다운).
+> **2026-08-04부터**: 드롭다운(Start/End FY 옵션)은 `08_PipelineAsync.js`의 `refreshReportFYDropdowns_()`가
+> Leads/MTA 백그라운드 파이프라인 단계로 자동 재실행 — 새 FY 데이터가 들어와도 드롭다운이 자동으로
+> 최신화됨(헤더/Report Area 재세팅은 여전히 수동, `setupNewP1Dropdowns_()`만 호출). 이어서
+> `refreshReportGenerate_()`가 `generateNewP1Report_()`도 자동 호출해 Report Area 자체를 재생성 —
+> Control 행 FY 값이 잘못돼 실패해도 파이프라인 전체는 막지 않고 Logger에만 기록(자체 try/catch).
+> Generate 체크박스(`onEdit`)는 즉시 수동 재생성이 필요할 때 쓰는 경로로 계속 유효.
 > 관련 문서: `docs/ACQReportDesign.md`, `docs/OperationsLayer.md`, `docs/Changelog.md` (2026-07-22 §5, §12, §13)
 
 ---

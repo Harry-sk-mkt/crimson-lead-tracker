@@ -10,9 +10,25 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.4.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-04)
+ * - appendNewLeads()/appendNewMTA()에 `silent` 파라미터 추가(옵셔널, 기본
+ *   false — 기존 메뉴 호출부는 무변경) — Import(00_Import.js)가 Raw 기록
+ *   직후 자동으로 Append까지 체이닝하도록 사용자가 요청(2026-08-04, Import→
+ *   Append 2단계 수동 클릭이 예상과 다르다는 피드백). silent=true면 함수
+ *   내부의 SpreadsheetApp.getUi().alert() 호출을 전부 건너뛰어, Import
+ *   다이얼로그가 이미 보여줄 완료 메시지와 중복 팝업이 뜨지 않게 함
+ *   (`buildLeadsOPS(skipQA)`와 동일한 옵셔널 파라미터 패턴 재사용).
+ * v1.5.0 (2026-08-04)
+ * - appendNewLeads()/appendNewMTA()가 Master append 직후 refresh 체인을
+ *   직접 호출하던 것을, 08_PipelineAsync.js의 락(acquirePipelineLock_)
+ *   + 설치형 1회성 트리거(schedulePipelineTail_)로 백그라운드 위임하도록
+ *   변경 — Raw→Master append/sort/카운터 갱신 로직 자체는 변경 없음
+ *   (docs/OpenItems.md #9 구현). 다른 백그라운드 작업이 이미 진행 중이면
+ *   이번 사이클은 Master append만 반영하고 refresh는 건너뜀(안전 —
+ *   다음 정상 실행 때 Master 전체 기준으로 재계산되므로 데이터 손실 없음).
  * v1.4.0 (2026-07-27)
  * - appendNewLeads()에 refreshTargetActuals_() 호출 추가 (refreshContentEngine_()
  *   바로 옆) — Target_REP 실적(Actual P1/CPNP1) 컬럼도 항상 최신 유지
@@ -43,7 +59,7 @@
  * Append New Leads
  * ==========================================================
  */
-function appendNewLeads(){
+function appendNewLeads(silent){
 
   const start = new Date();
 
@@ -77,9 +93,11 @@ function appendNewLeads(){
 
     Logger.log("No new Lead records to append.");
 
-    SpreadsheetApp.getUi().alert(
-      "추가할 새 Lead 레코드가 없습니다."
-    );
+    if(!silent){
+      SpreadsheetApp.getUi().alert(
+        "추가할 새 Lead 레코드가 없습니다."
+      );
+    }
 
     return { appended: 0 };
 
@@ -105,19 +123,6 @@ function appendNewLeads(){
       String(allRaw.length)
     );
 
-  Logger.log("Syncing Leads_OPS (skipQA)...");
-
-  buildLeadsOPS(true);
-
-  refreshACQSummary_();
-  refreshNewP1Engine_();
-
-  refreshEventsEngine_();
-  refreshBOFUEngine_();
-  refreshSearchEngine_();
-  refreshContentEngine_();
-  refreshTargetActuals_();
-
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);
 
@@ -126,18 +131,58 @@ function appendNewLeads(){
     " Lead records. (" + seconds + "s)"
   );
 
-  Logger.log("======================================");
-  Logger.log("Append New Leads Completed");
-  Logger.log("======================================");
+  const locked = !acquirePipelineLock_(CONFIG.PIPELINE.TYPES.LEADS);
 
-  SpreadsheetApp.getUi().alert(
-    "✅ Leads_Master Append 완료",
-    "신규 반영 : " + newMaster.length + "건\n" +
-    "소요 시간 : " + seconds + "s",
-    SpreadsheetApp.getUi().ButtonSet.OK
+  if(locked){
+
+    Logger.log(
+      "Pipeline lock held by another run — skipping background refresh this cycle."
+    );
+
+    Logger.log("======================================");
+    Logger.log("Append New Leads Completed (background skipped)");
+    Logger.log("======================================");
+
+    if(!silent){
+      SpreadsheetApp.getUi().alert(
+        "✅ Leads_Master Append 완료 (백그라운드 처리는 건너뜀)",
+        "신규 반영 : " + newMaster.length + "건\n" +
+        "소요 시간 : " + seconds + "s\n\n" +
+        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
+        "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다.",
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+    }
+
+    return { appended: newMaster.length, backgroundSkipped: true };
+
+  }
+
+  writePipelineStatusState_(
+    CONFIG.PIPELINE.TYPES.LEADS,
+    { status: "PENDING", stage: "", startedAt: "", finishedAt: "", error: "" }
   );
 
-  return { appended: newMaster.length };
+  writePipelineStatusToReadme_();
+
+  schedulePipelineTail_("runLeadsPipelineTail");
+
+  Logger.log("======================================");
+  Logger.log("Append New Leads Completed (background scheduled)");
+  Logger.log("======================================");
+
+  if(!silent){
+    SpreadsheetApp.getUi().alert(
+      "✅ Leads_Master Append 완료 (백그라운드 처리 시작)",
+      "신규 반영 : " + newMaster.length + "건\n" +
+      "소요 시간 : " + seconds + "s\n\n" +
+      "Leads_OPS/Report 갱신은 백그라운드에서 진행됩니다 — README 탭에서 " +
+      "진행상태 확인 가능.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
+
+  return { appended: newMaster.length, backgroundScheduled: true };
 
 }
 
@@ -147,7 +192,7 @@ function appendNewLeads(){
  * Append New MTA
  * ==========================================================
  */
-function appendNewMTA(){
+function appendNewMTA(silent){
 
   const start = new Date();
 
@@ -182,9 +227,11 @@ function appendNewMTA(){
 
     Logger.log("No new MTA records to append.");
 
-    SpreadsheetApp.getUi().alert(
-      "추가할 새 MTA 레코드가 없습니다."
-    );
+    if(!silent){
+      SpreadsheetApp.getUi().alert(
+        "추가할 새 MTA 레코드가 없습니다."
+      );
+    }
 
     return { appended: 0 };
 
@@ -210,10 +257,6 @@ function appendNewMTA(){
       String(allRaw.length)
     );
 
-  Logger.log("Syncing MTA Funnel to Leads_OPS...");
-
-  syncMTAFunnelToOPS_();
-
   const seconds =
     ((new Date() - start) / 1000).toFixed(2);
 
@@ -222,17 +265,57 @@ function appendNewMTA(){
     " MTA records. (" + seconds + "s)"
   );
 
-  Logger.log("======================================");
-  Logger.log("Append New MTA Completed");
-  Logger.log("======================================");
+  const locked = !acquirePipelineLock_(CONFIG.PIPELINE.TYPES.MTA);
 
-  SpreadsheetApp.getUi().alert(
-    "✅ MTA_Master Append 완료",
-    "신규 반영 : " + newMaster.length + "건\n" +
-    "소요 시간 : " + seconds + "s",
-    SpreadsheetApp.getUi().ButtonSet.OK
+  if(locked){
+
+    Logger.log(
+      "Pipeline lock held by another run — skipping background refresh this cycle."
+    );
+
+    Logger.log("======================================");
+    Logger.log("Append New MTA Completed (background skipped)");
+    Logger.log("======================================");
+
+    if(!silent){
+      SpreadsheetApp.getUi().alert(
+        "✅ MTA_Master Append 완료 (백그라운드 처리는 건너뜀)",
+        "신규 반영 : " + newMaster.length + "건\n" +
+        "소요 시간 : " + seconds + "s\n\n" +
+        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
+        "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다.",
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+    }
+
+    return { appended: newMaster.length, backgroundSkipped: true };
+
+  }
+
+  writePipelineStatusState_(
+    CONFIG.PIPELINE.TYPES.MTA,
+    { status: "PENDING", stage: "", startedAt: "", finishedAt: "", error: "" }
   );
 
-  return { appended: newMaster.length };
+  writePipelineStatusToReadme_();
+
+  schedulePipelineTail_("runMTAPipelineTail");
+
+  Logger.log("======================================");
+  Logger.log("Append New MTA Completed (background scheduled)");
+  Logger.log("======================================");
+
+  if(!silent){
+    SpreadsheetApp.getUi().alert(
+      "✅ MTA_Master Append 완료 (백그라운드 처리 시작)",
+      "신규 반영 : " + newMaster.length + "건\n" +
+      "소요 시간 : " + seconds + "s\n\n" +
+      "Leads_OPS/Report 갱신은 백그라운드에서 진행됩니다 — README 탭에서 " +
+      "진행상태 확인 가능.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
+
+  return { appended: newMaster.length, backgroundScheduled: true };
 
 }

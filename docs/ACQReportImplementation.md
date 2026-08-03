@@ -13,10 +13,20 @@
 ## 함수 목록
 
 **`30_ACQReport.js`**
-- `setupACQDropdowns()` — Start/End FY·Month 드롭다운 + Generate 체크박스 최초 세팅 (1회성, 수동 실행)
+- `setupACQDropdowns()` — Start/End FY·Month 드롭다운 + Generate 체크박스 최초 세팅. **2026-08-04부터
+  자동 재실행됨** — `08_PipelineAsync.js`의 `refreshReportFYDropdowns_()`가 Leads/MTA 백그라운드
+  파이프라인(`runLeadsPipelineTail()`/`runMTAPipelineTail()`) 마지막 단계로 매번 호출해 새 FY(예:
+  8월 시작 FY 전환) 데이터가 들어와도 드롭다운 옵션이 자동으로 최신화됨(사용자 요청, 새 FY 데이터가
+  들어왔는데도 드롭다운에 안 보이는 문제를 계기로). 최초 시트 생성 시의 수동 실행(헤더/Report Area
+  세팅 포함)은 여전히 필요.
 - `findFiscalYearRange_()` — 실제 데이터 기준 FY min/max 계산 (드롭다운 목록용)
 - `onEdit(e)` — Simple Trigger, `ACQ_REP!E2` 체크박스 체크 시 `generateACQReport_()` 실행 후 자동 체크 해제
-- `generateACQReport_()` — 메인 로직: Engine 생성 → Sort Index 필터 → `ACQ_Summary` 조회 → Report Area 작성 → 서식 적용
+  (여전히 유효 — Control 행 FY/Month를 바꿔서 즉시 재생성하고 싶을 때 쓰는 수동 경로)
+- `generateACQReport_()` — 메인 로직: Engine 생성 → Sort Index 필터 → `ACQ_Summary` 조회 → Report Area 작성 → 서식 적용.
+  **2026-08-04부터 자동 재실행됨** — `08_PipelineAsync.js`의 `refreshReportGenerate_()`가 매 Leads/MTA
+  백그라운드 파이프라인 마지막 단계로 호출(Control 행에 이미 있는 Start/End FY·Month 기준으로 재생성).
+  실패해도(예: Start FY > End FY) 파이프라인 전체를 막지 않도록 자체 try/catch로 격리 — 실패 시
+  Logger에만 기록, Executions 로그에서 확인 필요.
 - `buildACQEngineRows_(minFY, maxFY)` — 월×세그먼트 조합 생성 (테스트: `testBuildACQEngineRows`)
 - `computeSortIndex_(fy, month, minFY)` — FY+Month → Sort Index 변환
 - `writeACQEngine_(sheet, engineRows)` — Engine을 O:R 컬럼에 씀

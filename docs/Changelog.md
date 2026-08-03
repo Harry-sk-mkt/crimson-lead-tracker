@@ -1,3 +1,81 @@
+# Changelog — 2026-08-04
+
+## 로컬/origin 재동기화 (다른 머신 세션과의 divergence)
+
+세션 시작 `scripts/start-session.sh` 체크에서 로컬이 origin보다 3커밋 뒤처져 있음을 발견 —
+다른 머신(사무실 등)에서 이미 Naver Search Ad API 파이프라인 + Kakao Channel spend
+파이프라인이 추가된 상태였음. worktree 1개뿐이라 안전하게 fast-forward pull로 동기화 후
+작업 시작.
+
+## 백엔드 실행 체인 트리거 비동기화 구현 (`docs/OpenItems.md` #9)
+
+**배경**: 2026-07-28 설계만 확정돼있던 항목 — `appendNewLeads()`/`appendNewMTA()`가 Master
+append 직후 무거운 refresh 체인(buildLeadsOPS/syncMTAFunnelToOPS_/ACQ·NewP1·Events·BOFU·
+Search·Content Engine·Target Actuals)까지 같은 실행 안에서 동기로 처리해 브라우저 다이얼로그가
+몇 분씩 안 닫히는 문제(2026-07-25 실측)를 해소하는 게 목표. 상세 진행 기록:
+`docs/exec-plans/active/2026-08-04-pipeline-async-triggers.md`.
+
+**구현**: 신규 `08_PipelineAsync.js` — PropertiesService 기반 단순 락(`acquirePipelineLock_`/
+`releasePipelineLock_`, Leads/MTA 공용 단일 키), 설치형 1회성 time-based 트리거
+(`schedulePipelineTail_`), README 탭에 진행상태 표시(`writePipelineStatusToReadme_`, A1:C7
+고정 블록, 최초 1회만 `insertRowsBefore`로 공간 확보), `runLeadsPipelineTail()`/
+`runMTAPipelineTail()`(트리거 대상 겸 수동 재실행 진입점), `runRetryPipelineTail()`(실패
+시 수동 재시도 전용). `07_IncrementalMasterBuild.js`의 `appendNewLeads()`/`appendNewMTA()`는
+Raw→Master append/정렬은 그대로 동기 유지하고 그 이후만 락 확인 후 트리거로 위임 — 다른
+백그라운드 작업이 이미 진행 중이면 이번 사이클은 Master append만 반영하고 알림 후 종료
+(idempotent, 데이터 손실 없음).
+
+**실 데이터 검증(2026-08-04)**: `runLeadsPipelineTail()` 최초 실행 — Apps Script Executions
+로그 Successful, **363.546초(6m 3.5s)** 소요(`docs/PerformanceBenchmark.md` 기록). 트리거로
+옮긴 목적은 체인 자체를 빠르게 만드는 게 아니라 브라우저를 막지 않는 것이었고, 실측으로
+목적 달성 확인.
+
+**실사용 피드백 기반 후속 개선 6건**(같은 날, 사용자가 실제로 써보며 순차 발견):
+1. **Import→Append 자동 체이닝(스코프 확장)**: 원래 설계는 Import와 Append가 계속 별도
+   수동 클릭이었으나, 사용자가 "Import 끝나면 Append까지 자동으로 이어지길 기대했다"고
+   피드백 — `appendNewLeads()`/`appendNewMTA()`에 옵셔널 `silent` 파라미터 추가(기존 무인자
+   호출부는 무변경, `buildLeadsOPS(skipQA)`와 동일 패턴), `00_Import.js`의 `importCsv()`가
+   Raw 기록 직후 자동 호출하도록 변경. 신규 `formatAppendSummary_()`가 결과 메시지 통합.
+2. **README 표시 개선**: Last Started/Finished가 스크립트 타임존(America/New_York,
+   appsscript.json) 기준으로 찍혀 사용자가 혼동 — `CONFIG.DATE.DISPLAY_TIMEZONE`("Asia/Seoul")
+   신규 도입 + " KST" 표기. 헤더 라벨 "Leads"/"MTA" → "New Leads Upload"/"MTA Upload"로 변경.
+3. **ACQ_REP/NewP1_REP FY 드롭다운 자동 갱신**: 8월 진입(FY26→FY27) 데이터가 들어왔는데도
+   Start/End FY 드롭다운에 "FY27"이 안 보인다는 보고 — `setupACQDropdowns()`/
+   `setupNewP1Dropdowns_()`가 원래 "1회성 수동 실행" 설계였음을 문서 3곳에서 확인, 사용자
+   확정으로 자동화 스코프 추가. 신규 `refreshReportFYDropdowns_()`를 두 백그라운드 tail
+   마지막 단계로 추가.
+4. **Report Generate까지 백그라운드 편입**: `generateACQReport_()`/`generateNewP1Report_()`를
+   `refreshReportGenerate_()`로 감싸 자동 호출 — Control 행 FY 값 오류 등으로 실패해도 전체
+   파이프라인은 FAILED로 만들지 않고 Logger에만 기록(사용자 확정 — Report 실패 때문에
+   6분짜리 핵심 데이터 refresh 전체를 재실행하게 만드는 건 배보다 배꼽이 큼).
+5. **완전 동일 중복 자동삭제도 백그라운드 편입**: 2026-07-28 구현·검증까지 끝났지만 "실데이터
+   검증 전까지는 수동 Run" 방침으로 자동 체인엔 안 걸려있던 `runAutoDeleteExactDuplicateLeadRows()`/
+   `runAutoDeleteExactDuplicateTouchRows()`(24_OPSQA.js)를 각 tail의 **첫 단계**(OPS/Engine
+   갱신보다 먼저)로 추가 — 두 함수 모두 `SpreadsheetApp.getUi()` 미사용이라 트리거에서 안전.
+   QA 전체(Funnel Match 등)는 여전히 스킵, 이번엔 중복 삭제 단독 기능만 자동화.
+6. **README 실무자 가이드 섹션**: 비개발자 실무자용 안내(평소 할 일/진행상태 확인법/기간
+   변경법/아직 수동인 것/장애 시 대응)를 신규 `runSetupReadmeGuide()`로 작성 — 정확한 위치를
+   미리 정하지 않고 제목 텍스트로 기존 섹션을 찾아 갱신하거나 시트 맨 아래에 추가(위치 충돌
+   없는 안전한 기본값).
+
+`08_PipelineAsync.js` v1.0.0 → v1.5.0, `00_Config.js` v1.24.0 → v1.25.0,
+`07_IncrementalMasterBuild.js` v1.5.0 → v1.6.0, `00_Import.js` v3.5.0 → v3.6.0,
+`24_OPSQA.js` v1.4.1 → v1.5.0. 관련 문서(`docs/ACQReportImplementation.md`,
+`docs/NewP1ReportDesign.md`, `docs/OpenItems.md` #8·#9·#13)도 최신 동작 기준으로 갱신.
+
+## Import 다이얼로그 "Raw 기준 가장 최근 날짜" 표시 제거
+
+2026-07-25 두 차례 성능 최적화(Master→Raw 기준 전환, 전체 스캔→`getRange()` targeted read)에도
+불구하고 업로드 다이얼로그 오픈이 여전히 느리다는 실사용 피드백(사용자: "예전에 삭제하기로
+했는데 안 돼있다") — git/Changelog 이력상 실제 삭제 커밋은 없었던 것으로 확인됐으나, 사용자
+확정에 따라 `getLatestRawDate_()` 및 관련 표시 로직을 `00_Import.js`/`00_UploadDialog.html`에서
+완전히 제거. `00_Import.js` v3.4.0 → v3.5.0.
+
+## 신규 TODO 기록 (`docs/OpenItems.md`)
+
+- 18. Import 업로드 다이얼로그가 대용량(특히 MTA) 처리 중 오래 대기 — Raw→Master append/정렬
+  자체(백그라운드 트리거 이전 동기 구간)가 원인으로 추정, 아직 실측/설계 전.
+
 # Changelog — 2026-07-31
 
 ## 캠페인 지출 통합 Phase 1 — Kakao 플랫폼(Moments 권한신청 + Channel 파이프라인 구현) + Meta API 재도입 보류

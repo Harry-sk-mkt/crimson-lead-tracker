@@ -14,9 +14,16 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.4.1
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-04)
+ * - `runAutoDeleteExactDuplicateLeadRows()`/`runAutoDeleteExactDuplicateTouchRows()`가
+ *   **자동 실행 체인에 배선됨** — `08_PipelineAsync.js`의 `runLeadsPipelineTail()`/
+ *   `runMTAPipelineTail()` 첫 단계로 추가(사용자 요청, 2026-08-04). 아래 v1.3.0/v1.4.0
+ *   Change Log의 "자동 실행 체인엔 배선 안 함" 문구는 이제 지난 상태 — 실데이터 검증
+ *   완료(2026-07-28, 294개 삭제) 후 자동 배선으로 전환됨. 함수 자체는 변경 없음(원래도
+ *   `SpreadsheetApp.getUi()` 미사용이라 트리거 컨텍스트에서 그대로 안전).
  * v1.4.1 (2026-07-28)
  * - testFindExactDuplicateLeadRowsToDelete_()/testFindExactDuplicateLeadRowsToDeleteTieBreak_()
  *   함수명 끝의 `_` 제거 (사용자가 Apps Script 편집기 Run 드롭다운에서 안 보인다고
@@ -1710,9 +1717,10 @@ function testFindExactDuplicateTouchRowsToDeleteTieBreak_() {
  * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에
  * 먼저 전부 나열한 뒤 삭제 — 실행 로그가 곧 감사 기록.
  *
- * ⚠️ 이 함수는 runOPSQA_()/appendNewMTA() 등 자동 실행 체인에 배선하지
- * 않았다 — 실제 데이터로 검증 전까지는 사용자가 Apps Script 편집기에서
- * 직접 Run할 것. 자동 배선 여부는 검증 후 별도 결정.
+ * **2026-08-04부터 자동 실행 체인에 배선됨**: `08_PipelineAsync.js`의
+ * `runMTAPipelineTail()` 첫 단계(`syncMTAFunnelToOPS_()`보다 먼저)로 매 MTA
+ * 백그라운드 실행마다 자동 호출됨(실데이터 검증 완료 후 사용자 요청). 수동
+ * 실행(Apps Script 편집기)도 계속 가능 — 재시도/디버깅용.
  * ==========================================================
  */
 function runAutoDeleteExactDuplicateTouchRows() {
@@ -1950,9 +1958,10 @@ function testFindExactDuplicateLeadRowsToDeleteTieBreak() {
  * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에
  * 먼저 전부 나열한 뒤 삭제 — 실행 로그가 곧 감사 기록.
  *
- * ⚠️ MTA_Master 버전과 동일한 방침으로 runOPSQA_()/appendNewLeads() 등
- * 자동 실행 체인에는 배선하지 않았다 — 실제 데이터로 검증 전까지는
- * 사용자가 Apps Script 편집기에서 직접 Run할 것.
+ * **2026-08-04부터 자동 실행 체인에 배선됨**: MTA_Master 버전과 동일하게
+ * `08_PipelineAsync.js`의 `runLeadsPipelineTail()` 첫 단계(`buildLeadsOPS`보다
+ * 먼저)로 매 Leads 백그라운드 실행마다 자동 호출됨(사용자 요청). 수동 실행도
+ * 계속 가능 — 재시도/디버깅용.
  * ==========================================================
  */
 function runAutoDeleteExactDuplicateLeadRows() {

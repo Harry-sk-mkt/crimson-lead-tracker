@@ -85,3 +85,20 @@ Rebuild 중 `buildLeadsOPS()`가 연속 2회 실패. 코드 로직 문제가 아
 전체 재적용 방식이라, 데이터가 계속 늘어나면(현재 35K+ 행) 이 "전량 재작성" 패턴 자체가
 타임아웃 위험을 키우는 구조적 요인일 수 있음 — 향후 증분 업데이트(변경분만 write) 방식
 검토 후보.
+
+## 2026-08-04 — `runLeadsPipelineTail()` 백그라운드 트리거 최초 실측 (`08_PipelineAsync.js`)
+
+배경: `docs/OpenItems.md` #9(백엔드 실행 체인 트리거 비동기화) 구현 후 첫 실 시트 검증.
+`appendNewLeads(true)`(Import→Append 자동 체이닝)가 설치형 1회성 트리거로
+`runLeadsPipelineTail()`을 예약, 트리거가 `buildLeadsOPS(true)` → ACQ/NewP1/Events/BOFU/
+Search/Content Engine → Target Actuals refresh 전체 체인을 실행.
+
+| 항목 | 값 |
+| --- | --- |
+| Apps Script Executions 로그 상태 | Successful |
+| **전체 실행 시간** | **363.546s (6m 3.5s)** |
+
+참고: 트리거가 별도 실행으로 백그라운드에서 도니 Import/Append 클릭 직후 사용자는 즉시
+알림을 받고 다이얼로그를 닫을 수 있음 — 이 6분은 브라우저를 막지 않음(설계 목적 달성).
+README 탭 Pipeline Status A1:C7 표시 위치도 사용자가 직접 셀 클릭 확인(Name Box: A1) —
+설계대로 정상 동작 확인.

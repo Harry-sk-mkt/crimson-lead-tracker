@@ -11,9 +11,22 @@
  * - Master 빌드
  *
  * Version
- * v3.4.0
+ * v3.6.0
  *
  * Change Log
+ * v3.6.0 (2026-08-04)
+ * - importCsv()가 LEADS/MTA Raw 기록 직후 appendNewLeads()/appendNewMTA()를
+ *   silent=true로 자동 호출하도록 변경(사용자 요청 — Import 끝나면 Append까지
+ *   자동 실행되길 기대했는데 별도로 눌러야 했다는 피드백). 신규
+ *   formatAppendSummary_()가 append 결과를 업로드 다이얼로그 완료 메시지에
+ *   이어붙임. IC_FUNNEL은 대응하는 append 함수가 없어 기존 안내 문구 유지.
+ * v3.5.0 (2026-08-04)
+ * - `getLatestRawDate_()`와 업로드 다이얼로그의 "Raw 기준 가장 최근 날짜" 표시를
+ *   완전히 제거(사용자 확정) — 2026-07-25 두 차례 성능 최적화(Master→Raw 기준
+ *   전환, sheetToObjects()→getRange() targeted read)에도 불구하고 여전히
+ *   업로드 다이얼로그 오픈이 느려진다는 사용자 실측 피드백. `showUploadDialog_()`의
+ *   `template.lastDate` 할당도 함께 제거, `00_UploadDialog.html`의 해당 표시
+ *   블록/스타일도 제거.
  * v3.4.0 (2026-07-25)
  * - getLatestRawDate_()가 sheetToObjects()로 Raw 전체(전체 컬럼)를 읽던 걸
  *   getRange()로 날짜 컬럼 하나만 targeted read하도록 변경 — Import 다이얼로그
@@ -48,7 +61,6 @@ function showUploadDialog_(importType) {
     );
 
   template.importType = importType;
-  template.lastDate = getLatestRawDate_(importType);
 
   const html =
     template
@@ -68,83 +80,45 @@ function showUploadDialog_(importType) {
 
 /**
  * ==========================================================
- * Get Latest Raw Date (업로드 화면에 "마지막으로 들어온 날짜" 표시용)
+ * Format Append Summary (Import→Append 자동 체이닝 결과 메시지)
  *
  * WHY
- * 매주 export 범위를 정할 때 "지난번 어디까지 올렸는지" 기준이 없어서
- * 겹치는 날짜를 다시 올리는 실수가 발생(같은 터치가 MTA_Raw/MTA_Master에
- * 중복으로 쌓임 — findExactDuplicateTouchRows_()로 검출은 되지만 자동
- * 삭제는 안 됨, 24_OPSQA.js 참고).
+ * importCsv()가 Raw 기록 직후 appendNewLeads()/appendNewMTA()를 silent=true로
+ * 바로 호출하도록 바뀌면서(2026-08-04, 사용자 요청 — Import→Append가 2단계
+ * 수동 클릭이라 기대와 다르다는 피드백), 그 결과를 업로드 다이얼로그 완료
+ * 메시지에 이어붙이기 위한 변환 함수.
  *
- * 2026-07-25 정정 (1차): 처음엔 Master 기준으로 만들었으나, Master는
- * Rebuildable(전체 삭제 후 재구축하는 도중엔 비어있을 수 있음)이라 이
- * 시점엔 항상 "(데이터 없음)"으로 잘못 표시됨(사용자 지적). Raw는
- * Immutable하고 항상 import 즉시 반영되는 원본이라 "지금까지 실제로 뭘
- * 올렸는지"를 보려면 Raw를 봐야 정확함 — Master 대신 Raw 기준으로 변경.
+ * INPUT
+ * appendResult : { appended, backgroundScheduled?, backgroundSkipped? } | null
+ *   (IC_FUNNEL처럼 대응하는 append 함수가 없는 Import Type이면 null)
  *
- * 2026-07-25 정정 (2차, 성능): sheetToObjects()로 Raw 전체(수만 행 x 전체
- * 컬럼)를 다 읽어서 객체로 변환한 뒤 날짜 컬럼 하나만 쓰고 있어서, Import
- * 다이얼로그가 뜨기 전에 이 무거운 스캔이 끝나야 해 다이얼로그 오픈 자체가
- * 느려짐(사용자 발견). 날짜 컬럼 하나만 getRange()로 targeted read하도록
- * 변경 — 전체 컬럼을 안 읽으므로 훨씬 빠름.
- *
- * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
- * @return {string}  "yyyy-MM-dd" 형식, 데이터 없으면 안내 문구
+ * OUTPUT
+ * string
  * ==========================================================
  */
-function getLatestRawDate_(importType) {
+function formatAppendSummary_(appendResult){
 
-  let sheetName, dateColumn;
-
-  if (importType === "LEADS") {
-    sheetName = CONFIG.SHEETS.LEADS_RAW;
-    dateColumn = "Create Date";
-  } else if (importType === "MTA") {
-    sheetName = CONFIG.SHEETS.MTA_RAW;
-    dateColumn = "Multi Touch Attribution: Created Date";
-  } else {
-    return "";
+  if(!appendResult){
+    return "Master 🏗️Append를 실행해주세요.";
   }
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(sheetName);
+  if(appendResult.backgroundScheduled){
+    return (
+      "Master Append : " + appendResult.appended + "건 반영 완료\n" +
+      "Leads_OPS/Report 갱신은 백그라운드에서 진행됩니다 — README 탭에서 " +
+      "진행상태 확인 가능."
+    );
+  }
 
-  if (!sheet) return "(데이터 없음)";
+  if(appendResult.backgroundSkipped){
+    return (
+      "Master Append : " + appendResult.appended + "건 반영 완료\n" +
+      "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
+      "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다."
+    );
+  }
 
-  const lastRow = sheet.getLastRow();
-
-  if (lastRow < 2) return "(데이터 없음)";
-
-  const headerMap = getHeaderMap(sheet);
-  const colIndex = headerMap[dateColumn];
-
-  if (colIndex === undefined) return "(데이터 없음)";
-
-  const values = sheet
-    .getRange(2, colIndex + 1, lastRow - 1, 1)
-    .getValues();
-
-  let maxDate = null;
-
-  values.forEach(function (row) {
-
-    const d = parseDate(row[0], "DMY");
-
-    if (d instanceof Date && !isNaN(d.getTime())) {
-      if (!maxDate || d.getTime() > maxDate.getTime()) {
-        maxDate = d;
-      }
-    }
-
-  });
-
-  if (!maxDate) return "(데이터 없음)";
-
-  return Utilities.formatDate(
-    maxDate,
-    Session.getScriptTimeZone(),
-    "yyyy-MM-dd"
-  );
+  return "Master Append : 반영할 신규 레코드가 없었습니다.";
 
 }
 
@@ -276,14 +250,18 @@ function importCsv(
     // Write to Raw
     //----------------------------------------------------------
 
+    let appendResult = null;
+
     switch (importType) {
 
       case "LEADS":
         writeLeadRaw(rawRecords);
+        appendResult = appendNewLeads(true);
         break;
 
       case "MTA":
         writeMTARaw(rawRecords);
+        appendResult = appendNewMTA(true);
         break;
 
       case "IC_FUNNEL":
@@ -308,7 +286,8 @@ function importCsv(
 
     return (
       formatValidationSummary_(summary) +
-      "\n\nMaster 🏗️Append를 실행해주세요."
+      "\n\n" +
+      formatAppendSummary_(appendResult)
     );
 
   }
