@@ -14,9 +14,19 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-05)
+ * - **버그 수정 — `runAutoDeleteExactDuplicateLeadRows()` 실행이 저절로 중단됨(실측)**.
+ *   Leads_Master에 7월 한 달만 중복 659건이 쌓여있던 상태(원인: 파이프라인 tail이 이
+ *   배치들에 대해 완료되지 못했던 것으로 추정, `docs/OpenItems.md` #20)에서 실행했더니,
+ *   `sheet.deleteRow()`를 659번 반복 호출하는 도중(약 3분여) 실행이 저절로 중단되는 것
+ *   확인 — 한 행씩 삭제할 때마다 시트 전체가 재계산되는 게 원인으로 추정. 신규
+ *   `groupConsecutiveDescendingRows_()`(순수 함수, 연속된 행 번호를 구간으로 묶음) +
+ *   `sheet.deleteRows(start, count)` 구간 단위 호출로 교체 — API 호출 수를 크게 줄여
+ *   대량 삭제도 빠르게 완료되도록 함. `findExactDuplicateLeadRowsToDelete_()`(삭제 대상
+ *   판정 로직)는 변경 없음, 삭제 "방법"만 교체.
  * v1.5.0 (2026-08-04)
  * - `runAutoDeleteExactDuplicateLeadRows()`/`runAutoDeleteExactDuplicateTouchRows()`가
  *   **자동 실행 체인에 배선됨** — `08_PipelineAsync.js`의 `runLeadsPipelineTail()`/
@@ -1942,6 +1952,82 @@ function testFindExactDuplicateLeadRowsToDeleteTieBreak() {
 
 /**
  * ==========================================================
+ * Group Consecutive Descending Rows (순수 함수)
+ *
+ * WHY (2026-08-05, 실측 — 편집기 직접 Run이 3분여 만에 저절로 중단됨)
+ * `findExactDuplicateLeadRowsToDelete_()`가 반환하는 내림차순 행 번호
+ * 배열을 `sheet.deleteRow()`로 한 행씩 반복 삭제하면 매번 시트 전체가
+ * 재계산돼 극도로 느림 — 실측으로 659개 삭제 대상 중 삭제 루프 도중
+ * 실행이 저절로 중단되는 것 확인(원인 추정: 반복 API 호출 누적 지연).
+ * 연속된 행 번호를 구간으로 묶어 `sheet.deleteRows(start, count)`를
+ * 구간 단위로 호출하면 API 호출 수가 크게 줄어 훨씬 빠름.
+ *
+ * INPUT
+ * sortedDescendingRows : Array<number>  내림차순 정렬된 행 번호(중복 없음)
+ *
+ * OUTPUT
+ * Array<{startRow:number, numRows:number}>  입력과 동일한(내림차순) 순서 —
+ * 그대로 순회하며 deleteRows()를 호출해도 안전(높은 행 번호 구간부터
+ * 삭제되므로 낮은 구간의 행 번호가 밀리지 않음)
+ *
+ * TEST
+ * testGroupConsecutiveDescendingRows() 참고
+ * ==========================================================
+ */
+function groupConsecutiveDescendingRows_(sortedDescendingRows) {
+
+  const groups = [];
+  let i = 0;
+
+  while (i < sortedDescendingRows.length) {
+
+    const start = sortedDescendingRows[i];
+    let end = start;
+    let j = i;
+
+    while (
+      j + 1 < sortedDescendingRows.length &&
+      sortedDescendingRows[j + 1] === end - 1
+    ) {
+      end = sortedDescendingRows[j + 1];
+      j++;
+    }
+
+    groups.push({ startRow: end, numRows: start - end + 1 });
+    i = j + 1;
+
+  }
+
+  return groups;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — groupConsecutiveDescendingRows_()
+ * ==========================================================
+ */
+function testGroupConsecutiveDescendingRows() {
+
+  const result = groupConsecutiveDescendingRows_([10, 9, 8, 5, 3, 2]);
+
+  const expected = [
+    { startRow: 8, numRows: 3 },
+    { startRow: 5, numRows: 1 },
+    { startRow: 2, numRows: 2 }
+  ];
+
+  const pass = JSON.stringify(result) === JSON.stringify(expected);
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected " + JSON.stringify(expected) + ")");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Run Auto Delete Exact Duplicate Lead Rows (수동 실행용)
  *
  * WHY
@@ -1990,8 +2076,12 @@ function runAutoDeleteExactDuplicateLeadRows() {
   Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
   Logger.log("삭제 대상 시트 행 번호(내림차순): " + rowsToDelete.join(", "));
 
-  rowsToDelete.forEach(function (rowIndex) {
-    sheet.deleteRow(rowIndex);
+  const deleteRanges = groupConsecutiveDescendingRows_(rowsToDelete);
+
+  Logger.log("배치 삭제 구간 수: " + deleteRanges.length + " (deleteRow() 개별 호출 대신 deleteRows() 구간 단위)");
+
+  deleteRanges.forEach(function (range) {
+    sheet.deleteRows(range.startRow, range.numRows);
   });
 
   SpreadsheetApp.flush();

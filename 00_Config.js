@@ -9,9 +9,12 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.25.0
+ * v1.26.0
  *
  * Change Log
+ * v1.26.0 (2026-08-05)
+ * - `PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분) 신규 — `08_PipelineAsync.js` v1.7.0의
+ *   죽은 락 자동 해제(self-heal) 버그 수정용. 상세: 08_PipelineAsync.js 참고.
  * v1.25.0 (2026-08-04)
  * - `DATE.DISPLAY_TIMEZONE`("Asia/Seoul") 신규 — Pipeline Status(08_PipelineAsync.js)
  *   Last Started/Finished 타임스탬프가 스크립트 타임존(America/New_York, appsscript.json)
@@ -299,6 +302,15 @@ const CONFIG = {
     },
 
     TRIGGER_DELAY_MS: 1000,
+
+    // **2026-08-05 신규** — 락에 타임스탬프를 같이 저장해, 이 시간(30분)보다 오래된
+    // 락은 "죽은 락"으로 간주해 자동 해제(self-heal)한다. 이 프로젝트가 도는 Google
+    // Workspace 계정의 실행시간 상한이 30분으로 추정되므로(docs/PerformanceBenchmark.md),
+    // 그 시점까지 안 끝났다면 플랫폼이 이미 실행을 강제 종료했을 것 — try/catch를
+    // 우회하는 강제 종료 시 releasePipelineLock_()가 호출 안 돼 락이 영구히 안 풀리는
+    // 문제를 실측(2026-08-05, Leads_Master 중복 대량 적체 원인 조사 중 발견 —
+    // 상세는 docs/OpenItems.md 참고)으로 확인해 도입.
+    LOCK_STALE_THRESHOLD_MS: 30 * 60 * 1000,
 
     STATUS_ANCHOR_ROW: 1,
     STATUS_ANCHOR_COL: 1

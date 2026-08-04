@@ -22,9 +22,29 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-05)
+ * - **버그 수정 — 죽은 락이 영구히 안 풀리는 문제(실측, 재발 방지 조치)**.
+ *   `docs/OpenItems.md` #20(ACQ_REP New P1 불일치) 조사 중, Leads_Master에 7월
+ *   한 달만 중복 659건이 쌓여있었던 배경 원인으로 다음 시나리오를 확인: 중복이
+ *   누적될수록 `runAutoDeleteExactDuplicateLeadRows()`(옛 `deleteRow()` 반복
+ *   버전, `24_OPSQA.js` v1.6.0에서 배치 방식으로 수정됨)의 실행 시간이 계속
+ *   늘어나다가 결국 Apps Script 플랫폼이 실행을 강제 종료 — `runLeadsPipelineTail()`
+ *   최상위 try/catch는 JS 예외만 잡을 수 있어 플랫폼 강제종료 시 catch 블록
+ *   자체가 실행 안 되고, `releasePipelineLock_()`도 호출 안 돼 `PIPELINE_LOCK`이
+ *   영구히 남아 그 이후 모든 Import의 백그라운드 처리(중복 정리+Leads_OPS
+ *   재빌드+캐시 갱신 전부 포함)가 "이미 진행 중" 판정으로 계속 스킵되는 구조적
+ *   문제를 발견 — 이게 중복이 몇 주간 자체 복구 없이 계속 쌓인 진짜 배경 원인.
+ *   **수정**: 락 값을 단순 문자열("LEADS"/"MTA")에서 `{type, acquiredAt}` JSON으로
+ *   변경, `computePipelineLockState_()`에 `nowMs` 매개변수 추가 —
+ *   `CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분, `00_Config.js` 신규)보다
+ *   오래된 락은 죽은 락으로 간주해 자동으로 새 락 획득을 허용(self-heal, 수동
+ *   개입 불필요). 파싱 불가한 옛 형식 값도 안전하게 죽은 락으로 처리(이 배포
+ *   시점에 이미 존재할 수 있는 락도 즉시 자동 복구됨). `acquirePipelineLock_()`가
+ *   새 JSON 형식으로 저장하도록 함께 수정. `testComputePipelineLockState()`에
+ *   fresh/stale/legacy-format 케이스 추가.
  * v1.6.0 (2026-08-04)
  * - 신규 `refreshCampaignSpend_()` — `refreshAdSpendCache_()`(AD_004_SpendCache.js,
  *   Meta+Naver Search+Kakao Channel 합산 캐시)를 배경 파이프라인 체인에 편입(사용자
@@ -86,34 +106,63 @@
  * ==========================================================
  * Compute Pipeline Lock State
  *
- * WHY
+ * WHY (2026-08-05, 죽은 락 자동 해제 추가 — 실측 계기)
  * Leads/MTA 백그라운드 체인이 겹쳐 실행되면 안 되므로(사용자 확정 — 단순 락,
  * 자동 대기열 없음, 겹치면 두 번째 시도를 거부) 락 획득 가능 여부를 순수
  * 로직으로 분리 — PropertiesService IO 없이 테스트 가능하게 함.
  *
+ * **락에 타임스탬프 추가**: 락 값이 바뀌어 이제 `{type, acquiredAt}` JSON 문자열
+ * (기존엔 "LEADS"/"MTA" 단순 문자열). `runLeadsPipelineTail()`의 최상위 try/catch는
+ * JS 예외만 잡을 수 있어, Apps Script 플랫폼이 장시간 실행을 강제 종료하는 경우
+ * (실측: `runAutoDeleteExactDuplicateLeadRows()`의 옛 느린 삭제 루프가 대량 중복
+ * 누적 시 실행을 저절로 중단시킴)엔 catch 블록 자체가 실행 안 돼
+ * `releasePipelineLock_()`가 절대 호출되지 않고 락이 영구히 남는 문제를 실측 확인
+ * (`docs/OpenItems.md` 참고). `LOCK_STALE_THRESHOLD_MS`(30분, 이 계정의 실행시간
+ * 상한 추정치)보다 오래된 락은 죽은 락으로 간주해 자동으로 새 락 획득을 허용
+ * (self-heal) — 수동 개입 없이 다음 Import가 다시 정상적으로 백그라운드 처리를
+ * 시작할 수 있게 함. 기존 형식(단순 문자열, 이 수정 이전에 저장된 값) 등 JSON
+ * 파싱 실패 값도 죽은 락으로 간주(안전한 기본값 — 미확인 나이보다 자동 해제가
+ * 락을 영구 방치하는 것보다 안전).
+ *
  * INPUT
- * existingLockValue : string  (PropertiesService에 저장된 현재 락 값, 없으면 "")
- * requestedType      : string ("LEADS" | "MTA")
+ * existingLockRaw : string  (PropertiesService에 저장된 현재 락 값, 없으면 "")
+ * requestedType    : string ("LEADS" | "MTA")
+ * nowMs            : number  (Date.now(), 테스트 가능하도록 주입)
  *
  * OUTPUT
  * { acquired: boolean, holderType: string|null }
- * - 락이 비어있으면 acquired:true, holderType:null
- * - 이미 값이 있으면(자기 자신의 타입이든 다른 타입이든) acquired:false,
- *   holderType은 기존 값 그대로
+ * - 락이 비어있거나, 파싱 불가하거나, 오래된(stale) 락이면 acquired:true
+ * - 그 외(살아있는 락)엔 acquired:false, holderType은 락 보유 타입
  *
  * TEST
- * ("", "LEADS") → { acquired:true,  holderType:null }
- * ("LEADS", "LEADS") → { acquired:false, holderType:"LEADS" }
- * ("MTA", "LEADS") → { acquired:false, holderType:"MTA" }
+ * testComputePipelineLockState() 참고
  * ==========================================================
  */
-function computePipelineLockState_(existingLockValue, requestedType){
+function computePipelineLockState_(existingLockRaw, requestedType, nowMs){
 
-  if(!existingLockValue){
+  if(!existingLockRaw){
     return { acquired: true, holderType: null };
   }
 
-  return { acquired: false, holderType: existingLockValue };
+  let parsed;
+
+  try{
+    parsed = JSON.parse(existingLockRaw);
+  } catch(e){
+    return { acquired: true, holderType: null };  // 파싱 불가 = 죽은 락으로 간주
+  }
+
+  if(!parsed || !parsed.type || typeof parsed.acquiredAt !== "number"){
+    return { acquired: true, holderType: null };
+  }
+
+  const age = nowMs - parsed.acquiredAt;
+
+  if(age > CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS){
+    return { acquired: true, holderType: null };  // 죽은 락 — 자동 해제
+  }
+
+  return { acquired: false, holderType: parsed.type };
 
 }
 
@@ -167,13 +216,16 @@ function acquirePipelineLock_(type){
 
   const existing = props.getProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
 
-  const state = computePipelineLockState_(existing, type);
+  const state = computePipelineLockState_(existing, type, Date.now());
 
   if(!state.acquired){
     return false;
   }
 
-  props.setProperty(CONFIG.PROPERTIES.PIPELINE_LOCK, type);
+  props.setProperty(
+    CONFIG.PROPERTIES.PIPELINE_LOCK,
+    JSON.stringify({ type: type, acquiredAt: Date.now() })
+  );
 
   return true;
 
@@ -752,21 +804,40 @@ function runSetupReadmeGuide(){
  */
 function testComputePipelineLockState(){
 
-  const empty = computePipelineLockState_("", "LEADS");
+  const now = 1000000000000; // 임의의 고정 기준 시각(ms)
+
+  const empty = computePipelineLockState_("", "LEADS", now);
   const emptyOk = empty.acquired === true && empty.holderType === null;
 
-  const sameType = computePipelineLockState_("LEADS", "LEADS");
-  const sameTypeOk = sameType.acquired === false && sameType.holderType === "LEADS";
+  const freshSameType = computePipelineLockState_(
+    JSON.stringify({ type: "LEADS", acquiredAt: now - 1000 }), "LEADS", now
+  );
+  const freshSameTypeOk = freshSameType.acquired === false && freshSameType.holderType === "LEADS";
 
-  const otherType = computePipelineLockState_("MTA", "LEADS");
-  const otherTypeOk = otherType.acquired === false && otherType.holderType === "MTA";
+  const freshOtherType = computePipelineLockState_(
+    JSON.stringify({ type: "MTA", acquiredAt: now - 1000 }), "LEADS", now
+  );
+  const freshOtherTypeOk = freshOtherType.acquired === false && freshOtherType.holderType === "MTA";
+
+  const staleLock = computePipelineLockState_(
+    JSON.stringify({ type: "LEADS", acquiredAt: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }),
+    "LEADS", now
+  );
+  const staleLockOk = staleLock.acquired === true && staleLock.holderType === null;
+
+  const legacyFormat = computePipelineLockState_("LEADS", "LEADS", now); // 옛 단순 문자열 형식
+  const legacyFormatOk = legacyFormat.acquired === true && legacyFormat.holderType === null;
+
+  const pass = emptyOk && freshSameTypeOk && freshOtherTypeOk && staleLockOk && legacyFormatOk;
 
   Logger.log(
     "testComputePipelineLockState: " +
-    (emptyOk && sameTypeOk && otherTypeOk ? "PASS" : "FAIL") +
+    (pass ? "PASS" : "FAIL") +
     " (empty=" + JSON.stringify(empty) +
-    ", sameType=" + JSON.stringify(sameType) +
-    ", otherType=" + JSON.stringify(otherType) + ")"
+    ", freshSameType=" + JSON.stringify(freshSameType) +
+    ", freshOtherType=" + JSON.stringify(freshOtherType) +
+    ", staleLock=" + JSON.stringify(staleLock) +
+    ", legacyFormat=" + JSON.stringify(legacyFormat) + ")"
   );
 
 }

@@ -1,3 +1,67 @@
+# Changelog — 2026-08-05
+
+## 카카오모먼트 비즈니스 토큰 발급 완료 + 리포트 API 진단 착수
+
+전날 세션에서 인가 코드 요청까지 진행하고 멈췄던 카카오모먼트 OAuth 연동 이어서 진행.
+
+- **웹 앱 배포가 버전 1에 고정된 채 안 갱신되던 버그 발견·수정**: 동의 화면 재시도 후에도
+  `Script function not found: doGet` 에러 재발 — `clasp push`는 스크립트 HEAD만 갱신할 뿐
+  이미 만들어진 웹 앱 배포(버전 고정)는 안 건드린다는 것을 실측 확인(`docs/apps-script-gotchas.md`
+  #11 신규 기록). `npx clasp deploy -i <deploymentId>`로 같은 배포(URL 불변)를 새 버전으로
+  갱신해 해결.
+- **비즈니스 토큰 발급 완료(사용자 확인)**: 동의 화면 통과 → 4개 스코프 전부 승인된 토큰 저장 확인.
+- **리포트 API 진단 체인 구현**: 공식 문서 확인 결과 메시지광고 전용 리포트 API(`POST
+  message-ads/reports`)를 쓰기로 확정(캠페인 보고서 아님). `messageAdIds`를 얻기 위한 선행
+  체인(광고계정 목록→채널 프로필 목록→메시지광고 목록) 진단 함수 3개 + 리포트 진단 함수 1개를
+  `AD_006_KakaoMoments.js`에 구현, 전부 실행해 실제 adAccountId/channelProfileId/messageAdId
+  확보. 다만 실제 발송 완료된 메시지가 없어(하나는 당일 저녁 발송 예정, 하나는 삭제된 테스트)
+  리포트 응답은 빈 배열 — `Reach`/`Responsed` 필드명 확정은 실제 발송 이후로 보류.
+
+## ACQ_REP New P1 vs Salesforce 불일치(2026-07) 조사 — 근본 원인 규명 및 수정 (`docs/OpenItems.md` #20)
+
+사용자 보고로 시작: ACQ_REP New P1(I열) 183건 vs Salesforce Priority 1 리드 205건. 최초엔
+"New Leads" 전체 비교로 오인했다가 사용자 재확인으로 New P1 비교임을 확정.
+
+**조사 과정**(`95_TempQA_JulyNewLeadsGap.js` 신규, 1회성 진단 함수 모음):
+- Leads_Master에 7월 한 달만 Create Date 기준 1,266행(고유 리드 205개 대비 대량 중복) 발견.
+- Leads_OPS 기준 라이브 재계산도 정확히 183(ACQ_REP과 일치) — 캐시/Report 갱신 문제가 아님을
+  확인(`runRefreshACQSummary()`/E2 Generate 재실행 후에도 183 그대로였던 것과 부합).
+- 누락 24건 중 23건은 Leads_Master에 완전 동일 Lead ID가 2~3번 중복 존재 — 낮은 rowIndex(먼저
+  import)엔 "Priority 3", 높은 rowIndex(나중 import)엔 "Priority 1"로 실측 확인. 나머지 1건은
+  Leads_OPS에 아예 없었음.
+
+**근본 원인**: `runAutoDeleteExactDuplicateLeadRows()`(`24_OPSQA.js`, 중복 판정/삭제 로직 자체는
+정상 설계)가 `08_PipelineAsync.js`의 `runLeadsPipelineTail()` 첫 단계로 정확히 배선돼 있었음에도
+이 배치들에 대해 실행이 완료되지 못한 것으로 추정 — 실제로 이 함수를 수동 실행했더니
+`sheet.deleteRow()` 659회 반복 호출 도중(약 3분) 실행이 저절로 중단되는 것을 실측. 중복이
+쌓일수록 이 함수의 실행 시간이 계속 늘어나다 Apps Script 플랫폼이 실행을 강제 종료 →
+`runLeadsPipelineTail()`의 최상위 try/catch(JS 예외만 처리 가능)가 개입 못 해 락이 영구히
+안 풀리고, 그 이후 모든 Import의 백그라운드 처리가 계속 스킵되는 구조적 문제로 판명.
+
+**수정 3건**:
+1. `24_OPSQA.js` v1.6.0 — `groupConsecutiveDescendingRows_()`(순수 함수) + `deleteRows()` 구간
+   단위 배치 삭제로 교체(기존 `deleteRow()` 반복 호출 제거). 판정 로직은 변경 없음.
+2. `08_PipelineAsync.js` v1.7.0 / `00_Config.js` v1.26.0 — 파이프라인 락에 타임스탬프를 같이
+   저장(`{type, acquiredAt}` JSON)해, `CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분)보다
+   오래된 락은 죽은 락으로 간주해 자동 해제(self-heal). 플랫폼 강제 종료로 락이 영구히 남는
+   문제의 재발 방지책.
+3. 수동으로 `runAutoDeleteExactDuplicateLeadRows()`(배치 버전, 4초 완료) → `buildLeadsOPS()` →
+   `runRefreshACQSummary()` → ACQ_REP Generate 재실행 → **New P1 183 → 204로 정상화**(사용자
+   확인). 남은 1건(`00QRC00001IUkqX`)은 버그 아님 — `mergeOPS()`의 "1 Email = 1 진짜 최초 접점"
+   설계가 의도대로 동작(2023년 최초 Lead와 2026-07 재신청을 같은 이메일로 인식해 재신청 쪽을
+   의도적으로 제외, 로그로 직접 확인).
+
+## Raw 전체 스캔 성능 개선 (`docs/OpenItems.md` #18 부분 해결)
+
+위 조사 중 사용자 질문("Raw가 재import로 계속 쌓이면 처리 속도가 느려지지 않냐")이 계기 —
+`appendNewLeads()`/`appendNewMTA()`가 신규 행 수와 무관하게 매번 Raw 시트 전체를
+`getDataRange().getValues()`로 읽고 있었음을 확인(Raw는 원본 보존 원칙상 절대 안 지워져
+재import 시마다 계속 누적되므로 시간이 지날수록 이 전체 읽기가 느려지는 구조). 신규
+`getRawSheetDataRowCount_()`(메타데이터만)/`readRawSheetFrom_()`(targeted `getRange()` 읽기,
+`11_DataReader.js` v2.1.0)로 교체 — 처리 시간이 이제 "신규 행 수"에만 비례. 전체 재구축
+(`rebuildLeadsMaster()`/`rebuildMTAMaster()`)과 진단 함수는 의도적으로 그대로 둠(전체 스캔 필요).
+`07_IncrementalMasterBuild.js` v1.7.0.
+
 # Changelog — 2026-08-04
 
 ## 로컬/origin 재동기화 (다른 머신 세션과의 divergence)

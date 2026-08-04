@@ -26,6 +26,15 @@
    정상 갱신되는지, 락 충돌·재시도(`runRetryPipelineTail()`)가 의도대로 동작하는지 — 확인 전까지
    완료로 간주하지 말 것. 아래는 설계 당시 기록(참고용, 최신 구현과 세부 함수명이 다를 수 있음 —
    실제 구현은 위 exec-plan 참고).
+   **2026-08-05 실사용 검증 중 발견·수정**: 20번 항목(ACQ_REP New P1 불일치) 조사 과정에서
+   신뢰성 버그 발견 — 중복 정리 등 한 스테이지의 실행 시간이 길어지다 Apps Script
+   플랫폼이 실행을 강제 종료하면, 최상위 try/catch(JS 예외 전용)가 개입 못 해
+   `releasePipelineLock_()`가 호출 안 되고 `PIPELINE_LOCK`이 영구히 남아 그 이후
+   모든 Import의 백그라운드 처리가 계속 스킵되는 구조적 문제 확인(간접 증거 —
+   Leads_Master에 중복 659건이 몇 주간 자체 복구 없이 쌓여있었던 것으로 추정, 과거
+   실행 로그로 직접 확정한 것은 아님). `08_PipelineAsync.js` v1.7.0에서 락에
+   타임스탬프를 같이 저장해 `CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분)보다
+   오래된 락은 자동 해제(self-heal)하도록 수정 — 상세는 20번 항목 참고.
    **현상(설계 당시)**: `appendNewMTA()` 등 Import 후속 실행이 `syncMTAFunnelToOPS_()` → `refreshACQSummary_()`/`refreshNewP1Engine_()`/`refreshEventsEngine_()`까지 전부 같은 실행(execution) 안에서 순차 처리됨. Leads_OPS(3만5천+행)/MTA_Master(8만1천+행) 전체 스캔 체인이 한 실행에 몰려 있어 시간이 오래 걸림(2026-07-25 실측: MTA 전체 재구축 관련 체인이 수 분 이상 소요, 브라우저 다이얼로그를 닫아도 서버 실행은 계속됨 — `docs/apps-script-gotchas.md` #5). 사용자는 Import만 하고 나머지는 백그라운드에서 처리되길 원함.
    - **막힌 지점 해소**: (1) 6분 실행 제한 — `docs/PerformanceBenchmark.md`의 `rebuildMTAMaster()` 실측(7m58s, 타임아웃 없이 정상 완료)으로 미루어 이 프로젝트는 Google Workspace 계정(30분 제한)에서 도는 것으로 추정(사용자 미반박, 잠정 확정) — 즉 실행시간 하드 리밋 자체는 실질적 병목이 아니고, 진짜 문제는 UX(브라우저 다이얼로그가 몇 분씩 안 닫힘)와 진단 가능성(몇 단계에서 멈췄는지 모름). (2) `clasp run-function`은 기존 보류 결정 그대로 무관 — 트리거 방식은 GAS 자체 기능이라 별개로 진행 가능.
    - **적용 범위(사용자 확정)**: `appendNewLeads()`/`appendNewMTA()`만 대상. `rebuildLeadsMaster()`/`rebuildMTAMaster()`(스크립트 편집기 수동 실행 전용, 희귀 작업)는 제외.
@@ -37,7 +46,9 @@
      5. **진행상태 표시(사용자 확정, 2026-07-28)**: 별도 전용 시트(Pipeline_Status) 신설안 대신 **기존 README 탭**에 표시 — 정확한 셀 범위/포맷은 구현 시점에 확정.
    - **미결(구현 시점에 결정)**: `appendNewLeads()`가 현재 `buildLeadsOPS(true)`(= `skipQA=true`, `21_OPS_Build.js` v1.2.0)로 QA를 매번 스킵하고 있다는 게 이번 조사 중 확인됨(대기시간 절감 목적으로 2026-07-22 도입) — 백그라운드화되면 사용자가 더 이상 기다리지 않으므로 QA(13번 항목의 Leads_Master 완전중복 탐지 포함, 약 2분)를 매 Append마다 다시 켤지 여부는 아직 미정, 임의로 처리하지 말 것.
    - **상태(설계 당시 기록)**: ~~설계 확정, 코드 변경은 아직 없음~~ — 2026-08-04 구현 완료, 위 항목 상단 참고. 실사용 검증 전까지 완료로 간주하지 말 것.
-18. **Import 업로드 다이얼로그가 대용량(특히 MTA) 처리 중 오래 대기 — 업로드 시간 단축 검토 필요(TODO, 2026-08-04 기록)** — 9번 항목(Import→Append 자동 체이닝) 구현 이후 실사용 중 발견. `importCsv()`가 이제 CSV 파싱/검증 + Raw 쓰기 + `appendNewLeads(true)`/`appendNewMTA(true)`(Raw→Master append/정렬, refresh 체인 자체는 이미 백그라운드 트리거로 분리돼 있음)까지 전부 같은 동기 호출 안에서 처리 — 이 동기 구간 자체가 대용량(특히 MTA_Master 8만+행 재정렬)에서 오래 걸려 업로드 다이얼로그가 "Uploading..." 상태로 오래 대기(사용자 확인, 원인일 것으로 추정 — 아직 실측/프로파일링 전). 검토 후보: Raw→Master append/정렬까지도 별도 트리거로 넘길지, `sortSheetByDate()` 자체를 최적화할지 등 — 아직 설계 착수 전, 임의로 처리하지 말 것.
+18. **Import 업로드 다이얼로그가 대용량(특히 MTA) 처리 중 오래 대기 — 원인 1건 확인·수정 완료, 나머지는 여전히 TODO** — 9번 항목(Import→Append 자동 체이닝) 구현 이후 실사용 중 발견. `importCsv()`가 이제 CSV 파싱/검증 + Raw 쓰기 + `appendNewLeads(true)`/`appendNewMTA(true)`(Raw→Master append/정렬, refresh 체인 자체는 이미 백그라운드 트리거로 분리돼 있음)까지 전부 같은 동기 호출 안에서 처리 — 이 동기 구간 자체가 오래 걸려 업로드 다이얼로그가 "Uploading..." 상태로 오래 대기.
+    **✅ 원인 1건 확인·수정(2026-08-05)**: 20번 항목(ACQ_REP New P1 불일치) 조사 중 사용자가 "Raw가 재import로 계속 쌓이면 결국 처리 속도가 느려지지 않냐"고 질문한 게 계기 — 확인 결과 `appendNewLeads()`/`appendNewMTA()`가 새 행이 몇 건이든 상관없이 `readLeadRaw()`/`readMTARaw()`로 **Raw 시트 전체를 매번 통째로 읽고 있었음**(`11_DataReader.js`의 `readRawSheet()`, `getDataRange().getValues()`). Raw는 원본 보존 원칙상 절대 안 지워지고 겹치는 기간 재import 시마다 계속 누적되므로, 이 전체 읽기 자체가 시간이 지날수록(Raw가 커질수록) 점점 느려지는 구조적 문제였음 — 신규 건수와 무관하게. **수정**: `getRawSheetDataRowCount_()`(메타데이터만, `getLastRow()`)/`readRawSheetFrom_()`(targeted `getRange()` 읽기, `11_DataReader.js` v2.1.0)로 교체 — 이제 처리 시간이 Raw 전체 크기가 아니라 "신규 행 수"에만 비례. `07_IncrementalMasterBuild.js` v1.7.0. 전체 재구축(`rebuildLeadsMaster()`/`rebuildMTAMaster()`)과 진단용(`24_OPSQA.js`)은 여전히 전체 스캔 그대로(의도적, 그쪽은 전체가 필요).
+    **남은 후보(여전히 TODO)**: `sortSheetByDate()`(Master 재정렬) 자체가 대용량에서 오래 걸릴 가능성 — 아직 설계 착수 전, 임의로 처리하지 말 것.
 10. **SAL에 "Lead Status = Nurturing" 제외 조건 추가 필요 (데이터 대기, TODO)** — 6번에서 SAL을 `Sales Accepted Date` 이벤트 기준으로 전환했지만, `Lead Status`(Salesforce 표준 필드, `Sales Funnel Stage`와는 다른 별개 필드 — 픽리스트 순서: Nurturing → New (Not Contacted) → Attempting Contact → Contacted → Disqualified → IC Booked → Qualified)가 "Nurturing"인 리드도 Sales Accepted Date가 찍혀 SAL로 카운트되는 문제를 2026-07-25 사용자가 발견(Search 세그먼트 SAL 8건이 전부 IC Booked인 게 이상해서 개별 확인하다 발견). **확정된 처리 방식**: SAL 제외 조건은 `Lead Status === "Nurturing"` 하나뿐 — New/Attempting Contact/Contacted/Disqualified/IC Booked/Qualified는 전부 SAL로 그대로 카운트(사용자 확인, "New부터는 전부 SAL"). **막힌 지점**: `Lead: Lead Status` 필드가 아직 MTA export에 없어 파이프라인에 전혀 없는 상태 — Salesforce 리포트에 이 필드 추가 + 재export 되기 전까지 구현 불가. 필드 도착 시 `13_MTATransformer.js`에 매핑(리드 레벨 스냅샷이라 `computeMTAFunnelByLeadId_()`처럼 대표값 로직 필요할 수 있음) → `30_ACQReport.js`의 SAL 카운트 조건에 `leadStatus !== "Nurturing"` 추가. 임의로 처리하지 말 것.
 11. **Target_REP(주간 세그먼트 목표·달성률 리포트) 구현 완료, Generate는 수동 실행 — 실사용 검증 진행 중, TODO** — 2026-07-27 설계 확정(`docs/TargetReportDesign.md`) 후 같은 날 구현 및 실 시트 검증 진행. New P1/CPNP1을 top-down(마케팅 Revenue 타겟 × 딜 비중 ÷ P1당 가치)으로 역산해 주간 목표를 세우고 실적과 대조. 구현 파일: `90_TargetEngine.js`(Block A~D 계산/작성, 주 캘린더 생성, 가중평균, 외부 채널시트/Naver gid 매칭), `91_TargetReport.js`(`setupTargetReport()`, `runGenerateTargetReport()`, `refreshTargetActuals_()` — 기존 `refreshACQSummary_()` 호출 4곳에 배선), `92_TargetStyles.js`, `CONFIG.TARGET`(`00_Config.js`). **막힌 지점 5개는 구현 착수 전 전부 해소됨**(상세는 `docs/Changelog.md` 2026-07-27 항목). **실행 중 실측 버그 2건 발견·수정**: (1) Block 0 입력값을 셀 단위로 개별 읽고/쓰던 게(최대 27회 왕복) 대용량 워크북에서 타임아웃 유발 → 배치 호출로 수정, 해결 확인. (2) **Generate를 체크박스+onEdit(Simple Trigger)로 구현했으나, Simple Trigger는 제한된 권한이라 `SpreadsheetApp.openById()`(외부 채널시트 참조)를 아예 호출할 수 없음이 실측 확인됨**("Specified permissions are not sufficient") — ACQ_REP/NewP1_REP는 외부 파일을 안 열어서 이 문제가 없었음, Target_REP만 해당. 사용자 확인 후 체크박스/onEdit 분기 제거, **`runGenerateTargetReport()`를 Apps Script 편집기에서 직접 Run하는 방식으로 전환**(직접 Run은 Full Authorization). **아직 검증 필요**: `runGenerateTargetReport()` 실행 후 Target_REP 리포트 행/Target_Engine Block A~D 실제 값(특히 CPNP1 벤치마크가 외부 gid 매칭 성공해서 0이 아닌지) 확인 전까지 완료로 간주하지 말 것. 그 외 `docs/TargetReportDesign.md` §12 #6~8(개선계수 초기값 0.9 placeholder, Seminar/Webinar 분해 표시, 월 소계 행)은 실물 확인 후 결정 예정.
 12. ~~ACQ_REP Referral 세그먼트 Revenue가 Salesforce/딜트래커 대비 연간 기준 과소집계~~ — 2026-07-28 해소 확인(사용자 확인, FY26 전체 연간 대조 완료). 원래 발견: 이번 FY(FY26) 전체로 보면 ACQ_REP Referral 합계($2,157,628.79)가 딜트래커 Referral 합계($2,794,367.69)보다 **$636,739(약 22.8%) 적음**(당시 ACQ_REP은 Leads_OPS `Opportunity Won Date`/`Revenue` 기준이었음). 7번 항목의 2트랙 아키텍처 적용(Deal Tracker 기반 + 수동 Segment 컬럼 + 타임존 버그 수정)으로 ACQ_REP Revenue가 Deal Tracker와 정의상 같은 소스가 되면서 갭 해소 — 5·6·7월 개별 대조(7월 전체 $999,931.89 vs ACQ_REP $999,932) 및 FY26 전체 연간 대조 둘 다 사용자 확인 완료. **KRW/환율 관련 가설(별도 낮은 우선순위 항목으로 유지)**: Revenue를 KRW 원본 값으로 가져와서 일관된 환율로 NZD 변환하면 더 정확해질 수 있다는 가설은 미검증 상태로 남음 — 딜트래커 시트엔 KRW 원본 컬럼이 없고 `Revenue (NZD)`(이미 변환된 값)만 있음, Salesforce Opportunity 객체 자체에 KRW 원본 금액 필드가 있는지 확인 필요. Revenue 통화 처리 방식은 Target_REP뿐 아니라 ACQ_REP 등 여러 리포트에 걸친 문제라 별도 세션에서 다룰 것.
@@ -63,3 +74,75 @@
     독립적인 시간 트리거(예: 매일 새벽 1회)로 별도 갱신할지는 사용자가 "아직 필요성을 못 느낀다"며
     보류 — 지금은 파이프라인 트리거에 얹혀가는 방식만 존재, 필요해지면 별도 요청 시 추가. 임의로
     시간 트리거를 새로 추가하지 말 것.
+20. **ACQ_REP New P1 건수가 Salesforce 자체 리포트와 불일치(2026-07 기준) — 조사 진행 중,
+    범위 정정됨(2026-08-05)** — **범위 정정**: 최초 보고 때는 "New Leads"(전체 Lead 수) 비교로
+    이해했으나, 사용자 재확인 결과 **New P1**(ACQ_REP I열, Priority 1 유효 리드만) 비교였음 —
+    Salesforce 쪽 205건도 전부 Priority 1로 필터된 값. ACQ_REP New P1 = **183건**, Salesforce
+    Priority 1 Lead 수 = **205건**.
+    **1차/2차 조사(당시엔 New Leads 전체로 오인하고 진행, 배경 조사로는 유효)**:
+    `95_TempQA_JulyNewLeadsGap.js`의 `runCheckJulyNewLeadsGap()` — Leads_Master 7월 Create
+    Date 행이 총 **1,266건**으로 Salesforce 목록(205건, 전부 존재·누락 0건) 대비 대량 중복
+    확인(같은 Lead ID 평균 6회+ 반복 — 원인 미조사, 매주 export가 기존 Lead를 재중복 append할
+    가능성). `runCheckJulyNewLeadsGapInOPS()` — Leads_OPS 7월 전체 Create Date 행은 619건,
+    중복 0건(Lead ID당 1행 불변식은 Leads_OPS에서 유지됨 확인), Salesforce 205건 중
+    `00QRC00001IUkqX` 1건만 Leads_OPS에 아예 없음.
+    **`runRefreshACQSummary()`(31_ACQSummary.js) 재실행(672행, 34.55초) 후에도 ACQ_REP New
+    P1이 183 그대로**라고 사용자 확인 — `generateACQReport_()`(Report Area 실제 표시 갱신)는
+    `refreshACQSummary_()`(숨은 캐시 갱신)와 별개 단계이고 ACQ_REP의 E2 체크박스(onEdit)로만
+    트리거되므로, 캐시만 갱신하고 Report Area를 다시 Generate 안 했다면 화면엔 이전 값이 남아있을
+    수 있음(가설, 미확정 — 사용자가 E2 체크박스를 다시 체크해서 확인 필요).
+    **3차 실행 결과(사용자 확인)**: `runCheckJulyNewP1GapInOPS()` 라이브 재계산도 정확히
+    **183**(ACQ_REP과 일치) — 사용자가 ACQ_REP E2 "Generate Report" 재실행 후에도 183 그대로였던
+    것과 부합, 캐시/Report 갱신 문제가 아님이 확인됨. 누락 24건 중 **23건은 Leads_OPS에
+    "Priority 3"로 존재**(Salesforce는 Priority 1로 봄), 1건(`00QRC00001IUkqX`)은 Leads_OPS에
+    아예 없음.
+    **원인 가설(미확정, 2026-08-05)**: `22_OPS_Merge.js`의 `mergeOPS()`("Earliest-wins dedup",
+    Email 그룹핑 후 Create Date가 가장 이른 행만 채택 — 원래 목적은 "같은 이메일의 서로 다른
+    Lead ID"=진짜 재신청 구분용)가, 같은 Lead ID가 여러 번 재export되어 Leads_Master에 쌓인
+    중복 행(위 1,266행/205 고유 발견과 동일 현상)에도 똑같이 적용되면서, Create Date가 동일한
+    중복들 사이에서는 배열 순서(group[0], 사실상 가장 먼저 import된 오래된 스냅샷)로 판가름 나
+    **최신이 아니라 오래된 스냅샷의 Priority 값이 채택됐을 가능성**을 발견 — 아직 실제
+    Leads_Master 원본에 이 23건의 Priority 1 스냅샷이 존재하는지(=merge가 잘못 고른 것) 아니면
+    애초에 없는지(=단순 export 지연, 버그 아님) 확인 전.
+    **원인 확정(2026-08-05, `runDumpPriorityMismatchLeadHistory()` 실행 결과)**: 23건 전부
+    동일 패턴 확인 — 낮은 rowIndex(먼저 import된 행)엔 "Priority 3", 높은 rowIndex(나중에
+    import된 행)엔 "Priority 1". **단, `mergeOPS()`(`22_OPS_Merge.js`) 가설은 정정됨**:
+    실제로 확인해보니 `findExactDuplicateLeadRows_()`/`findExactDuplicateLeadRowsToDelete_()`
+    (`24_OPSQA.js`, Leads_Master 레벨 중복 탐지/삭제)는 Lead ID만으로 그룹핑하고 삭제 시
+    "더 진행된 단계"(IC Booked/Completed/Won/Revenue)를 남기며 동점이면 "더 나중 행"을
+    남기도록 이미 올바르게 설계돼 있음(Priority는 애초에 안 봄) — 즉 이 로직이 실행됐다면
+    오히려 정답(Priority 1)이 남았어야 함. **진짜 문제는 `08_PipelineAsync.js`의
+    `runLeadsPipelineTail()`(이 삭제 함수가 첫 단계로 정확히 배선돼 있음)가 이 배치들에
+    대해 완료되지 못했다는 것**으로 추정(정확한 이유는 미확인 — 락 충돌로 스킵됐거나
+    `rebuildLeadsMaster()` 등 tail을 안 타는 경로로 데이터가 들어왔을 가능성).
+    **2차 버그 발견·수정(2026-08-05)**: `runAutoDeleteExactDuplicateLeadRows()`를 수동
+    실행했더니 삭제 대상 659건을 찾았으나, `sheet.deleteRow()` 659회 반복 호출 도중(약
+    3분여) 실행이 저절로 중단됨 — 한 행씩 삭제할 때마다 시트 전체가 재계산되는 게 원인으로
+    추정. `groupConsecutiveDescendingRows_()`(순수 함수, 신규) + `sheet.deleteRows(start,
+    count)` 구간 단위 호출로 교체해 해결(`24_OPSQA.js` v1.6.0) — 판정 로직
+    (`findExactDuplicateLeadRowsToDelete_()`)은 변경 없음, 삭제 "방법"만 배치 처리로 교체.
+    **✅ 해결 완료(2026-08-05, 사용자 확인)**: 배치 삭제로 수정된
+    `runAutoDeleteExactDuplicateLeadRows()` 재실행(4초 완료) → `buildLeadsOPS()` →
+    `runRefreshACQSummary()` → ACQ_REP Generate 재실행 결과 **New P1이 183 → 204로
+    정상화**(Salesforce 205건 중 204건 일치). **남은 1건(`00QRC00001IUkqX`)은 버그
+    아님** — `mergeOPS()`의 "1 Email = 1 진짜 최초 접점" 설계가 정확히 의도대로 동작한
+    것(2023년 최초 Lead와 2026-07 재신청 Lead가 같은 이메일 → 재신청 쪽을 의도적으로
+    제외, 로그로 직접 확인: `[mergeOPS] Duplicate skipped — Email: ggmoon69@gmail.com
+    / Lead ID: 00QRC00001IUkqX ... (kept Lead ID: 00QBT0000029tBu, Create Date:
+    2023-03-19)`). Salesforce의 단순 카운트는 이 이메일 기준 통합을 안 해서 205로 보임.
+    **재발 방지 조치 2건(같은 세션, 2026-08-05)**:
+    1. `24_OPSQA.js` v1.6.0 — 위 배치 삭제 성능 수정 자체.
+    2. **`08_PipelineAsync.js` v1.7.0 — 죽은 락(PIPELINE_LOCK) 자동 해제 버그 수정**:
+       중복이 누적될수록 옛 `deleteRow()` 반복 버전의 실행 시간이 계속 늘어나다 결국
+       Apps Script 플랫폼이 실행을 강제 종료 → `runLeadsPipelineTail()`의 최상위
+       try/catch(JS 예외만 처리 가능)가 개입 못 해 `releasePipelineLock_()`가 호출
+       안 되고 락이 영구히 남아 그 이후 모든 Import의 백그라운드 처리가 계속
+       스킵되는 구조적 문제를 발견 — 이게 중복이 몇 주간 자체 복구 없이 쌓인 진짜
+       배경 원인으로 추정(간접 증거, 과거 실행 로그로 직접 확정한 것은 아님).
+       `CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분)보다 오래된 락은 자동으로
+       해제되도록 수정 — 수동 개입 없이 다음 Import부터 정상 복구됨.
+    **알려진 잔여 갭(낮은 우선순위, 코드 수정 안 함)**: `buildLeadsOPS()`를
+    파이프라인 tail이 아니라 단독으로 수동 실행하면 `refreshACQSummary_()` 등 하위
+    캐시가 자동 갱신되지 않음(오늘 조사 중 실제로 이 때문에 한 차례 혼동 발생) —
+    파이프라인 tail 경유 시엔 문제없음(이미 순서대로 다 호출), 편집기에서
+    `buildLeadsOPS()`를 직접 Run할 땐 이 사실을 기억할 것.

@@ -136,9 +136,51 @@
       `AD_006_KakaoMoments.js` v1.2.0). Node 하네스로 `testBuildKakaoMomentsAuthorizeUrl()`
       재검증 PASS. `node --check`/naming/version-header/중복선언 검사 통과, `clasp push` 완료.
       사용자가 `runGetKakaoMomentsAuthorizationUrl()` 재실행 후 동의 화면 재시도 예정.
-- [ ] 정확한 리포트 API 엔드포인트/파라미터 확정 (캠페인 보고서 vs 메시지광고 전용 보고서 —
-      `msg-ad-mgmt` 문서 확인)
-- [ ] 실제 API 호출로 응답 필드명 검증 (진단 함수 먼저, Meta 패턴 재사용)
+- [x] **버그 발견·수정 — 웹 앱 배포가 버전 1에 고정된 채 갱신 안 됨(2026-08-05)** — resource_ids
+      수정(v1.2.0) 반영 후 동의 화면 재시도했으나 다시 `Script function not found: doGet` —
+      10번 항목(`/dev` URL)과 다른 원인으로 판명. `npx clasp deployments` 확인 결과 콜백
+      배포(`AKfycbwqJ08W...`)가 `@1`(버전 1 고정)이었고, v1.0.0 배포 이후 v1.1.0/v1.2.0
+      `clasp push`는 HEAD만 갱신할 뿐 이 버전 고정 배포엔 반영 안 됐던 것 — `clasp push`가
+      웹 앱 배포를 갱신하지 않는다는 사실을 실측으로 확인(`docs/apps-script-gotchas.md` #11
+      신규 기록). **수정**: `npx clasp deploy -i AKfycbwqJ08W...`로 같은 배포 ID(URL 불변)를
+      새 버전으로 갱신(`@1` → `@2`).
+- [x] **비즈니스 토큰 발급 완료(2026-08-05, 사용자 확인)** — 배포 갱신 후 같은 인가 URL로
+      재시도, 카카오 동의 화면 통과 → `doGet()` 콜백에서 "카카오모먼트 비즈니스 토큰 발급
+      완료" 메시지 확인(scope: moment_management moment_bizform_result_read moment_create
+      moment_delete — 승인된 4개 스코프 전부 포함). `doGet()` 코드상 이 메시지는 토큰 교환
+      성공(`statusCode===200 && access_token` 존재) 이후에만 렌더링되고, 그 직전에
+      Script Properties에 `ACCESS_TOKEN`을 저장하므로 별도 `runDebugKakaoMomentsTokenInfo()`
+      실행 없이도 저장 완료로 판단.
+- [x] **정확한 리포트 API 엔드포인트/파라미터 확정(2026-08-05, 공식 문서 확인)** — 캠페인
+      보고서(`campaigns/report`)가 아니라 **메시지광고 전용 보고서**(`POST
+      message-ads/reports`, `msg-ad-mgmt` 문서)를 쓰기로 확정 — 우리가 가져올 데이터가
+      캠페인 단위가 아니라 개별 메시지광고 단위 성과이기 때문. `MESSAGE`/`MESSAGE_ADDITION`
+      메트릭 그룹의 필드명도 확인: `msg_send`(발송)/`msg_open`(열람)/`msg_click`(전체
+      클릭)/`msg_send_fail`(발송실패)/`cost`(비용) — **`Reach`(도달)/`Responsed`(응답)에
+      정확히 대응하는 필드명은 문서 표에서 못 찾음, 실제 API 응답으로 확인 필요**(아래
+      Surprises 참고). 이 리포트 호출엔 `messageAdIds`가 필수라 그 값을 얻기 위한 선행
+      체인(광고계정 목록 → 채널 프로필 목록 → 메시지광고 목록)도 함께 필요함을 확인 —
+      `AD_001_Config.js`(v1.14.0)에 4개 엔드포인트 전부 추가.
+- [x] **진단 함수 체인 구현(2026-08-05)** — `AD_006_KakaoMoments.js`(v1.3.0) 신규:
+      공용 IO 래퍼 `callKakaoMomentsApi_()` + `runDebugKakaoMomentsAdAccounts()`(광고계정
+      목록)/`runDebugKakaoMomentsChannelProfiles()`(채널 프로필 목록, 광고계정 자동 체이닝)/
+      `runDebugKakaoMomentsMessageAdsList()`(메시지광고 목록, 위 두 단계 자동 체이닝) —
+      Naver Search 때(`runDebugNaverSearchAdStats()`)와 동일한 "직접 호출해서 앞 단계
+      값을 자동으로 얻는" 체이닝 패턴. `node --check`/naming/version-header/중복선언 검사
+      통과, `clasp push` 완료. **아직 실행 전** — 사용자가 순서대로 Run해서 실제
+      adAccountId/channelProfileId/messageAdId 값과 메시지광고 목록 API의 정확한 요청
+      body 스키마(문서에서 상세 미확인, 빈 body로 우선 호출해 에러로 확인하는 전략)를
+      확인해야 다음 단계(`runDebugKakaoMomentsReportFirstRow()`) 구현 가능.
+- [ ] **실제 API 호출로 응답 필드명 검증 — 실 발송 데이터 없어 블로킹(2026-08-05)** —
+      `runDebugKakaoMomentsReportFirstRow()` 실행 결과: `statusCode 200`, `code:200,
+      message:"Success"`이지만 `data: []`(빈 배열). API 에러가 아니라 이 광고계정의
+      메시지광고 2건 중 발송 완료된 게 하나도 없어서로 판단(`msg-ad-1534139723687342080`은
+      오늘(2026-08-05) 18:30 발송 예정으로 아직 발송 전, `msg-ad-1534019703066779648`은
+      상태 `DEL`로 삭제된 테스트 메시지). **다음 단계**: 오늘 저녁 실제 발송 완료 후
+      `runDebugKakaoMomentsReportFirstRow()` 재실행해서 실제 데이터로 필드명 재검증 —
+      그전까지는 `Reach`/`Responsed` 필드 매핑 확정 불가, 임의로 처리하지 말 것. 참고로
+      리포트 API에 리포팅 지연(발송 후 즉시 집계 안 될 가능성)이 있을 수도 있음 — 재실행
+      결과가 또 비어있으면 하루 더 기다려볼 것.
 - [ ] API 응답 → `KakaoSMS_Raw` 컬럼 매핑 확정 (`Event type` 도출 방식 포함 — Business Segment
       매핑 로직 필요 여부 사용자 확인)
 - [ ] `computeKakaoChannelSpendSummary_()`를 `KakaoSMS_Raw` 소스로 리포인트 (위 필수 변경사항 항목)
@@ -156,6 +198,14 @@
 - **연쇄 영향 조사 중 발견(2026-08-04)** — 핸드오프 문서에는 없었으나, `AD_004_SpendCache.js`가
   `computeKakaoChannelSpendSummary_()`를 통해 외부 수기 시트를 직접 읽는 연결점이 있어, 이걸
   놓치면 API 전환 후 지출 집계가 조용히 멈추는 문제가 있었음.
+- **`clasp push`가 버전 고정 웹 앱 배포를 갱신하지 않음(2026-08-05, 실측)** — 10번 항목
+  (`/dev` URL 버그)을 고쳤다고 생각했는데 같은 에러(`Script function not found: doGet`)가
+  재발해서 조사하다 발견. `clasp push`는 HEAD만 갱신하고, 이미 만들어진 웹 앱 배포는
+  배포 시점 버전에 고정돼 있어(`clasp deployments`로 `@1` 확인) 이후 push들이 전혀 반영
+  안 되고 있었음. `clasp deploy -i <deploymentId>`로 그 배포를 새 버전으로 갱신해야
+  한다는 걸 몰랐던 게 원인 — `docs/apps-script-gotchas.md` #11 신규 기록. **교훈**: `doGet`/
+  `doPost` 등 웹 앱 진입점 코드를 수정할 때마다, `clasp push` 후에 그 배포가 `@HEAD`가
+  아니라 버전 고정이라면 `clasp deploy -i`도 같이 실행해야 함을 앞으로 체크리스트화할 것.
 - **비즈니스 토큰엔 Refresh Token이 없음(2026-08-04, 공식 문서로 확인)** — `business-auth/rest-api`/
   `business-auth/common` 문서 확인 결과, 비즈니스 토큰 발급 응답엔 `access_token`/`token_type`/
   `scope`만 있고 `refresh_token`/`expires_in` 필드 자체가 없음. 토큰은 매번 인가 코드로 새로

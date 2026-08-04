@@ -42,9 +42,24 @@
  * AD (2026-07-30 네이밍 컨벤션)
  *
  * Version
- * v1.2.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-05)
+ * - **메시지광고 리포트 진단 함수 추가**. `runDebugKakaoMomentsReportFirstRow()` 신규 —
+ *   광고계정 목록 → 채널 프로필 목록 → 메시지광고 목록(messageAdIds 추출)을 체이닝한 뒤
+ *   `POST message-ads/reports`(dimension: MESSAGE_AD, metricsGroup: [MESSAGE,
+ *   MESSAGE_ADDITION], datePreset: LAST_30DAY)를 호출해 원본 응답을 그대로 로그.
+ *   `Reach`/`Responsed`에 대응하는 정확한 필드명이 공식 문서 표에 없어(msg_send/msg_open/
+ *   msg_click/msg_send_fail/cost만 확인됨) 실제 호출로 확정 예정 — 아직 실행 전.
+ * v1.3.0 (2026-08-05)
+ * - **리포트 API 진단 체인 착수**. 공용 IO 래퍼 `callKakaoMomentsApi_()` 신규
+ *   (`callNaverSearchAdApi_()`와 동일한 상태코드 그대로 반환 패턴). 진단 함수 3개 추가 —
+ *   `runDebugKakaoMomentsAdAccounts()`(광고계정 목록), `runDebugKakaoMomentsChannelProfiles()`
+ *   (채널 프로필 목록, 광고계정 목록을 내부에서 다시 호출해 첫 계정 ID 자동 사용),
+ *   `runDebugKakaoMomentsMessageAdsList()`(메시지광고 목록, 위 두 단계를 체이닝해 adAccountId/
+ *   channel-profile-id 헤더 자동 구성). 아직 실제 API 응답으로 필드 검증 전 — 다음 단계는
+ *   `runDebugKakaoMomentsReportFirstRow()`(메시지광고 리포트, messageAdIds 필요).
  * v1.2.0 (2026-08-04)
  * - **버그 수정 — 인가 요청이 KOE233("지원하지 않는 파라미터로 비즈니스 인가 코드를 요청한
  *   경우")로 실패**. 공식 문서 확인 결과 scope에 `moment_create`가 포함되면 `resource_ids`
@@ -399,5 +414,279 @@ function runDebugKakaoMomentsTokenInfo(){
 
   Logger.log("statusCode: " + response.getResponseCode());
   Logger.log("body: " + response.getContentText());
+
+}
+
+
+/**
+ * ==========================================================
+ * Call Kakao Moments API (IO 래퍼)
+ *
+ * WHY
+ * 리포트 API 진단 체인(광고계정 목록 → 채널 프로필 목록 → 메시지광고 목록 →
+ * 메시지광고 리포트) 전부가 "Bearer 토큰 + 선택적 추가 헤더(adAccountId 등) +
+ * GET 쿼리스트링 또는 POST JSON body" 형태로 동일해서 공용 래퍼로 뺌
+ * (`callNaverSearchAdApi_()`와 동일한 상태코드 그대로 반환 패턴).
+ *
+ * INPUT
+ * method : string  "get" | "post"
+ * url : string  쿼리스트링 포함 완성 URL(GET) 또는 base URL(POST)
+ * extraHeaders : Object  adAccountId/channel-profile-id 등 추가 헤더(선택)
+ * payload : Object|null  POST body(JSON.stringify해서 전송), GET이면 무시
+ *
+ * OUTPUT
+ * { statusCode: number, body: Object|string }
+ * ==========================================================
+ */
+function callKakaoMomentsApi_(method, url, extraHeaders, payload){
+
+  const props = PropertiesService.getScriptProperties();
+  const accessToken = props.getProperty(AD.KAKAO_MOMENTS.OAUTH.PROPERTY_KEYS.ACCESS_TOKEN);
+
+  if(!accessToken){
+    throw new Error(
+      "저장된 Kakao Moments Access Token이 없습니다 — " +
+      "runGetKakaoMomentsAuthorizationUrl()로 OAuth 플로우를 먼저 완료하세요."
+    );
+  }
+
+  const headers = Object.assign(
+    { "Authorization": "Bearer " + accessToken },
+    extraHeaders || {}
+  );
+
+  const options = {
+    method: method,
+    headers: headers,
+    muteHttpExceptions: true
+  };
+
+  if(method === "post"){
+    options.contentType = "application/json";
+    options.payload = JSON.stringify(payload || {});
+  }
+
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+  const text = response.getContentText();
+
+  let body;
+
+  try {
+    body = JSON.parse(text);
+  } catch(e){
+    body = text;
+  }
+
+  return { statusCode: statusCode, body: body };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 광고계정 목록 진단(수동 실행)
+ *
+ * WHY
+ * 리포트 API 호출 체인의 첫 단계 — 아직 광고계정 ID를 모르므로(사용자가
+ * 알려준 적 없음, 추측 금지) 계정 정보 없이 호출 가능한 이 엔드포인트로
+ * 실제 ID/이름을 먼저 확인한다.
+ * ==========================================================
+ */
+function runDebugKakaoMomentsAdAccounts(){
+
+  const result = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.AD_ACCOUNTS_LIST_URL, {}, null
+  );
+
+  Logger.log("statusCode: " + result.statusCode);
+  Logger.log("body: " + JSON.stringify(result.body, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 카카오톡 채널 프로필 목록 진단(수동 실행)
+ *
+ * WHY
+ * runDebugKakaoMomentsAdAccounts()로 확인한 광고계정 ID가 필요한 다음
+ * 단계 — 직접 하드코딩해 넣지 않고, 이 함수가 광고계정 목록을 다시 호출해
+ * 첫 번째 계정 ID를 자동으로 사용한다(Naver Search의
+ * runDebugNaverSearchAdStats() 체이닝 패턴과 동일).
+ * ==========================================================
+ */
+function runDebugKakaoMomentsChannelProfiles(){
+
+  const accountsResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.AD_ACCOUNTS_LIST_URL, {}, null
+  );
+
+  const accounts = accountsResult.body && accountsResult.body.content;
+
+  if(!Array.isArray(accounts) || accounts.length === 0){
+    Logger.log(
+      "광고계정 목록을 못 가져옴 — statusCode: " + accountsResult.statusCode +
+      ", body: " + JSON.stringify(accountsResult.body)
+    );
+    return;
+  }
+
+  const adAccountId = accounts[0].id;
+  Logger.log("사용할 adAccountId: " + adAccountId + " (전체 계정 수: " + accounts.length + ")");
+
+  const result = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.CHANNEL_PROFILES_URL,
+    { "adAccountId": String(adAccountId) }, null
+  );
+
+  Logger.log("statusCode: " + result.statusCode);
+  Logger.log("body: " + JSON.stringify(result.body, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 메시지광고 목록 진단(수동 실행)
+ *
+ * WHY
+ * 메시지광고 리포트 조회(message-ads/reports)는 messageAdIds가 필수라,
+ * 실제 존재하는 메시지광고 ID를 먼저 확인해야 함. 이 API의 정확한 요청
+ * body 스키마(필수/선택 필드)는 공식 문서에서 상세 확인 못 해 빈 body로
+ * 우선 호출 — 필수 필드 누락 에러가 나면 그 에러 메시지로 실제 스키마를
+ * 확정한다(추측 금지, 실측 우선).
+ * ==========================================================
+ */
+function runDebugKakaoMomentsMessageAdsList(){
+
+  const accountsResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.AD_ACCOUNTS_LIST_URL, {}, null
+  );
+
+  const accounts = accountsResult.body && accountsResult.body.content;
+
+  if(!Array.isArray(accounts) || accounts.length === 0){
+    Logger.log(
+      "광고계정 목록을 못 가져옴 — statusCode: " + accountsResult.statusCode +
+      ", body: " + JSON.stringify(accountsResult.body)
+    );
+    return;
+  }
+
+  const adAccountId = accounts[0].id;
+
+  const profilesResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.CHANNEL_PROFILES_URL,
+    { "adAccountId": String(adAccountId) }, null
+  );
+
+  const profiles = profilesResult.body;
+
+  if(!Array.isArray(profiles) || profiles.length === 0){
+    Logger.log(
+      "채널 프로필 목록을 못 가져옴 — statusCode: " + profilesResult.statusCode +
+      ", body: " + JSON.stringify(profilesResult.body)
+    );
+    return;
+  }
+
+  const channelProfileId = profiles[0].id;
+  Logger.log("사용할 adAccountId: " + adAccountId + ", channelProfileId: " + channelProfileId);
+
+  const result = callKakaoMomentsApi_(
+    "post", AD.KAKAO_MOMENTS.REPORT.MESSAGE_ADS_LIST_URL,
+    { "adAccountId": String(adAccountId), "channel-profile-id": String(channelProfileId) },
+    {}
+  );
+
+  Logger.log("statusCode: " + result.statusCode);
+  Logger.log("body: " + JSON.stringify(result.body, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 메시지광고 리포트 진단(수동 실행)
+ *
+ * WHY
+ * KakaoSMS_Raw 컬럼(Sent/Reach/Click/Responsed/Cost) 매핑을 확정하기 전
+ * 마지막 검증 단계 — 문서(type-info)의 MESSAGE 그룹 필드명(msg_send/
+ * msg_open/msg_click/msg_send_fail/cost)에 Reach/Responsed에 정확히
+ * 대응하는 게 안 보여서, 실제 응답을 찍어보고 확정한다(추측 금지). 실제
+ * 메시지광고 목록(runDebugKakaoMomentsMessageAdsList() 결과, 2026-08-05
+ * 실측)엔 발송 완료된 건이 아직 없어(하나는 오늘 저녁 발송 예정, 하나는
+ * 삭제된 테스트) 지표가 전부 0/누락일 수 있음 — 그래도 필드 "이름" 자체는
+ * 확인 가능.
+ * ==========================================================
+ */
+function runDebugKakaoMomentsReportFirstRow(){
+
+  const accountsResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.AD_ACCOUNTS_LIST_URL, {}, null
+  );
+
+  const accounts = accountsResult.body && accountsResult.body.content;
+
+  if(!Array.isArray(accounts) || accounts.length === 0){
+    Logger.log(
+      "광고계정 목록을 못 가져옴 — statusCode: " + accountsResult.statusCode +
+      ", body: " + JSON.stringify(accountsResult.body)
+    );
+    return;
+  }
+
+  const adAccountId = accounts[0].id;
+
+  const profilesResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.CHANNEL_PROFILES_URL,
+    { "adAccountId": String(adAccountId) }, null
+  );
+
+  const profiles = profilesResult.body;
+
+  if(!Array.isArray(profiles) || profiles.length === 0){
+    Logger.log(
+      "채널 프로필 목록을 못 가져옴 — statusCode: " + profilesResult.statusCode +
+      ", body: " + JSON.stringify(profilesResult.body)
+    );
+    return;
+  }
+
+  const channelProfileId = profiles[0].id;
+
+  const messageAdsResult = callKakaoMomentsApi_(
+    "post", AD.KAKAO_MOMENTS.REPORT.MESSAGE_ADS_LIST_URL,
+    { "adAccountId": String(adAccountId), "channel-profile-id": String(channelProfileId) },
+    {}
+  );
+
+  const messageAds = messageAdsResult.body && messageAdsResult.body.content;
+
+  if(!Array.isArray(messageAds) || messageAds.length === 0){
+    Logger.log(
+      "메시지광고 목록을 못 가져옴 — statusCode: " + messageAdsResult.statusCode +
+      ", body: " + JSON.stringify(messageAdsResult.body)
+    );
+    return;
+  }
+
+  const messageAdIds = messageAds.map(function(ad){ return ad.messageAdId; });
+  Logger.log("사용할 messageAdIds: " + JSON.stringify(messageAdIds));
+
+  const result = callKakaoMomentsApi_(
+    "post", AD.KAKAO_MOMENTS.REPORT.MESSAGE_ADS_REPORT_URL,
+    { "adAccountId": String(adAccountId), "channel-profile-id": String(channelProfileId) },
+    {
+      messageAdIds: messageAdIds,
+      dimension: "MESSAGE_AD",
+      metricsGroup: ["MESSAGE", "MESSAGE_ADDITION"],
+      datePreset: "LAST_30DAY"
+    }
+  );
+
+  Logger.log("statusCode: " + result.statusCode);
+  Logger.log("body: " + JSON.stringify(result.body, null, 2));
 
 }

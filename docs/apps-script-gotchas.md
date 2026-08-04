@@ -124,3 +124,24 @@ Simple Trigger가 실행하는 함수는 같은 스프레드시트의 캐시만 
 나온 `/exec` URL을 Config에 그대로 박아둘 것.** 재배포로 URL이 바뀔 수 있는 경우(새 배포를
 만들면 바뀌고, 기존 배포를 "관리 > 편집"하면 안 바뀜)를 대비해 그 사실을 주석으로 남겨두면
 다음에 재배포할 때 Config 값도 같이 갱신해야 한다는 걸 놓치지 않는다.
+
+## 11. `clasp push`는 버전 고정된 웹 앱 배포(`/exec`)를 갱신하지 않는다 (2026-08-05 실측)
+
+`clasp push`는 스크립트 프로젝트의 **HEAD**(편집기 최신 코드, 직접 Run 시 실행되는 버전)만
+갱신한다. 반면 "웹 앱으로 배포"(`doGet`/`doPost`가 외부 요청을 받는 `/exec` URL)는 배포
+시점에 만들어진 **특정 버전 번호에 고정**된다(`clasp deployments`로 확인 시 `@1`처럼 표시,
+`@HEAD`가 아님) — 배포 이후 아무리 `clasp push`를 반복해도 그 `/exec` URL이 서빙하는 코드는
+배포 당시 스냅샷 그대로 멈춰 있다.
+
+**실측 사례(카카오모먼트 OAuth 콜백, `AD_006_KakaoMoments.js`)**: 웹 앱 최초 배포(버전 1) 이후
+Redirect URI 하드코딩(v1.1.0)·`resource_ids` 파라미터 수정(v1.2.0) 두 차례를 `clasp push`로
+반영했으나, 콜백 URL(`/exec`, 버전 1 고정)에는 반영되지 않은 상태로 카카오 동의 화면을
+통과했더니 `Script function not found: doGet` 에러 발생 — 원인은 (10번 항목의) `/dev` URL
+문제가 아니라 **배포 자체가 낡은 버전이었던 것**이었다. `npx clasp deploy -i <deploymentId>`로
+같은 배포 ID(= 같은 URL)를 새 버전으로 갱신(`@1` → `@2`)하자 정상 동작 확인.
+
+→ **웹 앱(`doGet`/`doPost`) 코드를 수정했다면, `clasp push`만으로 끝내지 말고 반드시
+`npx clasp deployments`로 대상 배포가 몇 번 버전에 고정돼 있는지 확인 후
+`npx clasp deploy -i <deploymentId>`로 그 배포를 최신 버전으로 갱신할 것.** 배포 ID를 그대로
+쓰면 URL(외부 서비스에 등록해둔 Redirect URI 등)은 바뀌지 않는다 — 새 배포를 만들 때만 URL이
+바뀐다(10번 항목 참고).

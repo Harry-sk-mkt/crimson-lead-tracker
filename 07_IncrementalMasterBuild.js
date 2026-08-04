@@ -10,9 +10,18 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-05)
+ * - **성능 개선(docs/OpenItems.md #18)**: `appendNewLeads()`/`appendNewMTA()`가
+ *   `readLeadRaw()`/`readMTARaw()`(Raw 전체 스캔) 대신 신규
+ *   `getRawSheetDataRowCount_()`/`readRawSheetFrom_()`(`11_DataReader.js` v2.1.0,
+ *   targeted `getRange()` 읽기)를 사용하도록 변경 — Raw는 원본 보존 원칙상 절대
+ *   안 지워져서 재import를 반복할수록 계속 누적되는데, 기존엔 Import할 때마다
+ *   Raw 전체를 매번 읽어와 신규 건수와 무관하게 갈수록 느려지는 구조적 문제가
+ *   있었음(사용자 질문으로 발견). 이제 처리 시간이 "신규 행 수"에만 비례.
+ *   Raw→Master append/sort/카운터 갱신 로직 자체의 동작은 동일(결과 불변).
  * v1.6.0 (2026-08-04)
  * - appendNewLeads()/appendNewMTA()에 `silent` 파라미터 추가(옵셔널, 기본
  *   false — 기존 메뉴 호출부는 무변경) — Import(00_Import.js)가 Raw 기록
@@ -77,14 +86,14 @@ function appendNewLeads(silent){
         .getProperty(propKey)
     ) || 0;
 
-  const allRaw =
-    readLeadRaw();
+  const totalRaw =
+    getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_RAW);
 
   const newRaw =
-    allRaw.slice(lastProcessed);
+    readRawSheetFrom_(CONFIG.SHEETS.LEADS_RAW, lastProcessed);
 
   Logger.log(
-    "Total Raw : " + allRaw.length +
+    "Total Raw : " + totalRaw +
     " / Already Processed : " + lastProcessed +
     " / New : " + newRaw.length
   );
@@ -120,7 +129,7 @@ function appendNewLeads(silent){
     .getScriptProperties()
     .setProperty(
       propKey,
-      String(allRaw.length)
+      String(totalRaw)
     );
 
   const seconds =
@@ -210,15 +219,15 @@ function appendNewMTA(silent){
         .getProperty(propKey)
     ) || 0;
 
-  
-  const allRaw =
-    readMTARaw();
+
+  const totalRaw =
+    getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_RAW);
 
   const newRaw =
-    allRaw.slice(lastProcessed);
+    readRawSheetFrom_(CONFIG.SHEETS.MTA_RAW, lastProcessed);
 
   Logger.log(
-    "Total Raw : " + allRaw.length +
+    "Total Raw : " + totalRaw +
     " / Already Processed : " + lastProcessed +
     " / New : " + newRaw.length
   );
@@ -254,7 +263,7 @@ function appendNewMTA(silent){
     .getScriptProperties()
     .setProperty(
       propKey,
-      String(allRaw.length)
+      String(totalRaw)
     );
 
   const seconds =

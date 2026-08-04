@@ -21,9 +21,13 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.13.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-08-05)
+ * - `KAKAO_MOMENTS.REPORT` 신규 — 리포트 API 진단 착수를 위한 엔드포인트 4개(광고계정 목록/
+ *   채널 프로필 목록/메시지광고 목록/메시지광고 리포트, 공식 문서 확인 완료). 응답 필드
+ *   매핑은 아직 미확정 — `AD_006_KakaoMoments.js`의 신규 진단 함수로 실제 호출 후 확정 예정.
  * v1.13.0 (2026-08-04)
  * - **버그 수정 — 인가 요청 KOE233("지원하지 않는 파라미터") 실측**. `scope`에
  *   `moment_create`가 포함되면 `resource_ids` 파라미터가 조건부 필수라는 걸 공식 문서로
@@ -420,6 +424,17 @@ const AD = {
         OAUTH_STATE: "KAKAO_MOMENTS_OAUTH_STATE"  // CSRF 방지용 임시값(발급→콜백 사이만 보관)
       }
 
+    },
+
+    // **리포트 API 엔드포인트(2026-08-05, 공식 문서 확인 완료)** — 아직 실제 API 호출로
+    // 응답 필드명 검증 전 단계(진단 함수용, `AD_006_KakaoMoments.js` 참고). 메시지광고는
+    // adAccountId/channelProfileId를 몰라야 조회 체인을 못 타므로, 계정 정보 없이도 호출
+    // 가능한 목록 조회 엔드포인트부터 순서대로 나열.
+    REPORT: {
+      AD_ACCOUNTS_LIST_URL: "https://apis.moment.kakao.com/openapi/v4/adAccounts/pages",
+      CHANNEL_PROFILES_URL: "https://apis.moment.kakao.com/openapi/v4/adAccounts/channel/profiles",
+      MESSAGE_ADS_LIST_URL: "https://apis.moment.kakao.com/openapi/message/v2/message-ads",
+      MESSAGE_ADS_REPORT_URL: "https://apis.moment.kakao.com/openapi/message/v2/message-ads/reports"
     }
 
   },
