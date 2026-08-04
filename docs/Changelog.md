@@ -76,6 +76,59 @@ Raw→Master append/정렬은 그대로 동기 유지하고 그 이후만 락 �
 - 18. Import 업로드 다이얼로그가 대용량(특히 MTA) 처리 중 오래 대기 — Raw→Master append/정렬
   자체(백그라운드 트리거 이전 동기 구간)가 원인으로 추정, 아직 실측/설계 전.
 
+## 카카오모먼트 메시지광고 API 연동 — 설계 착수 및 인가 코드 요청까지 진행
+
+claude.ai 세션에서 넘어온 핸드오프 문서를 검토하다 선행 exec-plan(7/31)의 "기존 시트 완전
+폐기" 기록과 정면 충돌 발견 — 재확인해 "`KakaoSMS_Raw` 재활용"으로 최종화. 새 exec-plan
+`docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md` 신규. 이후 실제 구현
+착수: `AD_006_KakaoMoments.js` 신규(비즈니스 인증 OAuth 2.0 — 인가 URL 생성/`doGet()` 콜백
+수신/토큰 교환/진단), `AD_001_Config.js`에 `AD.KAKAO_MOMENTS.OAUTH` 섹션, `appsscript.json`에
+웹 앱 배포 매니페스트 추가. 사용자가 웹 앱 배포 완료, 카카오디벨로퍼스에 Redirect URI 등록,
+Script Properties 자격증명 입력까지 마쳤고, 인가 코드 요청 단계에서 문제 두 건을 실측
+발견·수정: (1) `ScriptApp.getService().getUrl()`을 편집기에서 직접 Run하면 배포된 `/exec`가
+아니라 카카오에 등록 안 된 `/dev` URL을 반환하는 버그 — Redirect URI를 Config에 하드코딩하는
+방식으로 전환(`docs/apps-script-gotchas.md` #10 신규 기록). (2) scope에 `moment_create`가
+있으면 `resource_ids` 파라미터가 조건부 필수라는 걸 KOE233 에러로 실측 — `moment:*`
+와일드카드를 추가해 해결. 부수적으로 카카오 콘솔의 Client Secret이 "카카오 로그인용"/
+"비즈니스 인증용" 2개로 분리돼 있다는 것도 발견해 Config 키 이름을 `_BIZAUTH`로 명확화. 또한
+공식 문서 확인 결과 **비즈니스 토큰엔 Refresh Token이 없다는 것**을 발견 — 애초에 "Time-driven
+Trigger로 자동 갱신"하려던 계획이 무효였음, 실제 사용(캠페인 지출 파이프라인의 주기적 호출)으로
+미사용 만료를 회피하는 방식으로 정정. 다음 단계는 사용자가 인가 URL을 다시 열어 동의 화면을
+통과하는 것 — 아직 토큰 발급 완료 확인 전.
+
+## ACQ_REP/NewP1_REP — 캠페인 지출 자동화 확장 + 리포트 서식 정리
+
+`docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md`의 미해결 잔재를 정리하다
+발견한 문제들을 순차 수정:
+
+- **레거시 컬럼 확인**: ACQ_REP AH:AK(옛 Target 컬럼 위치, 이미 S:V로 이전된 후 안 지워진
+  잔재)는 코드가 전혀 참조하지 않는 죽은 데이터임을 확인 — 사용자가 직접 삭제. NewP1_REP R열도
+  같은 종류의 잔재로 확인, 마찬가지로 코드 미참조.
+- **NewP1_REP/Target_REP Spent 소스 전환**: "FY27 AUG Spent가 이상하다"는 리포트를 조사하다,
+  ACQ_REP의 Spent(W열)는 이미 `Ad_Spend_Cache`(Meta+Naver Search+Kakao Channel 자동 집계)를
+  쓰는데 NewP1_REP/Target_REP은 여전히 `Target_Engine` Block 0 수동 입력을 쓰고 있던 배선
+  누락을 발견 — 둘 다 `readAdSpendCacheMap_()` 기반으로 전환(`40_NewP1Report.js` v1.4.0,
+  `91_TargetReport.js` v1.8.0).
+- **Naver Search Ad API 버그 발견·수정 — 730일 조회 제약**: 전환 후 Search 세그먼트가
+  Ad_Spend_Cache에서 통째로 비어있는 걸 발견 — 원인은 히스토리 백필 반복 호출
+  (`computeNaverSearchAdSpendHistorySummary_()`, 2022-09~오늘 매달) 중 730일보다 오래된 달에서
+  나는 400 에러(`code:11004`, "최근 730일 이내 기간만 조회 가능")를 `callNaverSearchAdApi_()`가
+  상태 코드 검사 없이 조용히 흡수하고 있었던 것. 429/5xx만 재시도하고, 이 특정 "조회 기간 초과"
+  에러는 알려진 제약으로 보고 그 달만 건너뛰도록 수정(`AD_003_NaverSearch.js` v2.4.0). 실 시트
+  재검증 완료(사용자 확인) — 2024-08 이전 달은 API 구조상 앞으로도 영구히 못 가져옴(한계로 기록).
+- **캠페인 지출 자동 파이프라인 편입**: `refreshAdSpendCache_()`를 매번 수동 실행해야 했던
+  걸 `08_PipelineAsync.js`의 배경 파이프라인 체인에 `refreshCampaignSpend_()`로 편입(사용자
+  요청) — Leads/MTA 파이프라인이 돌 때마다 자동 갱신, 실패해도 핵심 파이프라인은 안 멈춤.
+  독립 시간 트리거(리드 유입과 무관한 스케줄)는 필요성 없다고 판단해 `docs/OpenItems.md` #19
+  TODO로만 기록.
+- **리포트 서식 정리(사용자 요청)**: ACQ_REP S(Revenue Target)/W(Spent), NewP1_REP M(Revenue)/
+  N(Spent)/O(CPNP1) → `$#,##0.00`. ACQ_REP U/NewP1_REP P(둘 다 New P1 Target, 원래 서식
+  누락 상태였음 발견) → `#,##0`(정수만). Target 달성 시(≥100%) 하이라이트는 이미 반영돼 있던
+  것 확인(`highlightAtOrAboveThreshold_()`, 32_ACQReportStyles.js v1.6.0부터).
+
+`08_PipelineAsync.js` v1.6.0, `32_ACQReportStyles.js` v1.9.0, `41_NewP1ReportStyles.js`
+v1.4.0. 관련 exec-plan 3개 갱신.
+
 # Changelog — 2026-07-31
 
 ## 캠페인 지출 통합 Phase 1 — Kakao 플랫폼(Moments 권한신청 + Channel 파이프라인 구현) + Meta API 재도입 보류

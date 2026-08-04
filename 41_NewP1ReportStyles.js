@@ -12,9 +12,18 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-04)
+ * - **서식 조정(사용자 요청)**: Revenue(M)/Spent(N)/CPNP1(O)를 `"#,##0"` →
+ *   `"$#,##0.00"`(통화 표시, 소수점 2자리)로 변경. New P1 Target(P,
+ *   targetStartCol+2)에 신규로 `"#,##0"`(정수만) 적용 — 지금까지 이 컬럼만
+ *   서식이 아예 없었던 걸 발견해 같이 수정(ACQ_REP의 New P1 Target(U)과 동일
+ *   누락). 부수적으로 이 파일 주석에 남아있던 "targetStartCol=O열(15)"라는
+ *   설명이 실제 Config 값(N열=14, 2026-07-30에 O→N으로 원복됨)과 어긋나 있던
+ *   걸 발견해 정정, Spent 헤더 Note도 실제 소스(Ad_Spend_Cache 자동 집계,
+ *   2026-08-04 전환)에 맞게 갱신.
  * v1.3.0 (2026-07-30)
  * - Spent/CPNP1/New P1 Target/New P1 Target% 4컬럼 신규 서식. **처음엔
  *   `NEWP1_REPORT_HEADERS` 배열 자체를 13→17로 늘려 N열부터 이어붙이려
@@ -61,7 +70,7 @@ function applyNewP1ReportStyles_(sheet, rowCount){
   const startRow = CONFIG.NEWP1.ROWS.REPORT_DATA_START;
   const headerRow = CONFIG.NEWP1.ROWS.REPORT_HEADER;
   const totalCols = NEWP1_REPORT_HEADERS.length;                    // A:M (13)
-  const targetStartCol = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;     // O열(15) — N열(수동 영역)은 건너뜀
+  const targetStartCol = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;     // N열(14, 2026-07-30 최종 확정 — 이전엔 O열이었으나 사용자가 N열 수동 내용을 삭제하며 원복)
   const targetCols = NEWP1_TARGET_HEADERS.length;                   // 4
 
   //----------------------------------------------------------
@@ -89,12 +98,20 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
     });
 
+    // Revenue(M, 13)/Spent(N, targetStartCol)/CPNP1(O, targetStartCol+1) — $ 표시
+    // + 소수점 2자리(2026-08-04 사용자 요청, ACQ_REP의 Revenue Target/Spent와
+    // 동일 처리).
     [13, targetStartCol, targetStartCol + 1].forEach(function(col){
 
       sheet.getRange(startRow, col, rowCount, 1)
-        .setNumberFormat("#,##0");
+        .setNumberFormat("$#,##0.00");
 
     });
+
+    // New P1 Target(P, targetStartCol+2) — 리드 수 카운트라 소수점 없이 정수만
+    // (2026-08-04 — ACQ_REP의 New P1 Target(U)과 동일한 서식 누락 발견, 같이 수정).
+    sheet.getRange(startRow, targetStartCol + 2, rowCount, 1)
+      .setNumberFormat("#,##0");
 
     //----------------------------------------------------------
     // Target 달성(100% 이상) 강조 — New P1 Target%(targetStartCol+3). 2026-07-30
@@ -195,12 +212,13 @@ function annotateNewP1ReportMetricNotes_(sheet, headerRow){
   });
 
   // Target 4컬럼(2026-07-30 추가) — N열(사용자 수동 영역) 충돌로 위치가 한 번
-  // 바뀐 전례가 있어, 하드코딩 키 대신 CONFIG.NEWP1.TARGET_COLUMNS_START_COL
-  // 기준 상대 위치로 부착(32_ACQReportStyles.js의 동일 수정과 같은 패턴).
+  // 바뀌었다가(N→O) 사용자가 N열 수동 내용을 삭제하며 다시 N열로 원복된 전례가
+  // 있어, 하드코딩 키 대신 CONFIG.NEWP1.TARGET_COLUMNS_START_COL 기준 상대
+  // 위치로 부착(32_ACQReportStyles.js의 동일 수정과 같은 패턴).
   const t = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;
 
   const targetNotes = {};
-  targetNotes[t] = "Spent — Target_Engine Block 0의 세그먼트별 월별 수동 Spent. Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. N열(사용자 수동 영역)을 피해 O열부터 배치.";
+  targetNotes[t] = "Spent — Ad_Spend_Cache(Meta+Naver Search+Kakao Channel 자동 집계, AD_004_SpendCache.js) 기준(2026-08-04부터 — 이전엔 Target_Engine Block 0 수동 입력이었음). 두 소스 어디에도 없는 (FY|Month|Segment) 조합은 공란.";
   targetNotes[t + 1] = "CPNP1(실적) — Spent ÷ New P1(4).";
   targetNotes[t + 2] = "New P1 Target — Target_Engine Block D(New P1 Target). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. ACQ_REP의 New P1 Target과 같은 값(같은 Business Segment 컬럼 소스, docs/ACQReportDesign.md \"오해 방지\" 섹션 참고). Pipeline P1 Target은 포함 안 함(사용자 판단 — 클로징 여부 불확실 영역).";
   targetNotes[t + 3] = "New P1 Target% — New P1(4) ÷ New P1 Target. 100% 이상이면 초록 하이라이트.";

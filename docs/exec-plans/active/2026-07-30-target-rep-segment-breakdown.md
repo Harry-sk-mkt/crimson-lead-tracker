@@ -232,6 +232,18 @@ Target을 시즌성 벤치마크로 월별 배분)을 대체할 잠재력이 있
   시작해 블록 간 시각적 구분(빈 컬럼 1개)이 없어짐. **사용자 확정: 지금 당장 해결 안 해도 됨**,
   임의로 고치지 말 것 — 필요 시 별도 요청.
 
+- [x] **Actual CPNP1 소스를 수동 Spent → Ad_Spend_Cache 자동 집계로 전환(2026-08-04, 사용자
+      확정)** — 이 exec-plan의 Goal에 "자동 캠페인 데이터 연동은 Roadmap Phase 1로 별도"라고
+      적어뒀던 부분이 실제로 이뤄짐. `docs/exec-plans/active/2026-07-30-campaign-spend-integration.md`
+      (Phase 1)에서 구축한 `Ad_Spend_Cache`(Meta+Naver Search+Kakao Channel, `getBusinessSegment()`
+      로 이미 이 exec-plan의 GROUP_ORDER와 동일한 5세그먼트로 분류됨)가 준비되면서, NewP1_REP
+      전환(`docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md` 참고)과 같은 이유로
+      Target_REP의 `computeTargetActualCPNP1ByGroupMonth_()`(91_TargetReport.js v1.8.0)도
+      `readTargetEngineInputs_().monthlySegmentSpent` 대신 `readAdSpendCacheMap_()`을 쓰도록
+      전환. 부수 효과로 반환 키에 실제 연도(`getFiscalYear(weekStart)`)를 명시적으로 매칭시켜
+      기존 "group|month"(연도 미구분) 구조의 잠재적 취약점도 해소. `node --check`/naming/
+      version-header/중복선언 검사 통과, `clasp push` 완료. 실 시트 재검증은 사용자 진행 예정.
+
 ## Outcomes & Retrospective
 
 (작업 완료 시 작성)

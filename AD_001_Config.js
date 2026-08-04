@@ -21,9 +21,37 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.9.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-08-04)
+ * - **버그 수정 — 인가 요청 KOE233("지원하지 않는 파라미터") 실측**. `scope`에
+ *   `moment_create`가 포함되면 `resource_ids` 파라미터가 조건부 필수라는 걸 공식 문서로
+ *   확인(누락 시 이 에러) — `KAKAO_MOMENTS.OAUTH.RESOURCE_IDS: ["moment:*"]` 신규(광고계정
+ *   생성 권한은 "전체 광고계정만 요청 가능"이 문서에 명시돼 특정 ID 대신 와일드카드 사용).
+ *   `AD_006_KakaoMoments.js`의 `buildKakaoMomentsAuthorizeUrl_()`가 이 값을 반영하도록 함께 수정.
+ * v1.12.0 (2026-08-04)
+ * - **버그 수정 — Redirect URI 불일치로 OAuth 콜백 실패("Script function not found: doGet")**.
+ *   `KAKAO_MOMENTS.OAUTH.REDIRECT_URI` 신규(하드코딩) — `ScriptApp.getService().getUrl()`을
+ *   Apps Script 편집기에서 직접 Run할 때 호출하면 실제 배포된 `/exec` URL이 아니라 카카오에
+ *   등록 안 된 `/dev` URL을 반환하는 게 실측으로 확인됨(docs/apps-script-gotchas.md #10 신규).
+ *   실제 배포 URL을 그대로 Config에 고정 — `AD_006_KakaoMoments.js`의
+ *   `getKakaoMomentsRedirectUri_()`가 이 값을 쓰도록 함께 수정.
+ * v1.11.0 (2026-08-04)
+ * - `KAKAO_MOMENTS.OAUTH.PROPERTY_KEYS.CLIENT_SECRET` 값을 `"KAKAO_MOMENTS_CLIENT_SECRET"`
+ *   → `"KAKAO_MOMENTS_CLIENT_SECRET_BIZAUTH"`로 변경 — 실측 결과 카카오 콘솔 REST API 키
+ *   카드에 "카카오 로그인용"/"비즈니스 인증용" Client Secret이 별도로 존재함이 확인됨
+ *   (사용자 발견). 이 프로젝트는 비즈니스 인증만 쓰므로 BIZAUTH 쪽으로 명확히 구분.
+ * v1.10.0 (2026-08-04)
+ * - `KAKAO_MOMENTS` 신규 — 카카오모먼트 메시지광고 API(비즈니스 인증 OAuth 2.0)
+ *   연동 착수. `OAUTH` 섹션(엔드포인트 3개, 스코프 4개, Script Properties 키
+ *   이름)만 우선 추가 — 리포트 API 엔드포인트/컬럼 매핑은 실제 토큰 확보 후
+ *   확정 예정(구현은 `AD_006_KakaoMoments.js`). 공식 문서 확인 결과 비즈니스
+ *   토큰엔 Refresh Token이 없음(매번 인가 코드로 재발급, 장기 미사용 시만
+ *   자동 만료) — 원래 계획했던 "시간 트리거 자동 갱신"은 무효, 대신 실제
+ *   사용(캠페인 지출 파이프라인의 주기적 호출)으로 미사용 만료를 회피하는
+ *   방식으로 전환. 상세: docs/exec-plans/active/
+ *   2026-08-04-kakao-moments-api-integration.md
  * v1.9.0 (2026-07-31)
  * - `RAW_SHEET["Kakao Channel"]`("KakaoSMS_Raw") + `KAKAO_CHANNEL.SYNC_COLUMNS`
  *   신규 — 캠페인 지출 스프레드시트(AD.SPREADSHEET_ID)에 Performance 원본을
@@ -319,6 +347,80 @@ const AD = {
       { header: "비고", source: "비고" },
       { header: "Marketo program", source: "Marketo program" }
     ]
+
+  },
+
+  /*
+  ==========================================================
+  KAKAO MOMENTS — 메시지광고 API 연동(2026-08-04 착수). 비즈니스 인증
+  (OAuth 2.0) 필요 — 일반 카카오 로그인과 다른 별도 체계, 어드민 키 무관.
+
+  **자격증명은 여기 없음** — REST API 키/Client Secret은 Apps Script 편집기
+  "Project Settings > Script Properties"에 아래 PROPERTY_KEYS의 키 이름으로
+  사용자가 직접 입력한다(git/코드에 노출 금지, Naver Search와 동일 관행).
+  ACCESS_TOKEN은 사람이 입력하는 값이 아니라 OAuth 콜백(doGet())이 토큰
+  교환 후 자동으로 써넣는 값 — 그래도 같은 이유(민감정보, git 미노출)로
+  Script Properties에 저장.
+
+  **Refresh Token 없음(2026-08-04, 공식 문서로 확인 — 추측 아님)**:
+  `business-auth/rest-api`/`business-auth/common` 문서 확인 결과, 비즈니스
+  토큰 발급 응답엔 `access_token`/`token_type`/`scope`만 있고 `refresh_token`/
+  `expires_in` 필드 자체가 없음 — 매번 인가 코드로 새로 발급하는 방식이고
+  "장기 미사용 시 자동 만료"(정확한 기간 미명시). 즉 시간 기반 자동 갱신은
+  애초에 불가능 — 실제 사용(캠페인 지출 자동 파이프라인이 주기적으로 호출)이
+  유일한 "갱신" 수단이고, 만료/철회되면 사용자가 다시 동의 화면을 통과해야
+  함(코드가 대신할 수 없음). 상세: docs/exec-plans/active/
+  2026-08-04-kakao-moments-api-integration.md Decision Log.
+  ==========================================================
+  */
+
+  KAKAO_MOMENTS: {
+
+    OAUTH: {
+
+      AUTHORIZE_URL: "https://kauth.kakao.com/oauth/business/authorize",
+      TOKEN_URL: "https://kauth.kakao.com/oauth/business/token",
+      TOKEN_INFO_URL: "https://kapi.kakao.com/v1/business/tokeninfo",
+
+      // **Redirect URI는 하드코딩(2026-08-04, 실측 후 정정)** — 원래 ScriptApp.getService().getUrl()
+      // 로 배포 시점에 자동으로 가져오려 했으나(닭·달걀 문제 회피 의도), Apps Script 편집기에서
+      // 직접 Run(runGetKakaoMomentsAuthorizationUrl())할 때는 이 함수가 실제 배포된 /exec URL이
+      // 아니라 개발용 /dev URL(도메인 경로도 다름, 카카오에 등록 안 된 값)을 돌려주는 걸 실측으로
+      // 확인함 — doGet() 실행 컨텍스트 안에서만 정확함, 수동 Run에서는 신뢰 불가
+      // (docs/apps-script-gotchas.md #10 참고). 그래서 실제 배포 후 나온 /exec URL을 그대로
+      // 여기 박아둔다 — 카카오디벨로퍼스에 등록한 값과 반드시 동일해야 함. **재배포 시 URL이
+      // 바뀌면(새 배포를 만들면 바뀜, 기존 배포를 "관리 > 편집"하면 안 바뀜) 이 값과 카카오 콘솔
+      // Redirect URI 둘 다 같이 갱신할 것.**
+      REDIRECT_URI: "https://script.google.com/macros/s/AKfycbwqJ08WQOWNMDvza7QWnTboks-xVfRV9XnpRDjxK1bCX9Zi6d4fyoZpNOgfqQLYkiv-qw/exec",
+
+      // 사용자 확인(2026-08-04) — moment_bizform_result_read는 이 작업과 무관한
+      // 키워드광고 스코프 제외, 메시지광고 연동에 필요한 4개만.
+      SCOPES: ["moment_create", "moment_management", "moment_delete", "moment_bizform_result_read"],
+
+      // **resource_ids — scope에 moment_create 포함 시 필수(2026-08-04, 공식 문서로 확인)**.
+      // 실제로 이 값 없이 인가 요청을 보내 KOE233("지원하지 않는 파라미터로 비즈니스 인가
+      // 코드를 요청한 경우") 에러를 실측함 — 문서 확인 결과 scope에 moment_create/keyword_create
+      // 가 있으면 resource_ids가 조건부 필수 파라미터였음. 형식은 "ScopeGroup:ResourceId"
+      // (예: "moment:12345") — "*"를 넣으면 보유한 전체 광고계정 대상. 이 광고계정 생성/관리
+      // 권한(moment_create)은 "전체 광고계정만 요청 가능"이 문서에 명시돼 있어 특정 계정 ID
+      // 대신 반드시 "moment:*"로 보내야 함(광고계정 1개뿐이라 실질적 차이는 없지만, 특정 ID로
+      // 보내면 다시 에러가 날 수 있음 — 추측 아니라 문서 문구 그대로 반영).
+      RESOURCE_IDS: ["moment:*"],
+
+      // **Client Secret이 카카오 콘솔에 2개 존재함(2026-08-04 실측 발견)** — REST API 키
+      // 카드 안에 "카카오 로그인용"과 "비즈니스 인증용" Secret이 별도로 발급됨. 이 플로우는
+      // 비즈니스 인증(/oauth/business/token)이므로 반드시 BIZAUTH 쪽을 써야 함 — 카카오
+      // 로그인용 Secret을 쓰면 토큰 교환이 실패함(미검증이지만 문서상 별개 자격증명이라
+      // 섞어 쓸 이유 없음). 카카오 로그인용 Secret은 이 프로젝트가 안 씀(다른 용도 생기기
+      // 전까진 저장 안 해도 무방, 사용자가 이미 별도 보관 중이면 그대로 둬도 무해).
+      PROPERTY_KEYS: {
+        REST_API_KEY: "KAKAO_MOMENTS_REST_API_KEY",
+        CLIENT_SECRET: "KAKAO_MOMENTS_CLIENT_SECRET_BIZAUTH",
+        ACCESS_TOKEN: "KAKAO_MOMENTS_ACCESS_TOKEN",
+        OAUTH_STATE: "KAKAO_MOMENTS_OAUTH_STATE"  // CSRF 방지용 임시값(발급→콜백 사이만 보관)
+      }
+
+    }
 
   },
 

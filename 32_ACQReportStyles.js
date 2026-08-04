@@ -12,9 +12,17 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-04)
+ * - **서식 조정(사용자 요청)**: Revenue Target(S)/Spent(W)를 `"#,##0"` →
+ *   `"$#,##0.00"`(통화 표시, 소수점 2자리)로 변경. New P1 Target(U,
+ *   targetStartCol+2)에 신규로 `"#,##0"`(정수만) 적용 — 지금까지 이 컬럼만
+ *   서식이 아예 없었던 걸 발견해 같이 수정. Revenue(N열, 14)는 요청 대상이
+ *   아니라 기존 `"#,##0"` 그대로 유지. Target 달성(100% 이상) 하이라이트
+ *   (`highlightAtOrAboveThreshold_()`, Revenue Target%/New P1 Target%)는
+ *   이미 v1.6.0부터 반영돼 있었음을 확인(사용자 문의).
  * v1.8.0 (2026-07-31)
  * - "Meta Spent" → "Spent" 개명 반영 — 변수명 `metaSpentCol`→`spentCol`,
  *   `CONFIG.ACQ.META_SPENT_COLUMN`→`SPENT_COLUMN`, 헤더 Note를 Meta+Naver
@@ -113,12 +121,21 @@ function applyACQReportStyles_(sheet, rowCount){
 
     });
 
-    [14, targetStartCol, spentCol].forEach(function(col){
+    sheet.getRange(startRow, 14, rowCount, 1)
+      .setNumberFormat("#,##0");
+
+    // Revenue Target(S)/Spent(W) — $ 표시 + 소수점 2자리(2026-08-04 사용자 요청).
+    [targetStartCol, spentCol].forEach(function(col){
 
       sheet.getRange(startRow, col, rowCount, 1)
-        .setNumberFormat("#,##0");
+        .setNumberFormat("$#,##0.00");
 
     });
+
+    // New P1 Target(U, targetStartCol+2) — 리드 수 카운트라 소수점 없이 정수만
+    // (2026-08-04 사용자 요청 — 지금까지 이 컬럼만 서식이 아예 없었음).
+    sheet.getRange(startRow, targetStartCol + 2, rowCount, 1)
+      .setNumberFormat("#,##0");
 
     //----------------------------------------------------------
     // 월 블록 단위 배경색 (같은 달의 세그먼트끼리는 같은 색,

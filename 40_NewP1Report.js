@@ -23,9 +23,22 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-04)
+ * - **Spent 소스를 Target_Engine 수동 입력 → Ad_Spend_Cache 자동 집계로 전환**
+ *   (사용자 확정 — ACQ_REP의 Spent(W열)는 이미 `readAdSpendCacheMap_()`
+ *   (AD_004_SpendCache.js, Meta+Naver Search+Kakao Channel 합산 캐시)를 쓰는데
+ *   NewP1_REP은 2026-07-30 추가 당시 아직 이 캐시가 없어 Target_Engine Block 0
+ *   수동 입력을 그대로 썼던 게 그대로 남아있었음 — 두 리포트의 Spent 소스가
+ *   달라 실제 캠페인 지출과 안 맞는 값이 보이는 원인이 됨(FY27 AUG Spent 이상
+ *   현상 조사 중 발견). `generateNewP1Report_()`가 `computeReportTargetLookup_()`
+ *   의 `.spent` 대신 `readAdSpendCacheMap_()`를 직접 조회하도록 변경 — key
+ *   포맷(FY|Month|Segment)이 이미 동일해 그대로 대체 가능. CPNP1(실적)도
+ *   자동 집계 지출 기준으로 재계산됨. `computeReportTargetLookupFromInputs_()`
+ *   자체는 손대지 않음(Target_Engine 내부 CPNP1 Benchmark 도출 체인이 여전히
+ *   `inputs.monthlySegmentSpent`를 직접 사용 중이라 무관).
  * v1.3.0 (2026-07-30)
  * - Spent/CPNP1(실적)/New P1 Target/New P1 Target% 4컬럼 추가
  *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고, 원래
@@ -921,10 +934,24 @@ function generateNewP1Report_(){
   // 5. Report Area 작성 (% 컬럼은 여기서 계산, Engine엔 저장 안 함)
   //----------------------------------------------------------
 
-  // Target 조회(90_TargetEngine.js) — Spent/New P1 Target은 NewP1_Engine 캐시가
+  // Target 조회(90_TargetEngine.js) — New P1 Target은 NewP1_Engine 캐시가
   // 아니라 Target_Engine의 마지막 Generate 결과를 리포트 생성 시점에 붙임
   // (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고).
   const targetLookup = computeReportTargetLookup_();
+
+  // 캠페인 지출 조회(AD_004_SpendCache.js) — 2026-08-04까지는 Spent를
+  // Target_Engine Block 0 수동 입력(targetLookup.spent)에서 가져왔으나, 이미
+  // ACQ_REP은 같은 grain(FY|Month|Segment)의 자동 집계 캐시(Meta+Naver
+  // Search+Kakao Channel)를 쓰고 있어(30_ACQReport.js) 두 리포트의 Spent
+  // 소스가 서로 달랐음(수동 입력이 실제 캠페인 지출과 어긋나는 원인) — ACQ_REP과
+  // 동일한 자동 집계 소스로 통일(2026-08-04 사용자 확정). **캐시만 읽음** —
+  // 이 함수는 NewP1_REP Generate 체크박스의 onEdit() Simple Trigger에서
+  // 실행되는데, Simple Trigger는 외부 스프레드시트를 못 열어서(ACQ_REP과
+  // 동일 제약, docs/exec-plans/active/2026-07-30-campaign-spend-integration.md
+  // 참고) 원본 요약 함수가 아니라 같은 메인 스프레드시트 안 캐시만 읽는
+  // readAdSpendCacheMap_()를 써야 함. 캐시는 사용자가 runRefreshAdSpendCache()
+  // (AD_004_SpendCache.js)를 수동 실행해서 미리 갱신해둬야 함.
+  const spendMap = readAdSpendCacheMap_();
 
   const outputRows = [];
   const targetOutputRows = [];
@@ -950,10 +977,11 @@ function generateNewP1Report_(){
       row.revenue
     ]);
 
-    // Target_Engine은 한 번에 Target FY 하나만 갖고 있어, 그 FY/GROUP_ORDER(5개
-    // 세그먼트)에 없는 행은 hasOwnProperty가 false — "0"과 구분해 공란 처리.
-    const hasSpent = targetLookup.spent.hasOwnProperty(key);
-    const spent = hasSpent ? targetLookup.spent[key] : "";
+    // Ad_Spend_Cache에 그 (FY|Month|Segment) 키 자체가 없으면(예: 아직 캠페인
+    // 지출 파이프라인이 커버하지 않는 옛날 달) hasOwnProperty가 false —
+    // "지출 0"과 구분해 공란 처리(기존 Target_Engine 조회 때와 동일 관례).
+    const hasSpent = spendMap.hasOwnProperty(key);
+    const spent = hasSpent ? spendMap[key] : "";
     const cpnp1 = (hasSpent && newP1 > 0) ? spent / newP1 : "";
 
     const hasNewP1Target = targetLookup.newP1Target.hasOwnProperty(key);

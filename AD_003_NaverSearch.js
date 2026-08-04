@@ -44,9 +44,34 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.2.0
+ * v2.4.0
  *
  * Change Log
+ * v2.4.0 (2026-08-04)
+ * - **진짜 원인 확정 — "재시도해도 안 되는" 400 에러였음**. v2.3.0에서 추가한
+ *   재시도 로직이 처음으로 에러를 드러내 확인: `statusCode=400,
+ *   {code:11004,message:"데이터는 최근 730일 이내 기간에서만 조회할 수
+ *   있습니다."}` — Naver Search Ad API `/stats`의 공식 제약(최근 730일)이고,
+ *   `BACKFILL_START`(2022-09)가 이보다 훨씬 오래돼 매번 필연적으로 발생하는
+ *   것이었음(rate limit 추정은 틀렸음). 수정: `callNaverSearchAdApiWithRetry_()`
+ *   가 이제 429/5xx만 재시도(그 외 4xx는 재시도해도 동일 결과라 즉시 실패,
+ *   던지는 Error에 `statusCode`/`body` 첨부). `computeNaverSearchAdSpendHistorySummary_()`
+ *   가 이 특정 에러(`statusCode===400 && body.code===11004`, 알려진 플랫폼
+ *   제약)만 그 달을 건너뛰고 계속 진행, 그 외 에러는 그대로 던져 전체 갱신
+ *   중단. `node --check`/naming/version-header/중복선언 검사 통과, `clasp
+ *   push` 완료.
+ * v2.3.0 (2026-08-04)
+ * - **버그 수정(1차) — Ad_Spend_Cache에서 Search 세그먼트가 통째로 빈 상태로
+ *   발견**. `callNaverSearchAdApi_()`가 상태 코드를 확인 안 해서,
+ *   `computeNaverSearchAdSpendHistorySummary_()`의 2022-09~오늘 매달 반복
+ *   `/stats` 호출(약 47회) 중 일부가 실패해도 에러 없이 그 달만 0으로
+ *   처리되고 있었음(`runComputeNaverSearchAdSpendForMonth()` 단일 달 호출은
+ *   정상 동작 확인 — API 인증/서명/`getBusinessSegment()` 분류 로직 문제
+ *   아님을 먼저 배제). 신규 `callNaverSearchAdApiWithRetry_()`(상태 코드 200
+ *   아니면 지수 백오프로 최대 3회 재시도, 그래도 실패하면 명확한 에러를 던짐)
+ *   를 `fetchNaverSearchAdCampaignMap_()`/`fetchNaverSearchAdStats_()` 양쪽에
+ *   적용 — 이때는 원인을 rate limit로 추정했으나 실제로는 v2.4.0에서 밝혀진
+ *   730일 제약이었음.
  * v2.2.0 (2026-07-31)
  * - **전체 이력 백필 함수 추가** — ACQ_REP W열에 Meta+Naver Search 합산 지출을
  *   연결하기로 확정(사용자, "Meta와 동일한 범위"로 소급). 순수 함수
@@ -269,6 +294,66 @@ function callNaverSearchAdApi_(method, uri, queryParams){
   }
 
   return { statusCode: statusCode, body: body };
+
+}
+
+
+/**
+ * ==========================================================
+ * Call Naver Search Ad API With Retry (IO 래퍼)
+ *
+ * WHY (2026-08-04, 실측 — Ad_Spend_Cache에서 Search 세그먼트가 통째로 빈
+ * 상태로 발견)
+ * `computeNaverSearchAdSpendHistorySummary_()`가 2022-09~오늘까지 매달
+ * `/stats`를 반복 호출하는데(현재 기준 약 47회), `callNaverSearchAdApi_()`는
+ * 상태 코드를 확인하지 않고 그대로 반환하기만 해서 그 중 한 달이라도
+ * 실패하면 호출부(`fetchNaverSearchAdStats_()`의 `Array.isArray` 체크)가
+ * 에러 없이 그 달만 조용히 0으로 처리하는 게 실측됨 —
+ * `runComputeNaverSearchAdSpendForMonth()`(단일 달, 반복 호출 없음)는 정상
+ * 동작해 API 자체/서명/`getBusinessSegment()` 분류 로직 문제가 아님을 먼저
+ * 확인했음. **실제 원인 확정(2026-08-04, 재시도 도입 후 노출된 에러로 확인)**:
+ * `/stats`는 "최근 730일 이내 기간만 조회 가능"이 공식 제약(400,
+ * `{code:11004}`) — `BACKFILL_START`(2022-09)가 이 범위보다 훨씬 오래돼
+ * 매 실행마다 오래된 달에서 필연적으로 400이 남. 재시도해도 똑같이 실패하는
+ * 요청 자체의 문제이므로 **4xx(429 제외)는 재시도하지 않고 즉시 실패
+ * 처리**(429/5xx만 지수 백오프 재시도) — 호출부(`computeNaverSearchAdSpendHistorySummary_()`)
+ * 가 이 "조회 기간 초과"(`statusCode===400 && body.code===11004`)는 알려진
+ * 제약으로 보고 그 달만 건너뛰고, 그 외 에러는 그대로 던져 전체 갱신을
+ * 중단시킨다(진짜 실패를 조용히 묻지 않기 위함).
+ *
+ * @param {number} [maxAttempts]  기본 3회(429/5xx에만 적용)
+ * ==========================================================
+ */
+function callNaverSearchAdApiWithRetry_(method, uri, queryParams, maxAttempts){
+
+  const attempts = maxAttempts || 3;
+  let lastResult = null;
+
+  for(let attempt = 1; attempt <= attempts; attempt++){
+
+    lastResult = callNaverSearchAdApi_(method, uri, queryParams);
+
+    if(lastResult.statusCode === 200) return lastResult;
+
+    // 429(rate limit)/5xx(서버 오류)만 재시도 대상 — 그 외 4xx(예: 400 잘못된
+    // 요청)는 재시도해도 동일하게 실패하는 요청 자체의 문제라 즉시 중단.
+    const isRetryable = lastResult.statusCode === 429 || lastResult.statusCode >= 500;
+
+    if(!isRetryable || attempt === attempts) break;
+
+    Utilities.sleep(1000 * attempt);
+
+  }
+
+  const error = new Error(
+    "Naver Search Ad API 호출 실패(" + method + " " + uri + ", statusCode=" +
+    lastResult.statusCode + "): " + JSON.stringify(lastResult.body)
+  );
+
+  error.statusCode = lastResult.statusCode;
+  error.body = lastResult.body;
+
+  throw error;
 
 }
 
@@ -535,7 +620,7 @@ function testComputeNaverSearchAdSpendByFYMonthSegment(){
  */
 function fetchNaverSearchAdCampaignMap_(){
 
-  const result = callNaverSearchAdApi_("GET", "/ncc/campaigns", {});
+  const result = callNaverSearchAdApiWithRetry_("GET", "/ncc/campaigns", {});
   const map = {};
 
   if(Array.isArray(result.body)){
@@ -559,7 +644,7 @@ function fetchNaverSearchAdStats_(ids, since, until){
 
   if(!ids || ids.length === 0) return [];
 
-  const result = callNaverSearchAdApi_("GET", "/stats", {
+  const result = callNaverSearchAdApiWithRetry_("GET", "/stats", {
     ids: ids,
     fields: JSON.stringify(["salesAmt"]),
     timeRange: JSON.stringify({ since: since, until: until })
@@ -690,6 +775,15 @@ function testGenerateCalendarMonthSequence(){
  * ACQ_REP 전체 이력 반영을 위해, 캠페인 목록은 한 번만 조회하고(API 호출
  * 절약) 시작 연/월부터 오늘이 속한 달까지 매달 /stats를 호출해 합산한다.
  *
+ * WHY (2026-08-04 — "조회 기간 초과" 달 건너뛰기)
+ * Naver Search Ad API `/stats`는 "최근 730일 이내 기간만 조회 가능"이 공식
+ * 제약(실측: 400, `{code:11004}`) — `BACKFILL_START`(2022-09)가 이 범위보다
+ * 훨씬 오래돼 매 실행마다 오래된 달에서 필연적으로 이 에러가 남(Meta는
+ * 사용자가 수동 export하는 방식이라 이 제약이 없어 같은 소급 범위를 그대로
+ * 가져왔던 게 원인). 이 특정 에러(알려진 플랫폼 제약, 버그 아님)만 그 달을
+ * 건너뛰고 계속 진행 — 그 외 에러(인증 실패 등 진짜 문제)는 그대로 던져
+ * 전체 갱신을 중단시킨다.
+ *
  * INPUT
  * startYear/startMonth : number  AD.NAVER_SEARCH.API.BACKFILL_START 참고
  *
@@ -712,7 +806,28 @@ function computeNaverSearchAdSpendHistorySummary_(startYear, startMonth){
   months.forEach(function(m){
 
     const range = buildCalendarMonthRange_(m.year, m.month);
-    const statsRows = fetchNaverSearchAdStats_(ids, range.since, range.until);
+
+    let statsRows;
+
+    try {
+      statsRows = fetchNaverSearchAdStats_(ids, range.since, range.until);
+    } catch(e){
+
+      if(e.statusCode === 400 && e.body && e.body.code === 11004){
+
+        Logger.log(
+          m.year + "-" + m.month + " 건너뜀(Naver Search Ad API 조회 가능 기간 " +
+          "밖 — 최근 730일 이내만 조회 가능)."
+        );
+
+        return;
+
+      }
+
+      throw e;
+
+    }
+
     const referenceDate = new Date(m.year, m.month - 1, 1);
     const monthTotals = computeNaverSearchAdSpendByFYMonthSegment_(campaignMap, statsRows, referenceDate);
 

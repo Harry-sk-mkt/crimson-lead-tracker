@@ -140,6 +140,25 @@ Pipeline P1 Target(구 코호트 딜의 이번 FY 전환분)은 이번 확장에
   같은 값이라 안전 — 위 Surprises 참고) — ACQ_REP에서도 "이번 달 리드 발굴이 목표만큼
   됐는지"를 Revenue와 나란히 보고 싶다는 사용자 요청(2026-07-30).
 
+- [x] **AH:AK 레거시 컬럼 정리(2026-08-04)** — 컬럼 위치가 O→S→AH→S로 네 번 바뀌는 동안
+      AH:AK(34, 옛 `TARGET_COLUMNS_START_COL` 값)에 남아있던 값을 코드가 정리한 적이 없어
+      죽은 데이터로 방치돼 있었음(`generateACQReport_()`는 현재 S:V만 clear/write). 사용자가
+      시트에서 직접 삭제 완료 — 코드 변경 없음(원래부터 AH:AK를 참조하는 코드가 없었음).
+- [x] **NewP1_REP Spent 소스를 Target_Engine 수동 입력 → Ad_Spend_Cache 자동 집계로 전환
+      (2026-08-04, 사용자 확정)** — "FY27 AUG Spent가 이상하다"는 리포트를 조사하다 발견:
+      `ACQ_REP`의 Spent(W열)는 이미 `readAdSpendCacheMap_()`(`AD_004_SpendCache.js`, Meta+
+      Naver Search+Kakao Channel 합산 자동 집계)를 쓰는데, `NewP1_REP`의 Spent는 이 캐시가
+      생기기 하루 전(2026-07-30)에 추가돼 여전히 `Target_Engine` Block 0 수동 입력
+      (`computeReportTargetLookup_().spent`)을 그대로 쓰고 있었음 — 두 리포트가 서로 다른
+      Spent 소스를 쓰던 배선 누락. `40_NewP1Report.js`(v1.4.0)의 `generateNewP1Report_()`가
+      `readAdSpendCacheMap_()`를 직접 조회하도록 변경(key 포맷 `FY|Month|Segment` 동일해 그대로
+      대체 가능, ACQ_REP과 동일하게 캐시만 읽어 Simple Trigger 권한 제약도 안전). CPNP1(실적)도
+      자동 집계 지출 기준으로 재계산됨. `computeReportTargetLookupFromInputs_()`
+      (90_TargetEngine.js)의 `.spent` 출력 자체는 손대지 않음 — Target_Engine 내부 CPNP1
+      Benchmark 도출 체인이 여전히 `inputs.monthlySegmentSpent`(Block 0 수동 입력)를 직접
+      쓰고 있어 이번 변경과 무관. `node --check`/naming/version-header/중복선언 검사 통과,
+      `clasp push` 완료. 실 시트 재검증(Generate 재실행 후 값 확인)은 사용자 진행 예정.
+
 ## Outcomes & Retrospective
 
 (작업 완료 시 작성)

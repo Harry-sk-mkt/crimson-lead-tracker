@@ -19,9 +19,18 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-04)
+ * - **Actual CPNP1 소스를 Target_Engine 수동 입력 → Ad_Spend_Cache 자동 집계로
+ *   전환**(사용자 확정 — NewP1_REP과 동일 전환 이유). `computeTargetActualCPNP1ByGroupMonth_()`
+ *   가 `readTargetEngineInputs_(engineSheet).monthlySegmentSpent` 대신
+ *   `readAdSpendCacheMap_()`(AD_004_SpendCache.js)를 조회하도록 재작성 — 부수적으로
+ *   반환 키에 실제 연도(`getFiscalYear(weekStart)`)를 명시적으로 매칭시켜, 기존
+ *   "group|month"(연도 구분 없음, Target_Engine이 어느 FY로 설정돼 있든 그 값을
+ *   그대로 씀) 구조의 잠재적 취약점도 함께 해소. 외부 반환 키 포맷("group|month")과
+ *   호출부(`generateTargetReport_()`/`updateTargetReportActuals_()`)는 변경 없음.
  * v1.7.0 (2026-07-30)
  * - 버그 수정(사용자 리포트: "AH:AK 값이 예전 리포트의 잔재로 보인다") — `clearTargetReportArea_()`
  *   가 실제 헤더 폭(33컬럼)만큼만 지워서 옛 7컬럼/세그먼트 구조(38컬럼) 때의 34~38열
@@ -302,22 +311,31 @@ function computeTargetActualP1ByWeek_(weekStarts){
 
 /**
  * ==========================================================
- * Compute Actual CPNP1 By Group/Month (세그먼트별 월별 수동 Spent 기반 — 2026-07-30)
+ * Compute Actual CPNP1 By Group/Month (Ad_Spend_Cache 자동 집계 기반 — 2026-08-04)
  *
  * WHY
- * 2026-07-30 세그먼트 분해로 Actual Spent/CPNP1의 원천이 "채널시트 주간 정확
- * 매칭"(buildCombinedWeeklySpentByDateKey_(), 3그룹 전용이라 5세그먼트에 못 씀)
- * 에서 "Target_Engine Block 0의 세그먼트별 월별 수동 Spent 입력"으로 바뀌었다.
- * 수동 입력은 월 단위라 주 단위로 쪼갤 근거가 없으므로, Target CPNP1(월별
- * 값을 그 달의 모든 주에 동일하게 반복 표시, computeTargetDerivationRows_()의
- * weeklyCPNP1Target 참고)과 동일한 패턴을 따른다 — 그 달의 Actual CPNP1도
- * 모든 주에 같은 값(월 Spent ÷ 그 달 Actual P1 합계)을 반복 표시한다.
- * 기존의 "8/3 cutover 이전 주는 공란" 게이트는 채널시트의 주간 그레인
- * 제약 때문이었으므로(월 데이터에는 해당 없음) 더 이상 적용하지 않는다.
+ * 2026-07-30 세그먼트 분해 당시엔 Actual Spent/CPNP1의 원천이 "채널시트 주간
+ * 정확 매칭"(buildCombinedWeeklySpentByDateKey_(), 3그룹 전용이라 5세그먼트에
+ * 못 씀)에서 "Target_Engine Block 0의 세그먼트별 월별 수동 Spent 입력"으로
+ * 바뀌었으나, 이는 그 시점에 5세그먼트를 커버하는 자동 집계 소스가 없었던
+ * 임시방편이었다. **2026-08-04, `Ad_Spend_Cache`(AD_004_SpendCache.js, Meta+
+ * Naver Search+Kakao Channel 합산, `getBusinessSegment()`로 CONFIG.TARGET.GROUP_ORDER와
+ * 동일한 5세그먼트로 이미 분류됨)로 전환** — ACQ_REP/NewP1_REP과 동일한 자동
+ * 집계 소스로 통일(사용자 확정, NewP1_REP 전환과 같은 이유: 수동 입력이 실제
+ * 캠페인 지출과 어긋남). 부수적으로, 기존 방식은 "group|month" 키에 실제
+ * 연도 구분이 없어 Target_Engine이 어느 FY로 설정돼 있든 그 값을 그대로
+ * 갖다 썼는데(Target_REP은 항상 Target_Engine 한 사이클 분량만 생성하므로
+ * 실제로 어긋난 적은 없었지만 구조적으로 취약했음), 이번 전환으로 각 주의
+ * 실제 캘린더 연도(getFiscalYear())를 그대로 키에 써서 이 취약점도 없앤다.
+ * 수동 입력은 어차피 월 단위라 주 단위로 쪼갤 근거가 없었던 것처럼, 자동
+ * 집계도 월 단위 합계이므로 Target CPNP1과 동일한 패턴을 그대로 따른다 — 그
+ * 달의 Actual CPNP1을 모든 주에 같은 값(월 Spent ÷ 그 달 Actual P1 합계)으로
+ * 반복 표시한다.
  *
  * @param {Array<Date>} weekStarts     리포트에 나열된 모든 Week Start
  * @param {Object} actualP1ByWeek      computeTargetActualP1ByWeek_() 결과
- * @return {Object}  "group|month" -> ratio (그 달 Actual P1 합계가 0이면 키 없음)
+ * @return {Object}  "group|month" -> ratio (그 달 Actual P1 합계가 0이거나
+ *   Ad_Spend_Cache에 그 FY|Month|Segment 키가 없으면 키 없음)
  * ==========================================================
  */
 function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
@@ -326,20 +344,19 @@ function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
     return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
   };
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
-
-  if(!engineSheet) return {};
-
-  const inputs = readTargetEngineInputs_(engineSheet);
+  const spendMap = readAdSpendCacheMap_();
 
   const actualP1ByGroupMonth = {};
+  const fyByMonth = {};
 
   weekStarts.forEach(function(weekStart){
 
     if(!(weekStart instanceof Date)) return;
 
     const month = getFiscalMonthLabel(weekStart);
+
+    fyByMonth[month] = Number(getFiscalYear(weekStart).replace("FY", ""));
+
     const counts = actualP1ByWeek[toKey(weekStart)] || {};
 
     CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
@@ -355,22 +372,17 @@ function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
 
   const ratios = {};
 
-  CONFIG.TARGET.GROUP_ORDER.forEach(function(group){
+  Object.keys(actualP1ByGroupMonth).forEach(function(groupMonthKey){
 
-    const monthlySpent = inputs.monthlySegmentSpent[group] || {};
+    const sepIndex = groupMonthKey.indexOf("|");
+    const group = groupMonthKey.slice(0, sepIndex);
+    const month = groupMonthKey.slice(sepIndex + 1);
+    const p1Count = actualP1ByGroupMonth[groupMonthKey];
+    const spendKey = fyByMonth[month] + "|" + month + "|" + group;
 
-    Object.keys(actualP1ByGroupMonth).forEach(function(groupMonthKey){
-
-      if(groupMonthKey.indexOf(group + "|") !== 0) return;
-
-      const month = groupMonthKey.slice(group.length + 1);
-      const p1Count = actualP1ByGroupMonth[groupMonthKey];
-
-      if(p1Count > 0 && Object.prototype.hasOwnProperty.call(monthlySpent, month)){
-        ratios[groupMonthKey] = monthlySpent[month] / p1Count;
-      }
-
-    });
+    if(p1Count > 0 && spendMap.hasOwnProperty(spendKey)){
+      ratios[groupMonthKey] = spendMap[spendKey] / p1Count;
+    }
 
   });
 

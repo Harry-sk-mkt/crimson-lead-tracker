@@ -213,8 +213,10 @@
       `runRefreshMetaSpendCache()`(AD_002_Meta.js) 실행 → ACQ_REP Generate 재체크 →
       W열에 Meta Spent 값 정상 표시 확인. Meta 파일럿(Raw→Cache→ACQ_REP 소비까지) 전체
       배선 실사용 검증 끝남.
-- [ ] Meta_Raw 갱신 시마다 `runRefreshMetaSpendCache()`를 매번 수동 실행해야 하는 번거로움
-      — 자동 실행 체인에 연결할지는 추후 결정(지금은 수동, 임의로 자동 연결하지 말 것)
+- [x] **자동 연결 완료(2026-08-04)** — `runRefreshMetaSpendCache()`는 이미 `AD_004_SpendCache.js`
+      로 통합되며 제거됐고(위 2026-07-31 기록 참고), 그 후신인 `refreshAdSpendCache_()`가
+      이제 배경 파이프라인 체인에 자동 연결됨(`refreshCampaignSpend_()`, 아래 2026-08-04
+      기록 참고) — 더 이상 수동 실행 불필요.
 - [ ] Other 세그먼트 육안 검토(나중에, 급하지 않음)
 - [ ] Meta 캠페인명 → Marketo Program명 매핑(Events_OPS 자동화용, 별도 작업)
 - [ ] Target_Engine 연결은 8개 플랫폼 다 자동화된 뒤 재검토(보류, 임의로 처리하지 말 것)
@@ -363,11 +365,16 @@
       2개 항목은 실질적으로 Kakao Moments API 연동 1개로 통합됨(Kakao Channel은 더 이상
       추가 작업 대상 아님 — 과거 채널 운영 기간의 과거 데이터를 소급할지는 미정, 필요시 별도
       확인).
-- [ ] **다음 단계(결정 필요)**: (1) 매달 자동 갱신할지(트리거 연결, OpenItems 9번
-      Backend 비동기화 논의와 연관) — API 방식(Naver Search/향후 Kakao Moments)이라 Meta보다
-      자동화 난이도가 낮음(외부 시트 붙여넣기 자체가 없음). (2) 나머지 플랫폼 확장 순서 —
-      Naver GFA/Google Search/Google Display/Naver Offline Cafe/Kakao Moments(API 가능
-      확인됨, 위 항목 참고) — Meta는 이미 완료, Kakao Channel은 목록에서 제외.
+- [x] **자동 갱신 결정 완료(2026-08-04)** — `refreshAdSpendCache_()`를 OpenItems #9 배경
+      파이프라인 체인(`08_PipelineAsync.js`, `runLeadsPipelineTail()`/`runMTAPipelineTail()`)에
+      `refreshCampaignSpend_()`로 편입(사용자 확정 — "API뿐만 아니라 캠페인 스펜딩 전체를
+      자동으로 호출하자"). `refreshReportGenerate_()`와 동일하게 실패 격리(try/catch, 비필수).
+      `refreshTargetActuals_()`보다 먼저 실행되도록 순서 배치(그 함수가 이 캐시를 읽으므로,
+      2026-08-04 자동 집계 전환 참고). `08_PipelineAsync.js` v1.6.0, 검사 통과, `clasp push`
+      완료 — 이제 Leads/MTA 파이프라인이 백그라운드로 돌 때마다 캠페인 지출도 함께 최신화됨.
+- [ ] **다음 단계(결정 필요)**: 나머지 플랫폼 확장 순서 — Naver GFA/Google Search/Google
+      Display/Naver Offline Cafe/Kakao Moments(API 가능 확인됨, 위 항목 참고) — Meta는 이미
+      완료, Kakao Channel은 목록에서 제외.
 - [ ] **미해결 — Meta API 재도입(2026-07-31, 보류)**: 사용자가 Meta API 권한이 곧 reinstate될
       예정이라고 알려옴. 필요 사항(Meta측: Marketing API 앱+`ads_read` 권한+System User
       Access Token+Ad Account ID / 프로젝트측: 신규 API 연동 파일, 자격증명 Script Properties
@@ -484,6 +491,23 @@
 - [x] **실 시트 검증 완료(2026-07-31, 사용자 확인)** — `runSyncKakaoChannelPerformanceToAD()`
       최초 실행 후 `KakaoSMS_Raw` 탭 정상 생성, PIC에 수동 입력 후 재실행해도
       append-only 동작으로 기존 값 보존 확인.
+
+- [x] **버그 발견·수정 — Naver Search 히스토리 백필이 "730일 조회 제약" 때문에 매번 통째로
+      실패(2026-08-04)** — Target_REP/ACQ_REP에서 "Search 세그먼트가 통째로 비어있다"는 사용자
+      리포트로 발견. `runComputeNaverSearchAdSpendForMonth()`(단일 달)는 정상
+      (`26|JUL|Search: 3860190`)이라 API 인증/서명/`getBusinessSegment()` 분류 로직 문제는
+      아님을 먼저 확인. 1차 수정으로 `callNaverSearchAdApiWithRetry_()`(재시도)를 추가하자 그제서야
+      실제 에러가 드러남: `statusCode=400, {code:11004,message:"데이터는 최근 730일 이내
+      기간에서만 조회할 수 있습니다."}` — **Naver Search Ad API `/stats`의 공식 제약(최근
+      730일)**이고, `BACKFILL_START`(2022-09, Meta와 동일 소급 범위를 그대로 가져온 값)가
+      이보다 훨씬 오래돼 매번 필연적으로 발생하던 것(rate limit 추정은 틀렸음 — 재시도로는
+      해결 안 되는 영구적 제약). **최종 수정**: `callNaverSearchAdApiWithRetry_()`가 429/5xx만
+      재시도(그 외 4xx는 즉시 실패, Error에 `statusCode`/`body` 첨부)하도록 변경,
+      `computeNaverSearchAdSpendHistorySummary_()`가 이 특정 에러(`statusCode===400 &&
+      body.code===11004`, 알려진 플랫폼 제약)만 그 달을 건너뛰고 계속 진행, 그 외 에러는 그대로
+      던져 전체 갱신 중단(`AD_003_NaverSearch.js` v2.4.0). `node --check`/naming/version-header/
+      중복선언 검사 통과, `clasp push` 완료. 사용자가 `runRefreshAdSpendCache()` 재실행해서
+      Search 세그먼트 정상 채워지는지 확인 예정.
 
 ## Surprises & Discoveries
 

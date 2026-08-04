@@ -22,9 +22,19 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-04)
+ * - 신규 `refreshCampaignSpend_()` — `refreshAdSpendCache_()`(AD_004_SpendCache.js,
+ *   Meta+Naver Search+Kakao Channel 합산 캐시)를 배경 파이프라인 체인에 편입(사용자
+ *   요청 — "API뿐만 아니라 캠페인 스펜딩 전체를 자동으로 호출하자", Naver Search
+ *   730일 조회 제약 버그 수정 직후). `refreshReportGenerate_()`와 동일하게 실패를
+ *   Logger에만 남기고 던지지 않음(비필수 — Ad Spend는 Leads_OPS/MTA_Master 핵심
+ *   데이터와 무관한 보조 지표). `refreshTargetActuals_()`(ACQ_REP/NewP1_REP/
+ *   Target_REP의 Spent/CPNP1이 이 캐시를 읽음, 2026-08-04 자동 집계 전환)보다
+ *   먼저 실행되도록 `runLeadsPipelineTail()`에 추가, `runMTAPipelineTail()`은
+ *   `syncMTAFunnelToOPS_()`(내부에서 `refreshTargetActuals_()`를 호출) 앞에 추가.
  * v1.5.0 (2026-08-04)
  * - 신규 `buildReadmeGuideRows_()`(순수)/`runSetupReadmeGuide()`(수동 실행 전용) —
  *   README 탭에 비개발자 실무자용 가이드 섹션(평소 할 일/진행상태 확인법/기간 변경법/
@@ -407,6 +417,44 @@ function refreshReportGenerate_(){
 
 /**
  * ==========================================================
+ * Refresh Campaign Spend (Ad_Spend_Cache — Meta+Naver Search+Kakao Channel)
+ *
+ * WHY
+ * `refreshAdSpendCache_()`(AD_004_SpendCache.js)는 원래 ACQ_REP/NewP1_REP/
+ * Target_REP Generate·Refresh 전에 사용자가 매번 직접 Run해야 하는 수동
+ * 단계였음 — Naver Search "730일 조회 제약" 버그를 고친 직후 사용자가
+ * 백그라운드 체인에 포함시켜 완전 자동화해달라고 요청(2026-08-04). Meta_Raw
+ * (수기 붙여넣기)/Naver Search API/Kakao Channel(별도 스프레드시트 수기 시트)을
+ * 전부 읽어야 해 Simple Trigger로는 못 돌리고, 이 설치형 백그라운드 트리거의
+ * Full Authorization이 필요함(파일 상단 WHY와 동일 이유).
+ *
+ * `refreshTargetActuals_()`/`refreshReportGenerate_()`(ACQ_REP/NewP1_REP/
+ * Target_REP의 Spent/CPNP1)가 전부 이 캐시를 읽으므로(2026-08-04 자동 집계
+ * 전환), 두 파이프라인 테일 모두에서 그 단계들보다 **먼저** 호출해야 함
+ * (runLeadsPipelineTail()/runMTAPipelineTail() 호출 순서 참고).
+ *
+ * 실패 격리(refreshReportGenerate_()와 동일 원칙) — Naver Search API 인증
+ * 만료 등 외부 요인으로 실패해도 Logger에만 남기고 던지지 않음. Ad Spend는
+ * Leads_OPS/MTA_Master 핵심 데이터와 무관한 보조 지표(Spent/CPNP1)라, 이
+ * 실패로 6분짜리 핵심 데이터 refresh 전체를 재실행하게 만들 필요가 없음.
+ * ==========================================================
+ */
+function refreshCampaignSpend_(){
+
+  try{
+    refreshAdSpendCache_();
+  } catch(err){
+    Logger.log(
+      "refreshCampaignSpend_: Ad_Spend_Cache 갱신 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * ==========================================================
  * Run Leads Pipeline Tail
  *
  * 트리거 대상(schedulePipelineTail_("runLeadsPipelineTail")) + 수동 재실행
@@ -449,6 +497,7 @@ function runLeadsPipelineTail(){
     advancePipelineStage_(type, state, "refreshBOFUEngine_", refreshBOFUEngine_);
     advancePipelineStage_(type, state, "refreshSearchEngine_", refreshSearchEngine_);
     advancePipelineStage_(type, state, "refreshContentEngine_", refreshContentEngine_);
+    advancePipelineStage_(type, state, "refreshCampaignSpend_", refreshCampaignSpend_);
     advancePipelineStage_(type, state, "refreshTargetActuals_", refreshTargetActuals_);
     advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
     advancePipelineStage_(type, state, "refreshReportGenerate_", refreshReportGenerate_);
@@ -496,7 +545,10 @@ function runLeadsPipelineTail(){
  * 트리거 대상(schedulePipelineTail_("runMTAPipelineTail")) + 수동 재실행
  * 진입점. syncMTAFunnelToOPS_()가 이미 내부에서 ACQ/NewP1/Events/BOFU/
  * Search/Content Engine + Target Actuals refresh 전체를 실행하므로
- * 여기서는 그 함수 하나만 단계로 감싼다(09_MTAFunnelSync.js 수정 불필요).
+ * 여기서는 그 함수 하나만 단계로 감싼다(09_MTAFunnelSync.js 수정 불필요) —
+ * 단, `refreshCampaignSpend_()`(Ad_Spend_Cache)는 그 안의 `refreshTargetActuals_()`
+ * 가 참조하므로 반드시 그보다 먼저(= syncMTAFunnelToOPS_() 호출 전)
+ * 실행해야 함(2026-08-04).
  * ==========================================================
  */
 function runMTAPipelineTail(){
@@ -524,6 +576,7 @@ function runMTAPipelineTail(){
       runAutoDeleteExactDuplicateTouchRows
     );
 
+    advancePipelineStage_(type, state, "refreshCampaignSpend_", refreshCampaignSpend_);
     advancePipelineStage_(type, state, "syncMTAFunnelToOPS_", syncMTAFunnelToOPS_);
     advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
     advancePipelineStage_(type, state, "refreshReportGenerate_", refreshReportGenerate_);
