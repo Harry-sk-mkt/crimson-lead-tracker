@@ -9,9 +9,12 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.26.0
+ * v1.27.0
  *
  * Change Log
+ * v1.27.0 (2026-08-05)
+ * - `PIPELINE.STATUS_COLUMNS` 신규 — Pipeline Status 표 레이아웃 전환(행=단계 →
+ *   컬럼=단계, 사용자 요청) 지원용. 상세: 08_PipelineAsync.js 참고.
  * v1.26.0 (2026-08-05)
  * - `PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분) 신규 — `08_PipelineAsync.js` v1.7.0의
  *   죽은 락 자동 해제(self-heal) 버그 수정용. 상세: 08_PipelineAsync.js 참고.
@@ -313,7 +316,26 @@ const CONFIG = {
     LOCK_STALE_THRESHOLD_MS: 30 * 60 * 1000,
 
     STATUS_ANCHOR_ROW: 1,
-    STATUS_ANCHOR_COL: 1
+    STATUS_ANCHOR_COL: 1,
+
+    // **2026-08-05 신규** — Pipeline Status 표 레이아웃을 "단계=행" → "단계=컬럼"으로
+    // 전환(사용자 요청, README에서 New Leads/MTA Leads 두 행이 각 실무 영역(Master
+    // Update~Target_REP)을 컬럼으로 갖도록). key는 08_PipelineAsync.js의
+    // state.stages 객체 키와 반드시 일치해야 함(buildPipelineStatusGrid_() 참고).
+    // 순서 = 실제 파이프라인 실행 순서(런타임 완료 시점 기준, runLeadsPipelineTail()/
+    // runMTAPipelineTail() 참고).
+    STATUS_COLUMNS: [
+      { KEY: "masterUpdate", HEADER: "Master Update" },
+      { KEY: "leadsOps", HEADER: "Leads_OPS" },
+      { KEY: "eventsOps", HEADER: "Events_OPS" },
+      { KEY: "bofuOps", HEADER: "BOFU_OPS" },
+      { KEY: "searchOps", HEADER: "Search_OPS" },
+      { KEY: "contentOps", HEADER: "Content_OPS" },
+      { KEY: "campaignSpend", HEADER: "Campaign Spend" },
+      { KEY: "acqRep", HEADER: "ACQ_REP" },
+      { KEY: "newP1Rep", HEADER: "NewP1_REP" },
+      { KEY: "targetRep", HEADER: "Target_REP" }
+    ]
 
   },
 

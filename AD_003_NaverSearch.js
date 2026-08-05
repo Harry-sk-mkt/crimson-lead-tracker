@@ -44,9 +44,49 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.4.0
+ * v2.7.0
  *
  * Change Log
+ * v2.7.0 (2026-08-05)
+ * - 신규 `runShowNaverSearchAdCampaignStatsCache()`(수동 실행, 진단용) —
+ *   사용자가 Google Sheets UI "모든 시트" 목록에서 `Naver_Search_Campaign_
+ *   Stats_Cache`(hideSheet()로 매번 숨겨짐)를 못 찾겠다고 해서, 코드로
+ *   존재 여부 확인 + 강제 공개하는 함수 추가.
+ * v2.6.0 (2026-08-05)
+ * - **버그 수정(실측)** — `runRefreshNaverSearchAdCampaignStatsCache()` 최초
+ *   실행에서 `{code:11004, message:"데이터는 92일 이내 기간에서만 사용
+ *   가능합니다."}` 에러 발생. impCnt/clkCnt 필드는 salesAmt 전용 조회(730일
+ *   허용)와 별개로 92일 제약이 있음이 확인됨 — 애초 729일로 가정했던 게
+ *   틀렸음. `computeNaverSearchAdCampaignStatsFetchWindow_()` 시그니처를
+ *   `initialLookbackDays` → `maxRangeDays`로 교체, "최초 실행" 특수 케이스를
+ *   없애고 **항상** `since`를 `[today-maxRangeDays+1, today]` 범위로 사전
+ *   clamp(오래 못 돌다 재개되는 경우도 동일 로직으로 커버, 사후 재시도
+ *   불필요). `AD_001_Config.js`의 `INITIAL_LOOKBACK_DAYS`(729)도
+ *   `MAX_QUERY_RANGE_DAYS`(90)로 교체. 테스트에 `staleResume` 케이스 추가.
+ * v2.5.0 (2026-08-05)
+ * - **신규 — Search_OPS Campaign/Impressions/Link clicks 자동화(사용자 요청)**.
+ *   기존 Spent 캐시(`computeNaverSearchAdSpendHistorySummary_()`, 월별 FY|Month|
+ *   Segment 재계산 방식)와 달리, 캠페인별 Impressions/Link clicks는 **누적
+ *   캐시**로 신규 설계 — Naver `/stats`가 최근 730일 이전 데이터를 아예 거부해
+ *   매번 재계산하면 오래된 실적이 사라지는 문제를 피하기 위해, "지난 갱신
+ *   이후~오늘"만 조회해 기존 캐시(`Naver_Search_Campaign_Stats_Cache` 시트)에
+ *   계속 더한다. 신규 순수 함수: `todayDateString_()`/`shiftDateString_()`
+ *   (yyyy-MM-dd 문자열 산술, `new Date(dateStr)` 직접 파싱 시 타임존 버그
+ *   위험 회피), `computeNaverSearchAdCampaignStatsFetchWindow_()`(캐시
+ *   상태로부터 이번에 조회할 since/until/shouldFetch 결정 — 같은 날 재실행
+ *   시 중복 집계 방지), `accumulateNaverSearchAdCampaignStats_()`(기존
+ *   누적치 + 이번 구간 impCnt/clkCnt 병합). 신규 IO:
+ *   `fetchNaverSearchAdImpressionsClicksStats_()`(salesAmt 전용
+ *   `fetchNaverSearchAdStats_()`는 그대로 둠), `readNaverSearchAdCampaignStatsCache_()`/
+ *   `writeNaverSearchAdCampaignStatsCache_()`, 오케스트레이션
+ *   `refreshNaverSearchAdCampaignStatsCache_()` + 수동 실행 진입점
+ *   `runRefreshNaverSearchAdCampaignStatsCache()`. `08_PipelineAsync.js`에
+ *   배선(매 Leads/MTA 백그라운드 실행마다 자동), `73_Search_Merge.js`가
+ *   이 캐시를 읽어 Search_OPS Campaign/Impressions/Link clicks에 매칭.
+ *   Reach는 Naver API에 해당 지표가 없어 이번 자동화 대상에서 제외(계속
+ *   수동 입력). 신규 테스트 3개(`testShiftDateString`/
+ *   `testComputeNaverSearchAdCampaignStatsFetchWindow`/
+ *   `testAccumulateNaverSearchAdCampaignStats`) 전부 PASS.
  * v2.4.0 (2026-08-04)
  * - **진짜 원인 확정 — "재시도해도 안 되는" 400 에러였음**. v2.3.0에서 추가한
  *   재시도 로직이 처음으로 에러를 드러내 확인: `statusCode=400,
@@ -838,5 +878,458 @@ function computeNaverSearchAdSpendHistorySummary_(startYear, startMonth){
   });
 
   return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * Today Date String (순수 함수, yyyy-MM-dd)
+ *
+ * WHY
+ * `buildCalendarMonthRange_()`와 동일한 이유로 Date 객체를 로컬 연/월/일
+ * 컴포넌트 읽기 용도로만 쓰고 문자열은 직접 조립 — 외부 스프레드시트 셀을
+ * 읽는 게 아니라 스크립트 실행 시각 자체이므로 타임존 버그 클래스와 무관.
+ * ==========================================================
+ */
+function todayDateString_(){
+
+  const now = new Date();
+
+  function pad2(n){ return (n < 10 ? "0" : "") + n; }
+
+  return now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate());
+
+}
+
+
+/**
+ * ==========================================================
+ * Shift Date String (순수 함수, "yyyy-MM-dd" ± N일)
+ *
+ * WHY
+ * 문자열을 `new Date(dateStr)`로 직접 파싱하면 UTC 자정으로 해석돼(로컬
+ * 타임존에 따라 하루 밀리는) 이 프로젝트가 반복적으로 겪은 타임존 버그
+ * 클래스에 해당 — 연/월/일을 직접 분해해 `new Date(y, m, d)`(로컬 자정)로
+ * 만든 뒤 setDate()로 이동, 다시 로컬 컴포넌트로 조립해서 반환.
+ *
+ * INPUT
+ * dateStr : string  "yyyy-MM-dd"
+ * deltaDays : number  양수/음수 모두 허용
+ *
+ * OUTPUT
+ * string  "yyyy-MM-dd"
+ *
+ * TEST
+ * testShiftDateString() 참고
+ * ==========================================================
+ */
+function shiftDateString_(dateStr, deltaDays){
+
+  const parts = dateStr.split("-").map(Number);
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+
+  d.setDate(d.getDate() + deltaDays);
+
+  function pad2(n){ return (n < 10 ? "0" : "") + n; }
+
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — shiftDateString_()
+ * ==========================================================
+ */
+function testShiftDateString(){
+
+  const pass =
+    shiftDateString_("2026-08-05", 1) === "2026-08-06" &&
+    shiftDateString_("2026-08-05", -1) === "2026-08-04" &&
+    shiftDateString_("2026-08-31", 1) === "2026-09-01" &&
+    shiftDateString_("2026-01-01", -1) === "2025-12-31" &&
+    shiftDateString_("2026-08-05", 0) === "2026-08-05";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Naver Search Ad Campaign Stats Fetch Window (순수 함수)
+ *
+ * WHY (2026-08-05, 누적 캐시 설계 — 사용자 확정)
+ * "지난 갱신(`lastFetchedThroughStr`) 다음날 ~ 오늘"만 조회해 기존 누적치에
+ * 더하는 방식 — 이미 캐시에 반영된 값은 절대 다시 조회할 필요가 없다.
+ *
+ * **실측 정정(2026-08-05)**: impCnt/clkCnt 필드는 salesAmt와 별개로 "최근
+ * 92일 이내"만 조회 가능함이 실 API 에러로 확인됨(`AD_001_Config.js`
+ * `NAVER_SEARCH_CAMPAIGN_STATS` 주석 참고, 애초 가정했던 730일이 아님) —
+ * `maxRangeDays`(권장 90, 92일보다 이틀 여유)로 `since`를 **항상 사전에**
+ * `[today - maxRangeDays + 1, today]` 범위 안으로 clamp한다(캐시가 없는
+ * 최초 실행이든, 오래 못 돌다가 재개되는 경우든 동일 로직 하나로 처리 —
+ * 사후 에러 캐치/재시도가 아니라 애초에 범위 초과 요청 자체를 안 만듦).
+ *
+ * 같은 날 여러 번 실행돼도(예: Leads Import 직후 MTA Import) 두 번째부터는
+ * `since`가 `until`보다 미래가 되어 `shouldFetch:false`로 스킵 — 같은 날
+ * 데이터를 중복으로 더하는 걸 방지(당일 내 증분은 다음날 반영됨, 사용자
+ * 확정 트레이드오프).
+ *
+ * INPUT
+ * lastFetchedThroughStr : string|null  마지막으로 성공 반영한 until 값
+ *   ("yyyy-MM-dd"), 최초 실행이면 null/빈 문자열
+ * todayStr : string  "yyyy-MM-dd" (todayDateString_() 결과 주입)
+ * maxRangeDays : number  API가 허용하는 최대 조회 범위(오늘 포함 일수)
+ *
+ * OUTPUT
+ * { since:string, until:string, shouldFetch:boolean }
+ *
+ * TEST
+ * testComputeNaverSearchAdCampaignStatsFetchWindow() 참고
+ * ==========================================================
+ */
+function computeNaverSearchAdCampaignStatsFetchWindow_(lastFetchedThroughStr, todayStr, maxRangeDays){
+
+  const earliestAllowed = shiftDateString_(todayStr, -(maxRangeDays - 1));
+
+  let since = lastFetchedThroughStr
+    ? shiftDateString_(lastFetchedThroughStr, 1)
+    : earliestAllowed;
+
+  if(since < earliestAllowed) since = earliestAllowed;
+
+  return { since: since, until: todayStr, shouldFetch: since <= todayStr };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNaverSearchAdCampaignStatsFetchWindow_()
+ * ==========================================================
+ */
+function testComputeNaverSearchAdCampaignStatsFetchWindow(){
+
+  const firstRun = computeNaverSearchAdCampaignStatsFetchWindow_(null, "2026-08-05", 90);
+  const firstRunPass =
+    firstRun.since === "2026-05-08" &&
+    firstRun.until === "2026-08-05" &&
+    firstRun.shouldFetch === true;
+
+  const incremental = computeNaverSearchAdCampaignStatsFetchWindow_("2026-08-04", "2026-08-05", 90);
+  const incrementalPass =
+    incremental.since === "2026-08-05" &&
+    incremental.shouldFetch === true;
+
+  const sameDayRerun = computeNaverSearchAdCampaignStatsFetchWindow_("2026-08-05", "2026-08-05", 90);
+  const sameDayRerunPass =
+    sameDayRerun.since === "2026-08-06" &&
+    sameDayRerun.shouldFetch === false;
+
+  // 오래 못 돌다가 재개되는 경우(예: 자격증명 만료 몇 달) — since가 API
+  // 허용 범위보다 오래됐으면 earliestAllowed로 clamp돼야 함(11004 재발 방지).
+  const staleResume = computeNaverSearchAdCampaignStatsFetchWindow_("2025-01-01", "2026-08-05", 90);
+  const staleResumePass =
+    staleResume.since === "2026-05-08" &&
+    staleResume.shouldFetch === true;
+
+  const pass = firstRunPass && incrementalPass && sameDayRerunPass && staleResumePass;
+
+  Logger.log(
+    "firstRun=" + JSON.stringify(firstRun) +
+    " incremental=" + JSON.stringify(incremental) +
+    " sameDayRerun=" + JSON.stringify(sameDayRerun) +
+    " staleResume=" + JSON.stringify(staleResume)
+  );
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Accumulate Naver Search Ad Campaign Stats (순수 함수)
+ *
+ * WHY
+ * 기존 누적 캐시(`existingTotals`) 위에 이번 조회 구간의 impCnt/clkCnt를
+ * 캠페인 "이름"(id→name은 campaignMap으로 조인) 기준으로 더한다. 입력을
+ * 변형하지 않고 새 객체를 반환.
+ *
+ * INPUT
+ * existingTotals : Object  {campaignName: {impressions, clicks}}
+ * campaignMap : Object  {nccCampaignId: name}
+ * statsRows : Array<{id, impCnt, clkCnt}>
+ *
+ * OUTPUT
+ * Object  {campaignName: {impressions, clicks}}  (새 객체)
+ *
+ * TEST
+ * testAccumulateNaverSearchAdCampaignStats() 참고
+ * ==========================================================
+ */
+function accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, statsRows){
+
+  const totals = {};
+
+  Object.keys(existingTotals || {}).forEach(function(name){
+    totals[name] = {
+      impressions: (existingTotals[name] && existingTotals[name].impressions) || 0,
+      clicks: (existingTotals[name] && existingTotals[name].clicks) || 0
+    };
+  });
+
+  (statsRows || []).forEach(function(row){
+
+    const name = campaignMap[row.id];
+
+    if(!name) return;
+
+    if(!totals[name]) totals[name] = { impressions: 0, clicks: 0 };
+
+    totals[name].impressions += Number(row.impCnt) || 0;
+    totals[name].clicks += Number(row.clkCnt) || 0;
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — accumulateNaverSearchAdCampaignStats_()
+ * ==========================================================
+ */
+function testAccumulateNaverSearchAdCampaignStats(){
+
+  const existingTotals = {
+    "2025-07-KOR-Naver SA Brand": { impressions: 100, clicks: 10 }
+  };
+
+  const campaignMap = {
+    "cmp-001": "2025-07-KOR-Naver SA Brand",
+    "cmp-002": "2025-07-KOR-Naver SA ECL"
+  };
+
+  const statsRows = [
+    { id: "cmp-001", impCnt: 50, clkCnt: 5 },
+    { id: "cmp-002", impCnt: 20, clkCnt: 2 },
+    { id: "cmp-999", impCnt: 999, clkCnt: 999 } // campaignMap에 없음 — 무시돼야 함
+  ];
+
+  const result = accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, statsRows);
+
+  const pass =
+    result["2025-07-KOR-Naver SA Brand"].impressions === 150 &&
+    result["2025-07-KOR-Naver SA Brand"].clicks === 15 &&
+    result["2025-07-KOR-Naver SA ECL"].impressions === 20 &&
+    result["2025-07-KOR-Naver SA ECL"].clicks === 2 &&
+    Object.keys(result).length === 2 &&
+    existingTotals["2025-07-KOR-Naver SA Brand"].impressions === 100; // 입력 불변 확인
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Fetch NaverSA Impressions/Clicks Stats (IO 래퍼)
+ *
+ * WHY
+ * `fetchNaverSearchAdStats_()`(salesAmt 전용, Ad_Spend_Cache 파이프라인
+ * 소유)는 건드리지 않고 별도 함수로 분리 — 캠페인 통계 캐시가 요청하는
+ * 필드(impCnt/clkCnt)가 다르고, 실패 시 처리 방식(호출부가 730일 제약과
+ * 무관하도록 설계돼 있어 굳이 11004 특수 처리 불필요)도 다름.
+ * ==========================================================
+ */
+function fetchNaverSearchAdImpressionsClicksStats_(ids, since, until){
+
+  if(!ids || ids.length === 0) return [];
+
+  const result = callNaverSearchAdApiWithRetry_("GET", "/stats", {
+    ids: ids,
+    fields: JSON.stringify(["impCnt", "clkCnt"]),
+    timeRange: JSON.stringify({ since: since, until: until })
+  });
+
+  return (result.body && Array.isArray(result.body.data)) ? result.body.data : [];
+
+}
+
+
+/**
+ * ==========================================================
+ * Campaign Stats Cache Sheet IO (읽기/쓰기)
+ *
+ * WHY
+ * Ad_Spend_Cache/Search_Engine과 동일 패턴(메인 스프레드시트 안 숨김
+ * 시트) — Naver API 자격증명 없이도(Simple Trigger 등) 캐시된 값만
+ * 읽을 수 있게 분리.
+ * ==========================================================
+ */
+const NAVER_CAMPAIGN_STATS_CACHE_HEADERS = ["Campaign Name", "Impressions", "Link Clicks"];
+
+function readNaverSearchAdCampaignStatsCache_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET);
+
+  const map = {};
+
+  if(!sheet) return map;
+
+  const values = sheet.getDataRange().getValues();
+
+  for(let i = 1; i < values.length; i++){
+
+    const name = String(values[i][0] || "").trim();
+
+    if(!name) continue;
+
+    map[name] = {
+      impressions: Number(values[i][1]) || 0,
+      clicks: Number(values[i][2]) || 0
+    };
+
+  }
+
+  return map;
+
+}
+
+
+function writeNaverSearchAdCampaignStatsCache_(totals){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, NAVER_CAMPAIGN_STATS_CACHE_HEADERS.length)
+    .setValues([NAVER_CAMPAIGN_STATS_CACHE_HEADERS]);
+
+  const names = Object.keys(totals);
+
+  if(names.length > 0){
+
+    const rows = names.map(function(name){
+      return [name, totals[name].impressions, totals[name].clicks];
+    });
+
+    sheet.getRange(2, 1, rows.length, NAVER_CAMPAIGN_STATS_CACHE_HEADERS.length)
+      .setValues(rows);
+
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh Naver Search Ad Campaign Stats Cache (IO 오케스트레이션)
+ *
+ * WHY
+ * Search_OPS의 Campaign/Impressions/Link clicks를 자동으로 채우기 위한
+ * 진입점(사용자 요청, 2026-08-05) — `08_PipelineAsync.js`의
+ * `refreshNaverSearchCampaignStats_()`가 매 Leads/MTA 백그라운드 실행마다
+ * 호출, `72_Search_Build.js`의 `buildSearchOPS()`가 이 함수가 채워둔
+ * 캐시(`readNaverSearchAdCampaignStatsCache_()`)를 읽어 매칭.
+ * ==========================================================
+ */
+function refreshNaverSearchAdCampaignStatsCache_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const propertyKey = AD.NAVER_SEARCH_CAMPAIGN_STATS.LAST_FETCHED_THROUGH_PROPERTY_KEY;
+
+  const lastThrough = props.getProperty(propertyKey);
+  const today = todayDateString_();
+
+  const window = computeNaverSearchAdCampaignStatsFetchWindow_(
+    lastThrough, today, AD.NAVER_SEARCH_CAMPAIGN_STATS.MAX_QUERY_RANGE_DAYS
+  );
+
+  if(!window.shouldFetch){
+    Logger.log(
+      "refreshNaverSearchAdCampaignStatsCache_: 오늘(" + today + ") 이미 갱신됨 — 스킵."
+    );
+    return;
+  }
+
+  const campaignMap = fetchNaverSearchAdCampaignMap_();
+  const ids = Object.keys(campaignMap);
+  const statsRows = fetchNaverSearchAdImpressionsClicksStats_(ids, window.since, window.until);
+
+  const existingTotals = readNaverSearchAdCampaignStatsCache_();
+  const newTotals = accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, statsRows);
+
+  writeNaverSearchAdCampaignStatsCache_(newTotals);
+
+  props.setProperty(propertyKey, window.until);
+
+  Logger.log(
+    "refreshNaverSearchAdCampaignStatsCache_: " + window.since + " ~ " + window.until +
+    " 반영 완료 (" + Object.keys(newTotals).length + "개 캠페인 누적)."
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Manual-run public wrapper (Apps Script 편집기 Run 드롭다운 노출용)
+ * ==========================================================
+ */
+function runRefreshNaverSearchAdCampaignStatsCache(){
+
+  refreshNaverSearchAdCampaignStatsCache_();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — Naver Campaign Stats Cache 시트 강제 공개(진단용, 수동 실행)
+ *
+ * WHY
+ * `writeNaverSearchAdCampaignStatsCache_()`가 매번 `hideSheet()`를 호출해
+ * 숨기므로, Google Sheets UI의 "모든 시트" 목록에서 못 찾겠다는 경우를
+ * 대비해 코드로 직접 존재 여부 확인 + 강제로 보이게 하는 진단 함수.
+ * ==========================================================
+ */
+function runShowNaverSearchAdCampaignStatsCache(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetName = AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET;
+  const sheet = ss.getSheetByName(sheetName);
+
+  if(!sheet){
+    Logger.log(
+      "\"" + sheetName + "\" 시트를 이 스프레드시트(" + ss.getName() +
+      ")에서 찾을 수 없습니다 — runRefreshNaverSearchAdCampaignStatsCache()가 " +
+      "정상 완료됐는지 먼저 확인하세요."
+    );
+    return;
+  }
+
+  sheet.showSheet();
+  ss.setActiveSheet(sheet);
+
+  Logger.log(
+    "\"" + sheetName + "\" 시트를 찾아서 공개했습니다 — 행 수: " + sheet.getLastRow()
+  );
 
 }

@@ -62,6 +62,68 @@
 (`rebuildLeadsMaster()`/`rebuildMTAMaster()`)과 진단 함수는 의도적으로 그대로 둠(전체 스캔 필요).
 `07_IncrementalMasterBuild.js` v1.7.0.
 
+## Events/BOFU/Search/Content OPS 시트 재작성 자동화 편입
+
+`refreshEventsEngine_()` 등 Engine 캐시 refresh는 이미 파이프라인에 있었지만, 그 캐시를 실제
+Events_OPS/BOFU_OPS/Search_OPS/Content_OPS 시트에 옮겨 적는 `buildEventsOPS()` 등 4개 함수는
+2026-07-24 "초기 이관 기간 수동 실행"으로 남겨져 있었음(각 파일 헤더 참고) — 사용자 요청으로
+자동화. 신규 `refreshOPSSheets_()`(`08_PipelineAsync.js`)가 4개 함수를 각자 독립 try/catch로
+호출(하나 실패해도 나머지 계속), `runLeadsPipelineTail()`/`runMTAPipelineTail()` 양쪽에 배선.
+`52/62/72/82_*_Build.js` 헤더 갱신, README 실무자 가이드 ④ 문구도 갱신.
+
+## ACQ_REP/NewP1_REP Generate + Target_REP(Deal Tracker) Generate 자동화 편입
+
+`refreshReportGenerate_()`(ACQ_REP/NewP1_REP Report Area 자동 재생성)는 2026-08-04부터 이미
+파이프라인에 있었음 — 여기에 `generateTargetReport_()`(Target_Engine Block A~D 재계산 + Target_REP
+재작성, Deal Tracker 참조)를 추가 편입(사용자 요청 — "campaign spend랑 deal tracker도 import
+체인에 포함시키자"). 원래 Simple Trigger(체크박스+onEdit) 권한 제약으로 Target_REP만 수동 실행
+전용이었으나(`docs/TargetReportDesign.md` 참고), 이 파이프라인 트리거는 설치형(Full Authorization)
+이라 그 제약이 없어 안전하게 편입 가능. Block 0(Target FY 등 수동 입력)는 `refreshTargetEngine_()`가
+절대 안 덮어쓰므로 반복 자동 실행에도 안전. 캠페인 지출(Ad_Spend_Cache)은 이미 2026-08-04부터
+파이프라인에 연결돼 있어 추가 조치 불필요함을 확인. `docs/OpenItems.md` #11 갱신(Generate 자동화
+완료 반영).
+
+## Pipeline Status 표 레이아웃 전면 재설계 (단계=행 → 단계=컬럼)
+
+기존 7행×3열(단계가 행, New Leads/MTA가 컬럼) 구조를 3행×12열(New Leads/MTA가 행, Master
+Update~Target_REP 각 실무 영역이 컬럼)로 전환(사용자 요청). 각 영역 컬럼은 완료되면 "Complete",
+아니면 빈 문자열. `CONFIG.PIPELINE.STATUS_COLUMNS`(00_Config.js 신규) 10개 컬럼: Master
+Update/Leads_OPS/Events_OPS/BOFU_OPS/Search_OPS/Content_OPS/Campaign Spend/ACQ_REP/NewP1_REP/
+Target_REP. `advancePipelineStage_()`에 선택적 `completedKeys` 파라미터 추가(단일 단계=단일
+컬럼용), 여러 컬럼이 한 함수 안에서 개별 완료되는 `refreshOPSSheets_()`/`refreshReportGenerate_()`는
+`(type, state)`를 받아 신규 `markPipelineStageComplete_()`로 하위 단계마다 스스로 표시하도록
+전환. MTA 행의 Leads_OPS 컬럼은 `syncMTAFunnelToOPS_()`(09_MTAFunnelSync.js, 여러 실무 영역이
+한 함수 안에 뭉쳐있음)가 통째로 끝나는 순간 한 번에 Complete — 리팩토링은 안 하기로 사용자
+확정. Status 컬럼에 전체 진행상태+마지막 완료 시각을 압축 표시(`buildPipelineStatusCell_()`
+신규). 옛 7행 레이아웃이 남아있는 시트는 다음 실행 때 자동으로 마이그레이션(고아 행 없이 교체).
+`08_PipelineAsync.js` v1.11.0, `00_Config.js` v1.27.0.
+
+## Search_OPS Campaign/Impressions/Link clicks 자동화 (Naver Search Ad API, `docs/OpenItems.md` #21 신규)
+
+사용자 요청으로 Search_OPS의 `GROUP_3_MANUAL`(전부 수동 입력)에서 `Campaign`/`Impressions`/
+`Link clicks`를 분리해 Naver Search Ad API 자동 매칭으로 전환(`Reach`는 Naver API에 해당
+지표가 없어 계속 수동). **실측으로 두 가지 예상 밖 문제를 발견·수정**:
+
+1. **API 조회 기간 제약이 예상과 다름**: 캠페인 지출(salesAmt) 파이프라인의 730일 제약을
+   그대로 가정했으나, 실제로는 impCnt/clkCnt 필드가 별도로 "최근 92일 이내"만 허용됨이
+   최초 실행 에러(`{code:11004}`)로 확인됨. 매번 전체 재계산 대신 `Naver_Search_Campaign_
+   Stats_Cache`(신규 숨김 시트)에 캠페인별 누적치를 영구 보관하고 매 refresh마다 "지난
+   갱신 이후~오늘"만 더하는 누적 캐시로 설계(사용자 확정) — `computeNaverSearchAdCampaignStatsFetchWindow_()`
+   가 항상 API 허용 범위 안으로 사전에 clamp해서 요청, 재발 방지. `08_PipelineAsync.js`의
+   `refreshNaverSearchCampaignStats_()`로 두 파이프라인 테일 모두에 배선.
+2. **네임스페이스 불일치**: Naver 캠페인 실제 이름(예: `KR_core_brand_contact`)과 Search_OPS
+   키(Marketo Program명, 예: `2025-07-KOR-Naver SA Brand`)가 서로 다른 시스템이라 직접 매칭이
+   거의 안 걸림(실캠페인 10개 중 직접 일치 0개, 사용자 확인). `73_Search_Merge.js`의 신규
+   `NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE`(`71_Search_Engine.js`의
+   `SEARCH_UTM_TO_PROGRAM_OVERRIDE`와 동일 관행)에 사용자가 육안 대조해준 5개 매핑 반영.
+
+**잔여 TODO 2건(`docs/OpenItems.md` #21 참고)**: (1) `kr_core_study-consult_contact`는 애드그룹
+단위로 US/UK가 섞여있어 정확히 분리 불가 — 대부분 US라 근사치로 일괄 매핑(사용자 확정),
+애드그룹 단위 stats 조회 가능 여부는 검토 필요. (2) 나머지 5개 캠페인은 대응 Marketo Program
+미확인, 확인되는 대로 override 추가 예정. `AD_001_Config.js` v1.16.0, `AD_003_NaverSearch.js`
+v2.7.0, `70_Search_Config.js` v1.4.0, `71_Search_Engine.js` v1.15.0, `72_Search_Build.js`
+v1.2.0, `73_Search_Merge.js` v1.4.0.
+
 # Changelog — 2026-08-04
 
 ## 로컬/origin 재동기화 (다른 머신 세션과의 divergence)

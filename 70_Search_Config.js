@@ -15,9 +15,15 @@
  * (Apps Script 전역 네임스페이스 — 같은 이름 재정의 시 충돌 발생).
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-05)
+ * - `GROUP_3_MANUAL`에서 "Campaign"/"Impressions"/"Link clicks" 분리 →
+ *   신규 `GROUP_3A_AUTO`(Naver Search Ad API 자동 매칭, 사용자 요청).
+ *   "Reach"는 Naver API에 해당 지표가 없어 `GROUP_3_MANUAL`에 그대로 유지.
+ *   `HEADER`/`HEADER_COLOR_GROUPS` 순서·구성은 변경 없음(그룹 소속만 재분류).
+ *   상세: 73_Search_Merge.js/AD_003_NaverSearch.js 참고.
  * v1.3.0 (2026-07-29)
  * - CHANNEL_DEFAULT "Meta" → 빈 값으로 변경(사용자 확정 — "채널에 meta가
  *   보이면 안돼"). BOFU에서 그대로 물려받은 값이라 실데이터 검증이 안 돼
@@ -164,17 +170,41 @@ const SEARCH = {
 
   ],
 
+  /*
+  ==========================================================
+  GROUP 3 — 순수 수동 입력 (자동 소스 없음)
+
+  2026-08-05: "Campaign"/"Impressions"/"Link clicks"는 GROUP_3A_AUTO로
+  분리됨(Naver Search Ad API 자동 매칭, 사용자 요청) — "Reach"는 Naver
+  API에 해당 지표가 없어 여전히 순수 수동.
+  ==========================================================
+  */
   GROUP_3_MANUAL: [
 
     "Off/On",
-    "Campaign",
     "Start Date",
     "End Date",
-    "Impressions",
     "Reach",
-    "Link clicks",
     "Results",
     "Spent"
+
+  ],
+
+  /*
+  ==========================================================
+  GROUP 3A — Naver Search Ad API 자동 매칭 (2026-08-05 신규)
+
+  Search_OPS 키(Marketo Program명 또는 raw UTM)와 Naver 캠페인 실제
+  이름이 매칭되면 이 3개 필드를 캐시값으로 덮어씀(73_Search_Merge.js의
+  applySearchNaverCampaignStats_() 참고) — 매칭 안 되면 기존 값(수동
+  입력 또는 빈 값) 그대로 유지(copyColumns_() fallback).
+  ==========================================================
+  */
+  GROUP_3A_AUTO: [
+
+    "Campaign",
+    "Impressions",
+    "Link clicks"
 
   ],
 

@@ -6,13 +6,19 @@
  * Responsibility
  * Orchestrate Events_OPS Build Process (21_OPS_Build.js와 동일 패턴).
  *
- * 자동 트리거 미연결 — 초기 이관/롤아웃 기간에는 Apps Script 편집기에서
- * 수동 실행 전용 (Events_Engine 갱신은 refreshEventsEngine_()로 자동화
- * 돼 있지만, Events_OPS 전체 재작성은 별도 확인 후 수동 실행하기로 결정,
- * 2026-07-24). 데이터 안정화 후 자동화 여부는 별도 논의.
+ * Import 파이프라인의 백그라운드 트리거(08_PipelineAsync.js의
+ * refreshOPSSheets_())가 매 Leads/MTA 백그라운드 실행마다 자동 호출함
+ * (2026-08-05, docs/OpenItems.md #7 후속). "🗂️ Sync Events" 메뉴로 수동
+ * 실행도 계속 가능.
  *
  * Version
- * v1.0.0
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-08-05)
+ * - 자동 파이프라인 편입 반영 (08_PipelineAsync.js `refreshOPSSheets_()`) —
+ *   2026-07-24 "초기 이관 기간엔 수동 전용" 결정이 사용자 요청으로 해제됨.
+ *   함수 코드 자체는 변경 없음, 헤더 설명만 갱신.
  * ==========================================================
  */
 function buildEventsOPS() {

@@ -22,9 +22,61 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.7.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-08-05)
+ * - 신규 `refreshNaverSearchCampaignStats_()` — `refreshNaverSearchAdCampaignStatsCache_()`
+ *   (AD_003_NaverSearch.js, Search_OPS Campaign/Impressions/Link clicks 자동화용
+ *   누적 캐시)를 두 파이프라인 테일 모두 `refreshOPSSheets_` 바로 앞에 배선
+ *   (사용자 요청 — "search ops Campaign Impressions Reach Link clicks 영역
+ *   불러오도록하자"). `refreshCampaignSpend_()`와 동일하게 실패 비필수 처리.
+ * v1.10.0 (2026-08-05)
+ * - **Pipeline Status 표 레이아웃 전환**(사용자 요청) — "단계=행/New Leads·MTA=컬럼"
+ *   (7행×3열)에서 "단계=컬럼/New Leads·MTA=행"(3행×12열)으로 변경. 컬럼:
+ *   Pipeline Status(행 라벨) / Status(전체 진행상태+마지막 시각 압축 표시,
+ *   `buildPipelineStatusCell_()` 신규) / Master Update / Leads_OPS / Events_OPS /
+ *   BOFU_OPS / Search_OPS / Content_OPS / Campaign Spend / ACQ_REP / NewP1_REP /
+ *   Target_REP(`CONFIG.PIPELINE.STATUS_COLUMNS`, 00_Config.js 신규). 각 영역
+ *   컬럼은 완료되면 "Complete", 아니면 빈 문자열(사용자 확정).
+ * - `advancePipelineStage_()`에 선택적 `completedKeys` 파라미터 추가 — 한
+ *   함수가 통째로 끝나야 컬럼 하나가 완료되는 단일 단계(`masterUpdate`/
+ *   `campaignSpend`)용. 여러 컬럼이 한 함수 안에서 개별 시점에 끝나는
+ *   `refreshOPSSheets_()`/`refreshReportGenerate_()`는 `(type, state)`를 직접
+ *   받아 신규 `markPipelineStageComplete_()`로 하위 단계마다 스스로 완료
+ *   표시하도록 시그니처 변경.
+ * - **MTA 행 leadsOps 컬럼은 의도적으로 뭉뚱그림(사용자 확정)**: `syncMTAFunnelToOPS_()`
+ *   (09_MTAFunnelSync.js)가 Leads_OPS 동기화+6개 Engine 캐시 refresh를 한
+ *   함수 안에서 처리하는데, 컬럼별로 쪼개려면 그 파일을 리팩토링해야 해서
+ *   이번 범위에서는 보류 — 전체가 끝나는 순간 `leadsOps` 컬럼 하나만 한번에
+ *   Complete로 표시(09_MTAFunnelSync.js는 수정하지 않음). Events_OPS~Content_OPS는
+ *   이후 `refreshOPSSheets_()` 단계(08_PipelineAsync.js 자체 소유)에서 개별 추적.
+ * - `writePipelineStatusToReadme_()` — 옛 레이아웃("⚙️ Pipeline Status" 타이틀,
+ *   7행) 감지 시 그 7행을 먼저 삭제한 뒤 새 블록 공간을 확보하는 1회성
+ *   마이그레이션 로직 추가(안 하면 옛 4~7행이 고아 행으로 남음).
+ * - README 실무자 가이드 ② 문구 갱신(Current Stage 행 삭제로 안 맞게 된 설명 수정).
+ * - `testBuildPipelineStatusGrid()` 새 그리드 형태에 맞게 재작성.
+ * v1.9.0 (2026-08-05)
+ * - `refreshReportGenerate_()`에 `generateTargetReport_()`(91_TargetReport.js,
+ *   Deal Tracker 기반 Target_Engine Block A~D 재계산 + Target_REP 재작성) 추가
+ *   (사용자 요청 — "캠페인 지출이랑 deal tracker도 import 체인에 포함시키자").
+ *   기존 "Simple Trigger라 openById() 못 씀" 제약은 이 설치형 트리거엔 해당 없음
+ *   (52/62/72/82_*_Build.js 자동화 때와 동일 논리). 캠페인 지출(Ad_Spend_Cache)은
+ *   이미 v1.6.0(2026-08-04)부터 `refreshCampaignSpend_()`로 두 파이프라인 테일
+ *   모두에 연결돼 있어 추가 조치 없음. README 실무자 가이드 ④ 문구도 갱신
+ *   (남은 수동 단계 없음).
+ * v1.8.0 (2026-08-05)
+ * - 신규 `refreshOPSSheets_()` — `buildEventsOPS()`/`buildBOFUOPS()`/
+ *   `buildSearchOPS()`/`buildContentOPS()`(각 52/62/72/82_*_Build.js, 2026-07-24
+ *   "초기 이관 기간 수동 실행" 결정으로 자동화에서 빠져있었음)를 백그라운드
+ *   체인에 편입(사용자 요청 — "Events·BOFU·Search·Content OPS도 한 번에
+ *   갱신하도록 하자"). 4개 함수 모두 실패를 서로 격리해 하나가 실패해도
+ *   나머지는 계속 진행(`refreshReportGenerate_()`와 동일 원칙 — 이미 끝난
+ *   Engine 캐시 refresh를 되돌릴 필요 없는 파생 레이어). `runLeadsPipelineTail()`엔
+ *   `refreshContentEngine_` 다음(4개 Engine 캐시가 방금 갱신된 직후)에,
+ *   `runMTAPipelineTail()`엔 `syncMTAFunnelToOPS_`(내부에서 동일 4개 Engine을
+ *   갱신) 다음에 배치. README 실무자 가이드 ④ 문구도 갱신(OPS Sync는 더 이상
+ *   수동이 아님 — 남은 수동 항목은 Target_REP Generate로 교체).
  * v1.7.0 (2026-08-05)
  * - **버그 수정 — 죽은 락이 영구히 안 풀리는 문제(실측, 재발 방지 조치)**.
  *   `docs/OpenItems.md` #20(ACQ_REP New P1 불일치) 조사 중, Leads_Master에 7월
@@ -169,22 +221,60 @@ function computePipelineLockState_(existingLockRaw, requestedType, nowMs){
 
 /**
  * ==========================================================
+ * Build Pipeline Status Cell (Status 컬럼 압축 표시)
+ *
+ * WHY
+ * 행이 New Leads/MTA Leads 2개뿐이라(2026-08-05 레이아웃 전환, 사용자 요청)
+ * 예전처럼 Last Started/Last Finished/Last Error를 별도 행으로 둘 공간이
+ * 없음 — 사용자 확정: Status 셀 하나에 상태+마지막 시각(+에러)을 압축 표시.
+ * ==========================================================
+ */
+function buildPipelineStatusCell_(state){
+
+  const status = state.status || "IDLE";
+
+  if(status === "RUNNING"){
+    return "RUNNING · started " + (state.startedAt || "");
+  }
+
+  if(status === "FAILED"){
+    return "FAILED · " + (state.finishedAt || "") +
+      (state.error ? " · " + state.error : "");
+  }
+
+  if(status === "DONE"){
+    return "DONE · " + (state.finishedAt || "");
+  }
+
+  return "IDLE";
+
+}
+
+
+/**
+ * ==========================================================
  * Build Pipeline Status Grid
  *
  * WHY
- * README!A1:C7 Pipeline Status 블록에 쓸 2D 배열을 만드는 로직을 Sheet IO와
- * 분리해 Node 하네스로 테스트 가능하게 함(사용자 확정 레이아웃, 2026-08-04).
+ * README!A1: Pipeline Status 블록에 쓸 2D 배열을 만드는 로직을 Sheet IO와
+ * 분리해 Node 하네스로 테스트 가능하게 함. **2026-08-05 레이아웃 전환**(사용자
+ * 요청) — 예전엔 "단계=행 / New Leads·MTA=컬럼"(7행×3열)이었는데, "단계=컬럼
+ * / New Leads·MTA=행"(3행×N열, N=2+`CONFIG.PIPELINE.STATUS_COLUMNS.length`)으로
+ * 전환. 각 실무 영역(Master Update~Target_REP) 컬럼은 그 영역이 이번 실행에서
+ * 끝났으면 "Complete", 아직이면 빈 문자열 — 사용자 확정("완료되면 Complete로").
  *
  * INPUT
- * leadsState / mtaState : { status, stage, startedAt, finishedAt, error }
- *   각 필드 미제공 시 status는 "IDLE", 나머지는 빈 문자열로 채움.
+ * leadsState / mtaState : { status, stage, startedAt, finishedAt, error, stages }
+ *   stages : { [CONFIG.PIPELINE.STATUS_COLUMNS[i].KEY]: true }  (완료된 키만 존재)
+ *   각 필드 미제공 시 status는 "IDLE", stages는 {}로 간주(전 컬럼 빈 문자열).
  *
  * OUTPUT
- * string[7][3]  (A~C열, 1~7행 그대로)
+ * string[3][2 + N]  (A열부터, 1~3행 그대로 — 헤더 1행 + New Leads/MTA Leads 2행)
  *
  * TEST
- * RUNNING/FAILED 상태를 각각 넣으면 Status/Current Stage/Last Error 셀에
- * 그대로 반영되어야 하고, 빈 객체({})를 넣으면 Status가 "IDLE"이어야 함.
+ * buildPipelineStatusGrid_() 참고 — RUNNING/FAILED/완료된 stages 조합을 넣으면
+ * Status 셀과 각 단계 컬럼("Complete"/"")에 그대로 반영되어야 하고, 빈
+ * 객체({})를 넣으면 Status가 "IDLE"이고 모든 단계 컬럼이 빈 문자열이어야 함.
  * ==========================================================
  */
 function buildPipelineStatusGrid_(leadsState, mtaState){
@@ -192,14 +282,28 @@ function buildPipelineStatusGrid_(leadsState, mtaState){
   const leads = leadsState || {};
   const mta = mtaState || {};
 
+  const columns = CONFIG.PIPELINE.STATUS_COLUMNS;
+
+  const headerRow = ["Pipeline Status", "Status"].concat(
+    columns.map(function(col){ return col.HEADER; })
+  );
+
+  function buildRow(rowLabel, state){
+
+    const stages = state.stages || {};
+
+    const stageCells = columns.map(function(col){
+      return stages[col.KEY] ? "Complete" : "";
+    });
+
+    return [rowLabel, buildPipelineStatusCell_(state)].concat(stageCells);
+
+  }
+
   return [
-    ["⚙️ Pipeline Status", "", ""],
-    ["", "New Leads Upload", "MTA Upload"],
-    ["Status", leads.status || "IDLE", mta.status || "IDLE"],
-    ["Current Stage", leads.stage || "", mta.stage || ""],
-    ["Last Started", leads.startedAt || "", mta.startedAt || ""],
-    ["Last Finished", leads.finishedAt || "", mta.finishedAt || ""],
-    ["Last Error", leads.error || "", mta.error || ""]
+    headerRow,
+    buildRow("New Leads", leads),
+    buildRow("MTA Leads", mta)
   ];
 
 }
@@ -318,9 +422,17 @@ function writePipelineStatusState_(type, state){
  * Write Pipeline Status To README
  *
  * WHY
- * 최초 1회만 README 탭 맨 위(A1)에 8행(그리드 7행 + 구분용 빈 행 1행) 공간을
- * 확보(insertRowsBefore)하고, 이후에는 같은 A1:C7 블록을 덮어쓰기만 해서
- * 기존 README 내용을 건드리지 않음(사용자 확정, 2026-08-04).
+ * 최초 1회만 README 탭 맨 위(A1)에 (그리드 행수 + 구분용 빈 행 1행) 공간을
+ * 확보(insertRowsBefore)하고, 이후에는 같은 블록을 덮어쓰기만 해서 기존
+ * README 내용을 건드리지 않음(사용자 확정, 2026-08-04).
+ *
+ * **2026-08-05 레이아웃 전환 마이그레이션**: 옛 레이아웃("⚙️ Pipeline Status"
+ * 타이틀, 7행×3열)이 아직 남아있는 시트라면, 새 레이아웃(3행×N열)을 그냥
+ * insertRowsBefore로 위에 끼워넣기만 하면 옛 4~7행(Current Stage/Last
+ * Started/Last Finished/Last Error)이 새 블록 아래에 고아 행으로 남는다 —
+ * 옛 타이틀을 감지하면 그 7행을 먼저 통째로 지운 뒤 새 블록 공간을 확보한다.
+ * 이미 새 레이아웃으로 마이그레이션된 시트(타이틀 "Pipeline Status")는 기존
+ * 3행 블록을 그대로 덮어쓰기만 함(삽입 없음).
  * ==========================================================
  */
 function writePipelineStatusToReadme_(){
@@ -341,9 +453,15 @@ function writePipelineStatusToReadme_(){
   const anchorRow = CONFIG.PIPELINE.STATUS_ANCHOR_ROW;
   const anchorCol = CONFIG.PIPELINE.STATUS_ANCHOR_COL;
 
+  const OLD_LAYOUT_TITLE = "⚙️ Pipeline Status";
+  const OLD_LAYOUT_ROW_COUNT = 7;
+
   const titleCell = sheet.getRange(anchorRow, anchorCol).getValue();
 
-  if(titleCell !== grid[0][0]){
+  if(titleCell === OLD_LAYOUT_TITLE){
+    sheet.deleteRows(anchorRow, OLD_LAYOUT_ROW_COUNT);
+    sheet.insertRowsBefore(anchorRow, grid.length + 1);
+  } else if(titleCell !== grid[0][0]){
     sheet.insertRowsBefore(anchorRow, grid.length + 1);
   }
 
@@ -373,9 +491,19 @@ function nowTimestamp_(){
  * 각 refresh 단계 실행 전에 "Current Stage"를 기록해둬야, 중간에 에러가 나도
  * catch 블록이 "어느 단계에서 실패했는지" 알 수 있음(설계 문서 "실패 지점 기록"
  * 요구사항).
+ *
+ * `completedKeys`(선택, 2026-08-05 신규): `stageFn()`이 성공적으로 끝나면
+ * `CONFIG.PIPELINE.STATUS_COLUMNS`의 해당 key(들)를 `state.stages`에 true로
+ * 표시하고 다시 README에 반영 — Pipeline Status 표의 그 단계 컬럼이 실행
+ * 도중에도 실시간으로 "Complete"로 바뀜. 단계 하나가 여러 컬럼을 한 번에
+ * 완료시키는 경우(예: MTA의 `syncMTAFunnelToOPS_`처럼 여러 실무 영역이 한
+ * 함수 안에 뭉쳐있는 경우, 사용자 확정 — 09_MTAFunnelSync.js는 리팩토링하지
+ * 않음)에도 배열로 넘기면 됨. 여러 컬럼을 개별 시점에 나눠 완료시켜야 하는
+ * 단계(`refreshOPSSheets_`/`refreshReportGenerate_`)는 이 파라미터 대신
+ * 자기 자신이 `(type, state)`를 받아 내부에서 직접 완료 표시함.
  * ==========================================================
  */
-function advancePipelineStage_(type, state, stageName, stageFn){
+function advancePipelineStage_(type, state, stageName, stageFn, completedKeys){
 
   state.stage = stageName;
 
@@ -383,6 +511,43 @@ function advancePipelineStage_(type, state, stageName, stageFn){
   writePipelineStatusToReadme_();
 
   stageFn();
+
+  if(completedKeys && completedKeys.length){
+
+    if(!state.stages) state.stages = {};
+
+    completedKeys.forEach(function(key){
+      state.stages[key] = true;
+    });
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Mark Pipeline Stage Complete (단일 컬럼 즉시 완료 표시)
+ *
+ * WHY
+ * `refreshOPSSheets_()`/`refreshReportGenerate_()`처럼 한 함수 안에 여러
+ * Pipeline Status 컬럼(예: Events_OPS/BOFU_OPS/Search_OPS/Content_OPS)이
+ * 개별 시점에 완료되는 경우, `advancePipelineStage_()`의 `completedKeys`
+ * (함수 전체가 끝나야 한 번에 표시)로는 표현할 수 없어 각 하위 단계가
+ * 끝날 때마다 직접 이 함수를 호출해 그 컬럼만 즉시 "Complete"로 반영한다.
+ * ==========================================================
+ */
+function markPipelineStageComplete_(type, state, key){
+
+  if(!state.stages) state.stages = {};
+
+  state.stages[key] = true;
+
+  writePipelineStatusState_(type, state);
+  writePipelineStatusToReadme_();
 
 }
 
@@ -426,7 +591,7 @@ function refreshReportFYDropdowns_(){
 
 /**
  * ==========================================================
- * Refresh Report Generate (ACQ_REP / NewP1_REP)
+ * Refresh Report Generate (ACQ_REP / NewP1_REP / Target_REP)
  *
  * WHY
  * Report Generate는 원래 사용자가 Generate 체크박스를 직접 클릭해야 하는
@@ -442,12 +607,29 @@ function refreshReportFYDropdowns_(){
  * 각자 독립적으로 try/catch해 실패해도 Logger에만 남기고 던지지 않음(전체 상태는
  * DONE 유지). Report가 하나라도 실패하면 사용자가 Executions 로그에서 확인 후
  * Control 행을 고치고 직접 Generate 체크박스를 눌러야 함.
+ *
+ * `generateTargetReport_()`(91_TargetReport.js, Deal Tracker 기반 Target_Engine
+ * Block A~D 전체 재계산 + Target_REP 리포트 재작성) 추가(2026-08-05, 사용자
+ * 요청 — "deal tracker도 import 체인에 포함시키자"). 원래 체크박스+onEdit(Simple
+ * Trigger)로는 `SpreadsheetApp.openById()`(Deal Tracker 외부 시트)를 호출할 수
+ * 없어 Apps Script 편집기 직접 Run 전용으로 남아있었음(`runGenerateTargetReport()`
+ * Change Log 참고, 2026-07-27) — 이 파이프라인 트리거는 설치형(Full Authorization)
+ * 이라 애초에 그 제약이 없음. Block 0(Target FY/월별 Segment Spent 등 수동 입력)는
+ * `refreshTargetEngine_()`가 절대 덮어쓰지 않으므로(00_Config.js 주석 참고) 반복
+ * 자동 실행에도 안전.
+ *
+ * `(type, state)` 파라미터(2026-08-05 신규): ACQ_REP/NewP1_REP/Target_REP 3개가
+ * Pipeline Status 표에서 각자 다른 컬럼이라(`CONFIG.PIPELINE.STATUS_COLUMNS`),
+ * 하나 끝날 때마다 `markPipelineStageComplete_()`로 그 컬럼만 개별 반영한다
+ * (advancePipelineStage_()의 completedKeys는 함수 전체가 끝나야 한 번에
+ * 표시되므로 이 용도에 안 맞음).
  * ==========================================================
  */
-function refreshReportGenerate_(){
+function refreshReportGenerate_(type, state){
 
   try{
     generateACQReport_();
+    markPipelineStageComplete_(type, state, "acqRep");
   } catch(err){
     Logger.log(
       "refreshReportGenerate_: ACQ_REP Generate 실패(비필수, 파이프라인은 계속) — " +
@@ -457,9 +639,96 @@ function refreshReportGenerate_(){
 
   try{
     generateNewP1Report_();
+    markPipelineStageComplete_(type, state, "newP1Rep");
   } catch(err){
     Logger.log(
       "refreshReportGenerate_: NewP1_REP Generate 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  try{
+    generateTargetReport_();
+    markPipelineStageComplete_(type, state, "targetRep");
+  } catch(err){
+    Logger.log(
+      "refreshReportGenerate_: Target_REP Generate 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh OPS Sheets (Events_OPS / BOFU_OPS / Search_OPS / Content_OPS)
+ *
+ * WHY
+ * `buildEventsOPS()`(52_Events_Build.js)/`buildBOFUOPS()`(62_BOFU_Build.js)/
+ * `buildSearchOPS()`(72_Search_Build.js)/`buildContentOPS()`(82_Content_Build.js)는
+ * "초기 이관/롤아웃 기간 데이터 안정화 전까지는 수동 실행"으로 2026-07-24
+ * 의도적으로 자동화에서 제외돼 있었음(각 파일 헤더 참고) — 그동안 Engine
+ * refresh(캐시 계산)만 파이프라인에 있고 OPS 시트 자체 재작성(캐시를 실제
+ * 시트에 merge/write)은 "🗂️ Sync Events/BOFU/Search/Content" 메뉴를 매번
+ * 직접 눌러야 했음. 사용자 요청(2026-08-05)으로 이 단계도 백그라운드 체인에
+ * 편입.
+ *
+ * 4개 함수 모두 `readXEngineMap_()`(방금 끝난 refresh{Events|BOFU|Search|
+ * Content}Engine_() 단계가 갱신한 캐시)를 읽어 기존 OPS 시트와 merge하는
+ * 동일 패턴(52/62/72/82_*_Build.js) — `SpreadsheetApp.getUi()` 호출 없어
+ * 설치형 트리거에서 안전하게 호출 가능함을 소스 확인.
+ *
+ * 실패 격리(`refreshReportGenerate_()`/`refreshCampaignSpend_()`와 동일 원칙):
+ * OPS 시트 자체는 Leads_OPS/MTA_Master 원본이 아니라 이미 반영된 Engine
+ * 캐시를 화면에 옮겨적는 파생 레이어라, 하나가 실패해도(예: 특정 시트 헤더
+ * 불일치) 나머지 핵심 데이터 refresh를 되돌리거나 전체 파이프라인을 FAILED로
+ * 만들 필요가 없음 — 각자 독립 try/catch, 실패는 Logger에만 기록.
+ *
+ * `(type, state)` 파라미터(2026-08-05 신규): Events_OPS/BOFU_OPS/Search_OPS/
+ * Content_OPS 4개가 Pipeline Status 표에서 각자 다른 컬럼이라
+ * (`CONFIG.PIPELINE.STATUS_COLUMNS`), 하나 끝날 때마다
+ * `markPipelineStageComplete_()`로 그 컬럼만 개별 반영한다.
+ * ==========================================================
+ */
+function refreshOPSSheets_(type, state){
+
+  try{
+    buildEventsOPS();
+    markPipelineStageComplete_(type, state, "eventsOps");
+  } catch(err){
+    Logger.log(
+      "refreshOPSSheets_: Events_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  try{
+    buildBOFUOPS();
+    markPipelineStageComplete_(type, state, "bofuOps");
+  } catch(err){
+    Logger.log(
+      "refreshOPSSheets_: BOFU_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  try{
+    buildSearchOPS();
+    markPipelineStageComplete_(type, state, "searchOps");
+  } catch(err){
+    Logger.log(
+      "refreshOPSSheets_: Search_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  try{
+    buildContentOPS();
+    markPipelineStageComplete_(type, state, "contentOps");
+  } catch(err){
+    Logger.log(
+      "refreshOPSSheets_: Content_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
@@ -507,6 +776,38 @@ function refreshCampaignSpend_(){
 
 /**
  * ==========================================================
+ * Refresh Naver Search Campaign Stats (Search_OPS Campaign/Impressions/
+ * Link clicks 자동화용 누적 캐시)
+ *
+ * WHY
+ * `refreshNaverSearchAdCampaignStatsCache_()`(AD_003_NaverSearch.js)가
+ * Naver Search Ad API를 호출해 캠페인별 누적 Impressions/Link clicks를
+ * 갱신 — `refreshOPSSheets_()`(buildSearchOPS() 포함)보다 먼저 실행해야
+ * Search_OPS가 이번 실행의 최신 캐시를 읽어 매칭한다(사용자 요청,
+ * 2026-08-05).
+ *
+ * 실패 격리(`refreshCampaignSpend_()`와 동일 원칙) — Naver API 인증 만료 등
+ * 외부 요인으로 실패해도 Logger에만 남기고 던지지 않음. 이 통계는
+ * Search_OPS의 참고용 보조 컬럼이라, 실패로 핵심 데이터 refresh 전체를
+ * 재실행하게 만들 필요가 없음.
+ * ==========================================================
+ */
+function refreshNaverSearchCampaignStats_(){
+
+  try{
+    refreshNaverSearchAdCampaignStatsCache_();
+  } catch(err){
+    Logger.log(
+      "refreshNaverSearchCampaignStats_: Naver 캠페인 통계 갱신 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * ==========================================================
  * Run Leads Pipeline Tail
  *
  * 트리거 대상(schedulePipelineTail_("runLeadsPipelineTail")) + 수동 재실행
@@ -525,7 +826,8 @@ function runLeadsPipelineTail(){
     stage: "",
     startedAt: nowTimestamp_(),
     finishedAt: "",
-    error: ""
+    error: "",
+    stages: {}
   };
 
   writePipelineStatusState_(type, state);
@@ -536,12 +838,13 @@ function runLeadsPipelineTail(){
     advancePipelineStage_(
       type, state,
       "runAutoDeleteExactDuplicateLeadRows",
-      runAutoDeleteExactDuplicateLeadRows
+      runAutoDeleteExactDuplicateLeadRows,
+      ["masterUpdate"]
     );
 
     advancePipelineStage_(type, state, "buildLeadsOPS", function(){
       buildLeadsOPS(true);
-    });
+    }, ["leadsOps"]);
 
     advancePipelineStage_(type, state, "refreshACQSummary_", refreshACQSummary_);
     advancePipelineStage_(type, state, "refreshNewP1Engine_", refreshNewP1Engine_);
@@ -549,10 +852,25 @@ function runLeadsPipelineTail(){
     advancePipelineStage_(type, state, "refreshBOFUEngine_", refreshBOFUEngine_);
     advancePipelineStage_(type, state, "refreshSearchEngine_", refreshSearchEngine_);
     advancePipelineStage_(type, state, "refreshContentEngine_", refreshContentEngine_);
-    advancePipelineStage_(type, state, "refreshCampaignSpend_", refreshCampaignSpend_);
+
+    advancePipelineStage_(
+      type, state, "refreshNaverSearchCampaignStats_", refreshNaverSearchCampaignStats_
+    );
+
+    advancePipelineStage_(type, state, "refreshOPSSheets_", function(){
+      refreshOPSSheets_(type, state);
+    });
+
+    advancePipelineStage_(
+      type, state, "refreshCampaignSpend_", refreshCampaignSpend_, ["campaignSpend"]
+    );
+
     advancePipelineStage_(type, state, "refreshTargetActuals_", refreshTargetActuals_);
     advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
-    advancePipelineStage_(type, state, "refreshReportGenerate_", refreshReportGenerate_);
+
+    advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
+      refreshReportGenerate_(type, state);
+    });
 
     state.status = "DONE";
     state.stage = "";
@@ -600,7 +918,9 @@ function runLeadsPipelineTail(){
  * 여기서는 그 함수 하나만 단계로 감싼다(09_MTAFunnelSync.js 수정 불필요) —
  * 단, `refreshCampaignSpend_()`(Ad_Spend_Cache)는 그 안의 `refreshTargetActuals_()`
  * 가 참조하므로 반드시 그보다 먼저(= syncMTAFunnelToOPS_() 호출 전)
- * 실행해야 함(2026-08-04).
+ * 실행해야 함(2026-08-04). `refreshOPSSheets_()`(Events/BOFU/Search/Content
+ * OPS 시트 재작성)는 그 안에서 방금 갱신된 Engine 캐시를 읽으므로
+ * syncMTAFunnelToOPS_() 바로 다음 단계로 배치(2026-08-05).
  * ==========================================================
  */
 function runMTAPipelineTail(){
@@ -614,7 +934,8 @@ function runMTAPipelineTail(){
     stage: "",
     startedAt: nowTimestamp_(),
     finishedAt: "",
-    error: ""
+    error: "",
+    stages: {}
   };
 
   writePipelineStatusState_(type, state);
@@ -625,13 +946,37 @@ function runMTAPipelineTail(){
     advancePipelineStage_(
       type, state,
       "runAutoDeleteExactDuplicateTouchRows",
-      runAutoDeleteExactDuplicateTouchRows
+      runAutoDeleteExactDuplicateTouchRows,
+      ["masterUpdate"]
     );
 
-    advancePipelineStage_(type, state, "refreshCampaignSpend_", refreshCampaignSpend_);
-    advancePipelineStage_(type, state, "syncMTAFunnelToOPS_", syncMTAFunnelToOPS_);
+    advancePipelineStage_(
+      type, state, "refreshCampaignSpend_", refreshCampaignSpend_, ["campaignSpend"]
+    );
+
+    // Leads_OPS 동기화 + ACQ/NewP1/Events/BOFU/Search/Content Engine 캐시 refresh가
+    // syncMTAFunnelToOPS_() 하나(09_MTAFunnelSync.js) 안에 뭉쳐있어 개별 완료 시점을
+    // 못 나눔(리팩토링 안 하기로 확정, 2026-08-05) — 전체가 끝나는 순간 leadsOps
+    // 컬럼만 한 번에 Complete로 표시. Events_OPS~Content_OPS는 이 뒤 refreshOPSSheets_
+    // 단계(OPS 시트 재작성, 08_PipelineAsync.js 자체 소유라 개별 추적 가능)에서
+    // 각자 개별 완료 표시됨.
+    advancePipelineStage_(
+      type, state, "syncMTAFunnelToOPS_", syncMTAFunnelToOPS_, ["leadsOps"]
+    );
+
+    advancePipelineStage_(
+      type, state, "refreshNaverSearchCampaignStats_", refreshNaverSearchCampaignStats_
+    );
+
+    advancePipelineStage_(type, state, "refreshOPSSheets_", function(){
+      refreshOPSSheets_(type, state);
+    });
+
     advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
-    advancePipelineStage_(type, state, "refreshReportGenerate_", refreshReportGenerate_);
+
+    advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
+      refreshReportGenerate_(type, state);
+    });
 
     state.status = "DONE";
     state.stage = "";
@@ -734,15 +1079,15 @@ function buildReadmeGuideRows_(){
     "2. 끝입니다 — Master 반영, 완전 중복 정리, Leads_OPS/리포트 갱신까지 몇 분 안에 전부 자동으로 처리됩니다.",
     "",
     "② 지금 어디까지 진행됐는지 보고 싶다면",
-    "이 시트 맨 위 \"⚙️ Pipeline Status\" 표에서 Status(RUNNING/DONE/FAILED)와 Current Stage를 확인하세요.",
-    "Last Started/Finished는 한국시간(KST) 기준입니다.",
+    "이 시트 맨 위 Pipeline Status 표에서 New Leads/MTA Leads 행마다 Master Update~Target_REP 각 컬럼이 Complete로 바뀌는지 확인하세요.",
+    "Status 컬럼에 전체 진행상태(RUNNING/DONE/FAILED)와 마지막 완료 시각(한국시간 KST 기준)이 같이 표시됩니다.",
     "",
     "③ ACQ_REP / NewP1_REP에서 다른 기간을 보고 싶다면",
     "Start FY/End FY, Start Month/End Month를 원하는 값으로 바꾸고 Generate 체크박스를 클릭하세요.",
     "(그냥 두면 마지막으로 선택했던 기간 기준으로 자동 갱신됩니다.)",
     "",
     "④ 아직 자동이 아닌 것",
-    "🗂️ OPS 메뉴(Sync Events / BOFU / Search / Content)는 여전히 직접 눌러야 합니다.",
+    "현재 Import~Report 흐름에서 매번 수동으로 눌러야 하는 단계는 없습니다.",
     "",
     "⑤ Pipeline Status가 FAILED로 계속 떠 있다면",
     "화면을 캡처해서 담당자에게 문의해주세요."
@@ -849,26 +1194,34 @@ function testBuildPipelineStatusGrid(){
     {
       status: "RUNNING",
       stage: "refreshACQSummary_",
-      startedAt: "2026-08-04 10:00:00",
+      startedAt: "2026-08-04 10:00:00 KST",
       finishedAt: "",
-      error: ""
+      error: "",
+      stages: { masterUpdate: true, leadsOps: true }
     },
     {
       status: "FAILED",
       stage: "syncMTAFunnelToOPS_",
-      startedAt: "2026-08-04 09:00:00",
-      finishedAt: "2026-08-04 09:05:00",
-      error: "Boom"
+      startedAt: "2026-08-04 09:00:00 KST",
+      finishedAt: "2026-08-04 09:05:00 KST",
+      error: "Boom",
+      stages: { masterUpdate: true, campaignSpend: true }
     }
   );
 
   const ok =
-    grid.length === 7 &&
-    grid[0][0] === "⚙️ Pipeline Status" &&
-    grid[1][1] === "New Leads Upload" && grid[1][2] === "MTA Upload" &&
-    grid[2][1] === "RUNNING" && grid[2][2] === "FAILED" &&
-    grid[3][1] === "refreshACQSummary_" && grid[3][2] === "syncMTAFunnelToOPS_" &&
-    grid[6][1] === "" && grid[6][2] === "Boom";
+    grid.length === 3 &&
+    grid[0].length === 12 &&
+    grid[0][0] === "Pipeline Status" &&
+    grid[0][1] === "Status" &&
+    grid[0][2] === "Master Update" &&
+    grid[0][11] === "Target_REP" &&
+    grid[1][0] === "New Leads" &&
+    grid[1][1] === "RUNNING · started 2026-08-04 10:00:00 KST" &&
+    grid[1][2] === "Complete" && grid[1][3] === "Complete" && grid[1][4] === "" &&
+    grid[2][0] === "MTA Leads" &&
+    grid[2][1] === "FAILED · 2026-08-04 09:05:00 KST · Boom" &&
+    grid[2][2] === "Complete" && grid[2][3] === "" && grid[2][8] === "Complete";
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +
@@ -876,7 +1229,9 @@ function testBuildPipelineStatusGrid(){
   );
 
   const emptyGrid = buildPipelineStatusGrid_({}, {});
-  const emptyOk = emptyGrid[2][1] === "IDLE" && emptyGrid[2][2] === "IDLE";
+  const emptyOk =
+    emptyGrid[1][1] === "IDLE" && emptyGrid[2][1] === "IDLE" &&
+    emptyGrid[1][2] === "" && emptyGrid[2][2] === "";
 
   Logger.log(
     "testBuildPipelineStatusGrid (empty defaults): " +

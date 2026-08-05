@@ -21,9 +21,21 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.14.0
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-08-05)
+ * - **버그 수정(실측)** — `NAVER_SEARCH_CAMPAIGN_STATS.INITIAL_LOOKBACK_DAYS`(729)
+ *   가 실제 API 제약과 안 맞았음: `runRefreshNaverSearchAdCampaignStatsCache()`
+ *   최초 실행에서 `{code:11004, message:"데이터는 92일 이내 기간에서만 사용
+ *   가능합니다."}` 에러 — impCnt/clkCnt 필드는 salesAmt와 달리 92일 제약(730일
+ *   아님). `INITIAL_LOOKBACK_DAYS` → `MAX_QUERY_RANGE_DAYS`(90, 92일보다 이틀
+ *   여유)로 교체, 최초 조회 소급 범위이자 재개 시 하한 클램프로 겸용. 상세:
+ *   AD_003_NaverSearch.js v2.6.0 참고.
+ * v1.15.0 (2026-08-05)
+ * - `NAVER_SEARCH_CAMPAIGN_STATS` 신규 — Search_OPS의 Campaign/Impressions/
+ *   Link clicks 컬럼을 Naver Search Ad API로 자동 채우기 위한 누적 캐시 설정
+ *   (사용자 요청). 상세: AD_003_NaverSearch.js/73_Search_Merge.js 참고.
  * v1.14.0 (2026-08-05)
  * - `KAKAO_MOMENTS.REPORT` 신규 — 리포트 API 진단 착수를 위한 엔드포인트 4개(광고계정 목록/
  *   채널 프로필 목록/메시지광고 목록/메시지광고 리포트, 공식 문서 확인 완료). 응답 필드
@@ -276,6 +288,40 @@ const AD = {
     */
 
     LEAD_SOURCE_OVERRIDE: "naver search"
+
+  },
+
+  /*
+  ==========================================================
+  NAVER SEARCH — CAMPAIGN STATS CACHE (2026-08-05, Search_OPS Campaign/
+  Impressions/Link clicks 자동화용, docs 참고 — 사용자 요청)
+
+  Spent 캐시(위 NAVER_SEARCH.API)와 별개 — 이건 캠페인별 누적
+  Impressions/Link clicks다. 스냅샷 재계산이 아니라 **누적 캐시**로 설계:
+  이 시트에 캠페인별 누적치를 영구 보관하고, 매 refresh마다 "지난 갱신
+  이후~오늘"만 새로 조회해서 더한다(사용자 확정, 2026-08-05).
+
+  **실측 정정(2026-08-05)**: 애초엔 Spent 파이프라인과 같은 "최근 730일"
+  제약으로 가정했으나, 실제 `runRefreshNaverSearchAdCampaignStatsCache()`
+  최초 실행 에러로 `impCnt`/`clkCnt` 필드는 **"92일 이내"**라는 별도(더
+  좁은) 제약이 확인됨(`{code:11004, message:"데이터는 92일 이내 기간에서만
+  사용 가능합니다."}` — salesAmt 전용 조회의 730일 제약과 다름, 요청 필드
+  조합별로 Naver가 허용 기간을 다르게 두는 것으로 추정). MAX_QUERY_RANGE_DAYS
+  (90, 92일보다 이틀 여유)를 최초 실행 소급 범위이자, 오래 못 돌았다가
+  재개될 때(예: 자격증명 만료 몇 달) since가 그보다 오래된 경우의 하한
+  클램프로 동시에 사용 — `computeNaverSearchAdCampaignStatsFetchWindow_()`
+  (AD_003_NaverSearch.js)가 항상 이 범위 안으로 사전에 좁혀서 요청하므로
+  이 에러 자체가 재발하지 않음(사후 재시도가 아니라 사전 방지).
+  ==========================================================
+  */
+
+  NAVER_SEARCH_CAMPAIGN_STATS: {
+
+    CACHE_SHEET: "Naver_Search_Campaign_Stats_Cache",
+
+    LAST_FETCHED_THROUGH_PROPERTY_KEY: "NAVER_SEARCHAD_CAMPAIGN_STATS_LAST_FETCHED_THROUGH",
+
+    MAX_QUERY_RANGE_DAYS: 90
 
   },
 

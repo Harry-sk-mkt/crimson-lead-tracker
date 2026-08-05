@@ -23,9 +23,14 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.14.0
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-08-05)
+ * - `runAuditSearchSegmentIssues()`의 manualCols에 신규 `SEARCH.GROUP_3A_AUTO`
+ *   (Campaign/Impressions/Link clicks, 70_Search_Config.js v1.4.0에서
+ *   GROUP_3_MANUAL로부터 분리됨) 추가 — 안 하면 죽은 키가 Naver 자동
+ *   매칭값만 갖고 있어도 "완전 공백"으로 오판정됨.
  * v1.14.0 (2026-07-29)
  * - runClearSearchOPSMetaChannel() 추가(수동 실행용, 1회성) — 70_Search_
  *   Config.js v1.3.0의 CHANNEL_DEFAULT 공란화에 맞춰 Search_OPS에 이미
@@ -1054,7 +1059,8 @@ function runAuditSearchSegmentIssues() {
   if (opsSheet) {
 
     const opsRows = readSearchOPS_();
-    const manualCols = SEARCH.GROUP_1_MANUAL.concat(SEARCH.GROUP_2_MANUAL).concat(SEARCH.GROUP_3_MANUAL);
+    const manualCols = SEARCH.GROUP_1_MANUAL.concat(SEARCH.GROUP_2_MANUAL)
+      .concat(SEARCH.GROUP_3_MANUAL).concat(SEARCH.GROUP_3A_AUTO);
 
     opsRows.forEach(function (row) {
 
