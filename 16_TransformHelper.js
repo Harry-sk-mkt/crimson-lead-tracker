@@ -8,9 +8,14 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-08-05)
+ * - BUSINESS_SEGMENT_EXCEPTIONS에 "kr_core_expo_earlybird2_ptc": "Search"
+ *   추가 — Search_OPS Naver 캠페인 매핑 작업 중 발견. "expo" 키워드로 인해
+ *   Seminar로 우선 판정되고 있었으나, 실제로는 상담신청(ptc) 캠페인으로
+ *   Search가 맞다는 것을 사용자가 확인.
  * v1.12.0 (2026-07-29)
  * - getBusinessSegment() campaign "search" 확정 신호 버그 수정 — "research"
  *   (리서치)에 포함된 "search" 부분 문자열이 오탐돼 "college-research-ebook",
@@ -746,7 +751,15 @@ const BUSINESS_SEGMENT_EXCEPTIONS = {
   "medview - contact form": "Other",
   "filled in medview contact us form": "Other",
   "{_campaign}": "Other",
-  "{campaign.name}": "Other"
+  "{campaign.name}": "Other",
+
+  // ------------------------------------------------------
+  // 2026-08-05 — "expo_earlybird" 캠페인 예외 (사용자 확인, Search_OPS
+  // Naver 캠페인 매핑 작업 중 발견). "expo" 키워드 때문에 일반 룰에서
+  // Seminar로 먼저 판정되고 있었으나, 실제로는 상담신청(ptc) 캠페인으로
+  // Search가 맞다는 것을 사용자가 확인 — 일반 룰보다 우선하는 예외로 처리.
+  // ------------------------------------------------------
+  "kr_core_expo_earlybird2_ptc": "Search"
 
 };
 

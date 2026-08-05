@@ -1,5 +1,42 @@
 # Changelog — 2026-08-05
 
+## Search_OPS Naver 캠페인 매핑 10개 완료 + Spent/Results 자동화 (`docs/OpenItems.md` #21)
+
+이전 세션에서 미확인이던 Naver 캠페인 5개 매핑을 사용자가 확인해주면서 이어간 라운드.
+Impressions/Link clicks만 자동화돼있던 Search_OPS에 Spent/Results까지 추가로 자동화.
+
+- **나머지 5개 캠페인 매핑 완료**: College Specific/UK Meds/Competitions/Brand(HStoDS)/
+  Expo(사용자 확인) — `73_Search_Merge.js`의 `NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE`
+  10개 전체 매핑 완료. `expo_earlybird2_ptc`는 캠페인명의 "expo" 키워드 때문에
+  `getBusinessSegment()`가 Seminar로 우선 판정 중이었으나 실제로는 Search가 맞다고
+  사용자가 확인 — `BUSINESS_SEGMENT_EXCEPTIONS`(16_TransformHelper.js)에 예외 추가(Search_Engine이
+  Business Segment=Search만 집계하는 구조라 Search_OPS 키 매핑만으로는 부족했음).
+- **버그 발견·수정 — 캠페인 충돌 시 통계 덮어쓰기**: `HStoDS_contact`가 기존 `brand_contact`와
+  같은 Search_OPS 키를 공유하게 되면서, 2개 이상의 Naver 캠페인이 같은 키로 번역될 때 나중
+  캠페인이 먼저 것을 조용히 덮어써 통계가 누락되는 문제 발견 — 합산하도록 수정(사용자 확인).
+- **Spent 자동화**: Naver `salesAmt`(KRW)를 기존 Impressions/Link clicks 누적 캐시에 얹어
+  캠페인별로 누적, `fetchKrwToNzdRate_()`(AD_004_SpendCache.js)로 NZD 변환 후 Search_OPS
+  "Spent"에 자동 매칭(사용자 확정 — ACQ_REP과 통화 통일). 환율 조회 실패 시 기존 값 보존.
+- **Results 자동화 — Naver API 필드 실측 후 확정**: 공식 문서 사이트가 SPA라 필드 목록을
+  스크레이핑할 수 없어 실제 `/stats` 호출로 후보 필드(ctr/cpc/avgRnk/ccnt/ccnt1d)를 개별
+  실측 — `ccnt`가 200 정상 응답하고 값이 항상 clkCnt 이하라 "전환수"로 판단(사용자 확인),
+  Spent와 동일한 패턴으로 Results 자동화 반영.
+- **배포 직후 버그 발견·수정 — Spent/Results가 0으로 표시됨**: 원인은 이 코드 배포 이전에
+  이미 오늘자 갱신이 한 번 돌아서 `refreshNaverSearchAdCampaignStatsCache_()`의 "오늘 이미
+  갱신됨" 가드가 신규 필드 요청 자체를 막고 있었던 것 — 1회성 백필 함수로 해소.
+- **Spent 전체 기간 소급, Results는 API 하드 리밋으로 90일 롤링 확정**: 백필 후에도 사용자가
+  "캠페인 시작일부터의 전체 금액치고 작다"고 지적 — 실측 결과 `ccnt`는 salesAmt와 같이
+  묶든 안 묶든 92일 제약을 그대로 받아(`{code:11004}`) Results는 전체 기간 소급이 원천적으로
+  불가능함을 확인. 반면 `salesAmt` 단독은 이미 Ad_Spend_Cache 파이프라인에서 730일까지
+  확인돼 있어, 기존 월별 반복 백필 패턴(`computeNaverSearchAdSpendHistorySummary_()`)을
+  캠페인 이름 단위로 재사용해 Spent만 전체 기간(BACKFILL_START~오늘) 소급 백필 구현.
+- **헤더 개명(사용자 요청)**: "Results" → "Results 90D" — ccnt가 API 자체 하드 리밋으로
+  항상 최근 90일 롤링 값만 반영 가능하다는 걸 헤더에서 바로 알 수 있게 함. CvR 계산식/SUBTOTAL
+  대상 컬럼 목록 등 관련 참조 전부 갱신(70/73/74_Search_*.js).
+
+**검증**: Node vm 하네스로 신규/변경 pure 함수 전부 테스트 PASS, `check-syntax`/`check-naming`/
+`check-version-header`/`check-duplicate-declarations` 매 라운드 통과, 매 라운드 `clasp push` 완료.
+
 ## 카카오모먼트 비즈니스 토큰 발급 완료 + 리포트 API 진단 착수
 
 전날 세션에서 인가 코드 요청까지 진행하고 멈췄던 카카오모먼트 OAuth 연동 이어서 진행.

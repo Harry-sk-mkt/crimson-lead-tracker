@@ -12,9 +12,41 @@
  * 53_Events_Merge.js 정의를 재사용.
  *
  * Version
- * v1.4.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-05)
+ * - 헤더 "Results" → "Results 90D"로 개명(70_Search_Config.js v1.7.0, 사용자
+ *   요청) 반영 — `applySearchNaverCampaignStats_()`의 row 대입 키,
+ *   `applySearchGroup5Derived_()`의 CvR 계산(`row["Results 90D"]`), 관련
+ *   테스트 픽스처 전부 갱신.
+ * v1.7.0 (2026-08-05)
+ * - **Search_OPS "Results" 자동화(사용자 요청)** — `buildNaverCampaignStatsLowerKeyMap_()`/
+ *   `applySearchNaverCampaignStats_()`가 이제 `results`(Naver ccnt, 전환수로
+ *   추정 — 실측 확인)도 함께 매칭·합산. Spent와 달리 통화 변환이 없어 FX
+ *   실패 보호 로직 없이 impressions/clicks와 동일하게 항상 갱신. "Results"는
+ *   70_Search_Config.js v1.6.0에서 GROUP_3_MANUAL→GROUP_3A_AUTO로 이동.
+ * v1.6.0 (2026-08-05)
+ * - **Search_OPS "Spent" 자동화(사용자 요청)** — `buildNaverCampaignStatsLowerKeyMap_()`/
+ *   `applySearchNaverCampaignStats_()`가 이제 `spent`(NZD, 72_Search_Build.js가
+ *   AD_003_NaverSearch.js `convertNaverCampaignStatsSpendToNZD_()`로 변환해 넘김)도
+ *   함께 매칭·합산(충돌 시 Impressions/Link clicks와 동일하게 합산). "Spent"는
+ *   70_Search_Config.js v1.5.0에서 GROUP_3_MANUAL→GROUP_3A_AUTO로 이동.
+ *   `spent`가 `undefined`(72_Search_Build.js의 KRW→NZD 환율 조회 실패 시)면
+ *   Spent 컬럼은 건드리지 않고 기존 값 보존 — Impressions/Link clicks는
+ *   정상 갱신(0으로 잘못 덮어쓰는 것 방지).
+ * v1.5.0 (2026-08-05)
+ * - `NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE`에 나머지 5개 캠페인 매핑
+ *   추가(college-spec-1/topic-spec-1/competitions/HStoDS/expo_earlybird2 —
+ *   사용자가 육안 대조 완료, 10개 전체 매핑 완료). `expo_earlybird2_ptc`는
+ *   Business Segment도 함께 정정(16_TransformHelper.js v1.13.0 참고, 원래
+ *   "expo" 키워드로 Seminar 오판정되고 있었음).
+ * - **버그 수정 — 2개 이상의 Naver 캠페인이 같은 Search_OPS 키로 번역될 때
+ *   (brand_contact + hstods_contact, 둘 다 "Naver SA Brand") 나중 처리된
+ *   캠페인이 먼저 것을 조용히 덮어써 통계가 누락되던 문제**(사용자 확인 후
+ *   합산으로 결정) — `buildNaverCampaignStatsLowerKeyMap_()`가 이제 충돌 시
+ *   impressions/clicks를 합산, Campaign명은 " + "로 연결. 신규 테스트 케이스
+ *   `testApplySearchNaverCampaignStats()`에 추가.
  * v1.4.0 (2026-08-05)
  * - **버그 수정(실측) — Naver 캠페인 실제 이름과 Search_OPS 키(Marketo Program명)가
  *   다른 네임스페이스라 직접 매칭이 거의 안 걸렸음**(사용자 확인, 10개 캠페인 중
@@ -55,11 +87,13 @@
  * ==========================================================
  * Merge Search_Engine + Existing Search_OPS
  *
- * `naverStatsMap`(선택, 2026-08-05 신규): {campaignName: {impressions, clicks}}
- * (AD_003_NaverSearch.js의 `readNaverSearchAdCampaignStatsCache_()`) — 넘기면
- * Search_OPS 키와 대소문자/공백 무시 매칭되는 캠페인의 Campaign/Impressions/
- * Link clicks(GROUP_3A_AUTO)를 자동으로 덮어씀. 안 넘기거나(undefined) 매칭이
- * 없으면 기존 값(수동 입력 또는 빈 값) 그대로 유지 — 사용자 요청.
+ * `naverStatsMap`(선택, 2026-08-05 신규): {campaignName: {impressions, clicks, spent}}
+ * (AD_003_NaverSearch.js의 `readNaverSearchAdCampaignStatsCache_()` →
+ * `convertNaverCampaignStatsSpendToNZD_()`로 spent를 NZD 변환한 결과, 72_Search_
+ * Build.js 참고) — 넘기면 Search_OPS 키와 대소문자/공백 무시 매칭되는 캠페인의
+ * Campaign/Impressions/Link clicks/Spent(GROUP_3A_AUTO)를 자동으로 덮어씀.
+ * 안 넘기거나(undefined) 매칭이 없으면 기존 값(수동 입력 또는 빈 값) 그대로
+ * 유지 — 사용자 요청.
  * ==========================================================
  */
 function mergeSearchOPS_(existingOps, engineMap, naverStatsMap) {
@@ -170,11 +204,19 @@ function applySearchNewRowDefaults_(row, key) {
  * 가능하면 US/UK 분리, 안 되면 Naver 콘솔에서 캠페인 자체를 US/UK 2개로
  * 나누는 방안(광고 운영 조치, 코드 밖)을 사용자가 검토하기로 함.
  *
- * **나머지 5개는 매핑 미확인**(KR_core_college-spec-1_contact/
- * topic-spec-1_contact/competitions_contact/HStoDS_contact/
- * expo_earlybird2_ptc) — 대응하는 Marketo Program을 사용자가 아직
- * 확인 안 함. 여기 없으면 자동 매칭이 안 걸리고(기존 값 그대로 유지)
- * Search_OPS 쪽에서 계속 수동 입력 — 확인되는 대로 추가할 것.
+ * **나머지 5개도 2026-08-05 사용자 확인으로 매핑 완료**(college-spec-1/
+ * topic-spec-1/competitions/HStoDS/expo_earlybird2). `expo_earlybird2_ptc`는
+ * 원래 getBusinessSegment()가 "expo" 키워드로 Seminar 우선 판정하고 있었으나
+ * 실제로는 Search가 맞다는 게 이번에 확인돼 `BUSINESS_SEGMENT_EXCEPTIONS`
+ * (16_TransformHelper.js)에도 별도로 반영함(Search_Engine이 Business
+ * Segment=Search만 집계하므로, 여기 override만으로는 부족).
+ *
+ * **`kr_core_hstods_contact`가 `kr_core_brand_contact`와 같은 Search_OPS
+ * 키("2025-07-KOR-Naver SA Brand")를 공유함**(사용자 확인 — 실제로 같은
+ * Marketo Program으로 들어가는 캠페인 2개) — 이 경우 Impressions/Link
+ * clicks는 두 캠페인 합산, Campaign 표시명은 " + "로 이어붙임
+ * (`buildNaverCampaignStatsLowerKeyMap_()` 참고, 원래는 나중 처리된 캠페인이
+ * 먼저 것을 조용히 덮어쓰는 버그가 있었음 — 2026-08-05 수정).
  * ==========================================================
  */
 const NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE = {
@@ -182,7 +224,12 @@ const NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE = {
   "kr_core_transfer-gap-year-kr": "2025-11-KOR-Naver SA Transfer and Gap Year",
   "kr_core_competitors_contact": "2025-07-KOR-Naver SA Competitor",
   "kr_core_ecl-consult_contact": "2025-07-KOR-Naver SA ECL",
-  "kr_core_study-consult_contact": "2025-07-KOR-Naver SA Study Consultants US"
+  "kr_core_study-consult_contact": "2025-07-KOR-Naver SA Study Consultants US",
+  "kr_core_college-spec-1_contact": "2025-07-KOR-Naver SA College Specific",
+  "kr_core_topic-spec-1_contact": "2025-07-KOR-Naver SA UK Meds",
+  "kr_core_competitions_contact": "2025-07-KOR-Naver SA Competitions",
+  "kr_core_hstods_contact": "2025-07-KOR-Naver SA Brand",
+  "kr_core_expo_earlybird2_ptc": "WF-2026-03-KOR-MOFU-Core Expo Naver Search"
 };
 
 
@@ -196,14 +243,27 @@ const NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE = {
  * override에 있으면 번역된 Search_OPS 키로, 없으면 원본 캠페인명 그대로
  * lower-key 맵의 키로 사용(override 없는 값도 Search_OPS 키가 우연히
  * 원본 캠페인명과 같은 경우를 위한 안전망 — 매 행마다 원본 맵을 다시
- * 스캔하지 않도록 한 번만 변환).
+ * 스캔하지 않도록 한 번만 변환). **2개 이상의 Naver 캠페인이 같은
+ * Search_OPS 키로 번역되는 경우(예: brand_contact + hstods_contact →
+ * 둘 다 "Naver SA Brand") impressions/clicks/spent/results는 합산, name은
+ * " + "로 이어붙임**(2026-08-05 수정 — 원래는 나중 처리된 캠페인이 먼저 것을
+ * 조용히 덮어써 통계가 누락되는 버그였음, 사용자 확인 후 합산으로 결정).
+ * **spent는 naverStatsMap 항목에 그 키 자체가 없으면 `undefined`로 통과**
+ * (0으로 강제하지 않음) — 72_Search_Build.js가 KRW→NZD 환율 조회 실패 시
+ * spent 변환 자체를 건너뛰므로, 이 경우 Search_OPS의 기존 Spent 값을 0으로
+ * 덮어쓰지 않고 그대로 보존해야 하기 때문(`applySearchNaverCampaignStats_`
+ * 참고 — `match.spent === undefined`면 Spent 컬럼을 건드리지 않음). results는
+ * 통화 변환이 없어 이런 보호가 필요 없음 — impressions/clicks와 동일하게
+ * 항상 숫자로 합산(2026-08-05 추가).
  *
  * INPUT
- * naverStatsMap : Object|undefined  {campaignName: {impressions, clicks}}
+ * naverStatsMap : Object|undefined  {campaignName: {impressions, clicks, spent?, results}}
  *
  * OUTPUT
- * Object  {lowerSearchOpsKey: {name, impressions, clicks}}  (name은
- *   Search_OPS Campaign 컬럼에 그대로 쓸 원본 Naver 캠페인명)
+ * Object  {lowerSearchOpsKey: {name, impressions, clicks, spent, results}}
+ *   (name은 Search_OPS Campaign 컬럼에 그대로 쓸 원본 Naver 캠페인명, 충돌 시
+ *   " + "로 연결된 복수 캠페인명. spent는 입력 전체에 spent가 없으면
+ *   undefined로 유지, 하나라도 있으면 없는 쪽을 0으로 간주해 합산)
  *
  * TEST
  * testApplySearchNaverCampaignStats() 참고
@@ -218,10 +278,28 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
     const searchOpsKey =
       NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE[name.trim().toLowerCase()] || name;
 
-    lower[searchOpsKey.trim().toLowerCase()] = {
+    const lowerKey = searchOpsKey.trim().toLowerCase();
+    const existing = lower[lowerKey];
+    const rawSpent = naverStatsMap[name].spent;
+    const spent = rawSpent === undefined ? undefined : (Number(rawSpent) || 0);
+    const results = Number(naverStatsMap[name].results) || 0;
+
+    const combinedSpent = (existing && existing.spent === undefined && spent === undefined)
+      ? undefined
+      : ((existing ? (existing.spent || 0) : 0) + (spent || 0));
+
+    lower[lowerKey] = existing ? {
+      name: existing.name + " + " + name,
+      impressions: existing.impressions + naverStatsMap[name].impressions,
+      clicks: existing.clicks + naverStatsMap[name].clicks,
+      spent: combinedSpent,
+      results: existing.results + results
+    } : {
       name: name,
       impressions: naverStatsMap[name].impressions,
-      clicks: naverStatsMap[name].clicks
+      clicks: naverStatsMap[name].clicks,
+      spent: spent,
+      results: results
     };
 
   });
@@ -237,10 +315,14 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
  *
  * WHY
  * Search_OPS 키가 Naver 캠페인 실제 이름과 매칭되면 Campaign/Impressions/
- * Link clicks를 캐시값으로 덮어쓴다. 매칭 안 되면 아무것도 하지 않음 —
- * 호출 시점에 row에 이미 들어있는 값(기존 행이면 copyColumns_()로 복사된
- * 이전 값, 신규 행이면 applySearchNewRowDefaults_()가 채운 빈 문자열)을
- * 그대로 유지(사용자 요청 — "매칭되는 것만 자동, 나머지는 그대로").
+ * Link clicks/Spent/Results(2026-08-05 추가)를 캐시값으로 덮어쓴다. 매칭
+ * 안 되면 아무것도 하지 않음 — 호출 시점에 row에 이미 들어있는 값(기존
+ * 행이면 copyColumns_()로 복사된 이전 값, 신규 행이면
+ * applySearchNewRowDefaults_()가 채운 빈 문자열)을 그대로 유지(사용자 요청
+ * — "매칭되는 것만 자동, 나머지는 그대로"). **`match.spent`가 `undefined`면
+ * Spent 컬럼은 건드리지 않음**(72_Search_Build.js가 KRW→NZD 환율 조회 실패
+ * 시 spent 변환을 건너뛰는 경우 — Campaign/Impressions/Link clicks/Results는
+ * 정상 갱신하되 Spent는 기존 값을 0으로 잘못 덮어쓰지 않도록 보호).
  * ==========================================================
  */
 function applySearchNaverCampaignStats_(row, key, naverStatsLower) {
@@ -252,6 +334,9 @@ function applySearchNaverCampaignStats_(row, key, naverStatsLower) {
   row["Campaign"] = match.name;
   row["Impressions"] = match.impressions;
   row["Link clicks"] = match.clicks;
+  row["Results 90D"] = match.results;
+
+  if (match.spent !== undefined) row["Spent"] = match.spent;
 
 }
 
@@ -264,46 +349,72 @@ function applySearchNaverCampaignStats_(row, key, naverStatsLower) {
 function testApplySearchNaverCampaignStats() {
 
   const naverStatsMap = {
-    "2025-07-KOR-Naver SA Brand": { impressions: 1000, clicks: 50 }, // Search_OPS 키와 이미 동일(direct match)
-    "KR_core_ecl-consult_contact": { impressions: 300, clicks: 20 } // override 번역 필요
+    "2025-07-KOR-Naver SA Brand": { impressions: 1000, clicks: 50, results: 8 }, // Search_OPS 키와 이미 동일(direct match), spent 필드 없음 — FX 실패 시나리오 검증
+    "KR_core_ecl-consult_contact": { impressions: 300, clicks: 20, spent: 12.5, results: 3 } // override 번역 필요
   };
 
   const lower = buildNaverCampaignStatsLowerKeyMap_(naverStatsMap);
 
-  // 매칭 케이스 (대소문자/공백 무시, direct)
-  const matchedRow = { "Campaign": "old", "Impressions": 1, "Link clicks": 1 };
+  // 매칭 케이스 (대소문자/공백 무시, direct) — spent 필드 없는 입력(FX 조회 실패
+  // 시나리오)은 기존 Spent 값을 그대로 보존해야 함(0으로 덮어쓰면 안 됨).
+  // results는 FX와 무관해 항상 갱신돼야 함.
+  const matchedRow = { "Campaign": "old", "Impressions": 1, "Link clicks": 1, "Spent": 42, "Results 90D": 1 };
   applySearchNaverCampaignStats_(matchedRow, "  2025-07-kor-naver sa brand  ", lower);
 
   const matchedPass =
     matchedRow["Campaign"] === "2025-07-KOR-Naver SA Brand" &&
     matchedRow["Impressions"] === 1000 &&
-    matchedRow["Link clicks"] === 50;
+    matchedRow["Link clicks"] === 50 &&
+    matchedRow["Spent"] === 42 &&
+    matchedRow["Results 90D"] === 8;
 
   // 매칭 케이스 (override 번역 경유) — Search_OPS 키 "2025-07-KOR-Naver SA ECL"로
   // 조회하면 원본 캠페인명 "KR_core_ecl-consult_contact"의 값을 찾아와야 함
-  const overrideRow = { "Campaign": "old2", "Impressions": 1, "Link clicks": 1 };
+  const overrideRow = { "Campaign": "old2", "Impressions": 1, "Link clicks": 1, "Spent": 1, "Results 90D": 1 };
   applySearchNaverCampaignStats_(overrideRow, "2025-07-KOR-Naver SA ECL", lower);
 
   const overridePass =
     overrideRow["Campaign"] === "KR_core_ecl-consult_contact" &&
     overrideRow["Impressions"] === 300 &&
-    overrideRow["Link clicks"] === 20;
+    overrideRow["Link clicks"] === 20 &&
+    overrideRow["Spent"] === 12.5 &&
+    overrideRow["Results 90D"] === 3;
 
   // 매칭 안 되는 케이스 — 기존 값 그대로 유지돼야 함
-  const unmatchedRow = { "Campaign": "manual entry", "Impressions": 5, "Link clicks": 2 };
+  const unmatchedRow = { "Campaign": "manual entry", "Impressions": 5, "Link clicks": 2, "Spent": 3, "Results 90D": 1 };
   applySearchNaverCampaignStats_(unmatchedRow, "Google UTM", lower);
 
   const unmatchedPass =
     unmatchedRow["Campaign"] === "manual entry" &&
     unmatchedRow["Impressions"] === 5 &&
-    unmatchedRow["Link clicks"] === 2;
+    unmatchedRow["Link clicks"] === 2 &&
+    unmatchedRow["Spent"] === 3 &&
+    unmatchedRow["Results 90D"] === 1;
 
-  const pass = matchedPass && overridePass && unmatchedPass;
+  // 충돌 케이스 (2026-08-05) — kr_core_brand_contact와 kr_core_hstods_contact
+  // 둘 다 "2025-07-KOR-Naver SA Brand"로 번역됨 → 합산돼야 함(덮어쓰기 아님)
+  const collisionStatsMap = {
+    "KR_core_brand_contact": { impressions: 1000, clicks: 50, spent: 100, results: 5 },
+    "KR_core_HStoDS_contact": { impressions: 300, clicks: 20, spent: 40, results: 2 }
+  };
+  const collisionLower = buildNaverCampaignStatsLowerKeyMap_(collisionStatsMap);
+  const collisionRow = { "Campaign": "old3", "Impressions": 1, "Link clicks": 1, "Spent": 1, "Results 90D": 1 };
+  applySearchNaverCampaignStats_(collisionRow, "2025-07-KOR-Naver SA Brand", collisionLower);
+
+  const collisionPass =
+    collisionRow["Campaign"] === "KR_core_brand_contact + KR_core_HStoDS_contact" &&
+    collisionRow["Impressions"] === 1300 &&
+    collisionRow["Link clicks"] === 70 &&
+    collisionRow["Spent"] === 140 &&
+    collisionRow["Results 90D"] === 7;
+
+  const pass = matchedPass && overridePass && unmatchedPass && collisionPass;
 
   Logger.log(
     "matchedRow=" + JSON.stringify(matchedRow) +
     " overrideRow=" + JSON.stringify(overrideRow) +
-    " unmatchedRow=" + JSON.stringify(unmatchedRow)
+    " unmatchedRow=" + JSON.stringify(unmatchedRow) +
+    " collisionRow=" + JSON.stringify(collisionRow)
   );
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
@@ -332,7 +443,7 @@ function applySearchGroup4Computed_(row, engineRow) {
 function applySearchGroup5Derived_(row) {
 
   row["CTR"] = divideGuard_(row["Link clicks"], row["Impressions"]);
-  row["CvR"] = divideGuard_(row["Results"], row["Link clicks"]);
+  row["CvR"] = divideGuard_(row["Results 90D"], row["Link clicks"]);
   row["CPL"] = divideGuard_(row["Spent"], row["TotalReg."]);
   row["CPNP1"] = divideGuard_(row["Spent"], row["SF NLP1s"]);
   row["ROAS"] = divideGuard_(row["Revenue"], row["Spent"]);

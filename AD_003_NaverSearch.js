@@ -44,9 +44,86 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.7.0
+ * v2.14.0
  *
  * Change Log
+ * v2.14.0 (2026-08-05)
+ * - **Spent 전체 기간 소급 백필(사용자 요청 — "시작일까지 전체 소급")** —
+ *   `runDebugNaverSearchAdStatsCcntRangeLimit()` 실측 결과 ccnt는 salesAmt와
+ *   같은 호출에 있든 없든 92일 제약을 그대로 받음(`{code:11004}` 400,
+ *   impCnt/clkCnt 없이 salesAmt+ccnt만 400일로 요청해도 재현) — 즉 Results는
+ *   92일 롤링 윈도우가 API 하드 리밋으로 확정, 전체 기간 소급 불가능한
+ *   반면 salesAmt 단독은 이미 730일까지 확인돼 있어(Ad_Spend_Cache
+ *   파이프라인) Spent만 전체 기간 소급 가능. 신규
+ *   `accumulateNaverCampaignSpendKrwByName_()`(순수 함수, 월별 누적) +
+ *   1회성 `runBackfillNaverSearchCampaignSpendHistory()` —
+ *   `computeNaverSearchAdSpendHistorySummary_()`와 동일 패턴(캠페인 목록 1회
+ *   조회 + BACKFILL_START부터 매달 salesAmt 단독 조회, 730일 밖 에러만
+ *   건너뜀)을 캠페인 이름 단위로 재사용, spentKrw를 0으로 리셋 후 전체
+ *   재계산(90일 백필과 이중 합산 방지), impressions/clicks/results는
+ *   불변. 신규 테스트 `testAccumulateNaverCampaignSpendKrwByName()`.
+ * v2.13.0 (2026-08-05)
+ * - 신규 `runDebugNaverSearchAdStatsCcntRangeLimit()`(수동 실행, 진단용) —
+ *   사용자가 Spent/Results 금액이 작다고 지적(90일 백필로는 캠페인 시작일
+ *   전체를 못 채움) — impCnt/clkCnt 없이 salesAmt+ccnt만 400일 범위로
+ *   요청해 ccnt가 salesAmt와 같은 730일 허용 범위를 공유하는지(92일
+ *   제약이 impCnt/clkCnt 전용인지) 실측하는 진단 함수. 결과 확인 후 전체
+ *   기간 소급 백필(월별 반복 호출 + 11004 뜨는 달 건너뛰기, 기존
+ *   computeNaverSearchAdSpendHistorySummary_() 패턴 재사용) 구현 예정.
+ * v2.12.0 (2026-08-05)
+ * - **버그 수정 — 배포 직후 Spent/Results가 0으로 표시됨(사용자 실측 보고)**:
+ *   원인은 `refreshNaverSearchAdCampaignStatsCache_()`의 "오늘 이미 갱신됨"
+ *   가드 — v2.9.0/v2.11.0 배포 이전에 이미 오늘자 갱신이 한 번 돌아서(구버전
+ *   호출, salesAmt/ccnt 없이) 오늘 날짜가 `LAST_FETCHED_THROUGH`에 기록돼
+ *   있었고, 그래서 신규 필드를 요청하는 갱신이 오늘 안에 한 번도 실행되지
+ *   못함(캐시 시트에 Spent(KRW)/Results 컬럼 자체가 없는 상태로 남음). 신규
+ *   `backfillNaverCampaignStatsSpentResults_()`(순수 함수) + 1회성 진입점
+ *   `runBackfillNaverSearchCampaignStatsSpentResults()` — impressions/clicks
+ *   누적치(및 그 진행률 추적용 LAST_FETCHED_THROUGH)는 전혀 안 건드리고
+ *   spentKrw/results만 최근 90일 윈도우로 채움(멱등 — 여러 번 실행돼도
+ *   매번 같은 스냅샷으로만 재설정, 중복 합산 없음). 신규 테스트
+ *   `testBackfillNaverCampaignStatsSpentResults()`.
+ * v2.11.0 (2026-08-05)
+ * - **Search_OPS "Results" 자동화(사용자 요청)** — `runDebugNaverSearchAdStatsExpandedFields()`
+ *   실측 결과 `ccnt` 필드가 200 정상 응답하고 값이 항상 clkCnt 이하라 "전환수"로
+ *   판단(사용자 확인) — Spent와 동일한 누적 캐시 패턴으로 확장.
+ *   `fetchNaverSearchAdImpressionsClicksStats_()` fields에 "ccnt" 추가,
+ *   `accumulateNaverSearchAdCampaignStats_()`가 results도 누적,
+ *   `NAVER_CAMPAIGN_STATS_CACHE_HEADERS`에 "Results" 컬럼 추가,
+ *   `convertNaverCampaignStatsSpendToNZD_()`가 results를 변환 없이 그대로
+ *   통과(통화 무관). `70_Search_Config.js` v1.6.0에서 "Results"를
+ *   GROUP_3_MANUAL→GROUP_3A_AUTO로 이동, `73_Search_Merge.js` v1.7.0이
+ *   매칭 시 Results도 함께 채우도록 확장(Spent와 달리 FX 실패와 무관하게
+ *   항상 갱신 — impressions/clicks와 동일하게 처리).
+ * v2.10.0 (2026-08-05)
+ * - `runDebugNaverSearchAdStatsExpandedFields()` 재작성 — 1차 실행 결과
+ *   ctr/cpc/avgRnk/ccnt/ccnt1d를 한 번에 요청했더니 `{code:11001}` 400
+ *   에러(필드 하나라도 유효하지 않으면 요청 전체 실패로 추정) — 어떤 필드가
+ *   문제인지 격리하기 위해 base(impCnt/clkCnt/salesAmt) + 후보 1개씩 개별
+ *   요청으로 변경(한 번 Run으로 5개 후보 전부 순회, 필드별 statusCode 로그).
+ * v2.9.0 (2026-08-05)
+ * - **Search_OPS "Spent" 자동화(사용자 요청)** — 기존 Impressions/Link
+ *   clicks 누적 캐시 파이프라인에 salesAmt(KRW)를 얹어 확장.
+ *   `fetchNaverSearchAdImpressionsClicksStats_()` fields에 "salesAmt" 추가
+ *   (92일 윈도우 안이라 salesAmt의 더 넓은 730일 제약과 충돌 없음),
+ *   `accumulateNaverSearchAdCampaignStats_()`가 spentKrw도 누적,
+ *   `NAVER_CAMPAIGN_STATS_CACHE_HEADERS`에 "Spent (KRW)" 컬럼 추가(원본
+ *   그대로 캐시 저장 — NZD 변환은 IO 경계에서). 신규
+ *   `convertNaverCampaignStatsSpendToNZD_()`(순수 함수) — `72_Search_Build.js`가
+ *   `fetchKrwToNzdRate_()`(AD_004_SpendCache.js)로 구한 환율을 넘겨 변환
+ *   (사용자 확정 — ACQ_REP과 동일하게 NZD 통일). `70_Search_Config.js`
+ *   v1.5.0에서 "Spent"를 GROUP_3_MANUAL→GROUP_3A_AUTO로 이동,
+ *   `73_Search_Merge.js` v1.6.0이 매칭 시 Spent도 함께 채우도록 확장.
+ *   신규 테스트 `testConvertNaverCampaignStatsSpendToNZD()`, 기존
+ *   `testAccumulateNaverSearchAdCampaignStats()` spentKrw 케이스 추가.
+ * v2.8.0 (2026-08-05)
+ * - 신규 `runDebugNaverSearchAdStatsExpandedFields()`(수동 실행, 진단용) —
+ *   Search_OPS "Results" 컬럼 자동화 검토 중, 공식 문서 사이트가 SPA라
+ *   스크레이핑으로 필드 목록을 확인할 수 없어 실제 `/stats` 호출로 직접
+ *   확인하기 위한 진단 함수. `fields`에 impCnt/clkCnt/salesAmt 외에
+ *   ctr/cpc/avgRnk/ccnt/ccnt1d(전환수 후보) 등을 추가로 요청해 어떤
+ *   필드가 실제로 값을 반환하는지 실측. 결과 확인 전까지 Results 자동화는
+ *   보류(`docs/OpenItems.md` 참고).
  * v2.7.0 (2026-08-05)
  * - 신규 `runShowNaverSearchAdCampaignStatsCache()`(수동 실행, 진단용) —
  *   사용자가 Google Sheets UI "모든 시트" 목록에서 `Naver_Search_Campaign_
@@ -505,6 +582,115 @@ function runDebugNaverSearchAdStats(){
     ids: sampleIds,
     fields: JSON.stringify(["impCnt", "clkCnt", "salesAmt"]),
     timeRange: JSON.stringify({ since: since, until: until })
+  });
+
+  Logger.log("statusCode: " + statsResult.statusCode);
+  Logger.log("응답 본문: " + JSON.stringify(statsResult.body, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 확장 필드 진단(GET /stats, "전환수" 후보 필드 실측 — 1개씩 개별 요청)
+ *
+ * WHY (2026-08-05)
+ * Search_OPS "Results" 컬럼을 Naver Search Ad API로 자동화할 수 있는지
+ * 검토 중 — 공식 문서 사이트(naver.github.io/searchad-apidoc)가 SPA라
+ * 스크레이핑으로 필드 목록을 확인할 수 없었음. impCnt/clkCnt/salesAmt는
+ * 이미 확인됐으니, "전환"에 해당할 만한 필드 후보(ctr/cpc/avgRnk/ccnt/
+ * ccnt1d)를 추가로 요청해 실제로 값이 오는지/에러가 나는지 실측한다.
+ *
+ * **1차 실행 결과(2026-08-05, 사용자 실행)**: 후보 8개를 한 번에 요청했더니
+ * `{code:11001, message:"잘못된 파라미터 형식입니다."}` 400 에러 — 이 API는
+ * fields 배열에 유효하지 않은 필드명이 하나라도 섞이면 요청 전체가 실패하는
+ * 것으로 추정(추측, 아직 확정 아님). 어떤 필드가 문제인지 알 수 없어, 확인된
+ * base(impCnt/clkCnt/salesAmt) + 후보 1개씩만 넣어 개별 요청으로 격리
+ * (한 번 Run으로 5개 후보 전부 순서대로 호출, 각각의 statusCode/응답을 로그로
+ * 남김 — 400이면 그 필드가 유효하지 않은 것, 200이면 유효한 것으로 판정).
+ * ==========================================================
+ */
+function runDebugNaverSearchAdStatsExpandedFields(){
+
+  const campaignsResult = callNaverSearchAdApi_("GET", "/ncc/campaigns", {});
+
+  if(!Array.isArray(campaignsResult.body) || campaignsResult.body.length === 0){
+    Logger.log("캠페인 목록을 못 가져옴 — statusCode: " + campaignsResult.statusCode +
+      ", body: " + JSON.stringify(campaignsResult.body));
+    return;
+  }
+
+  const sampleIds = campaignsResult.body.slice(0, 3).map(function(c){ return c.nccCampaignId; });
+
+  const today = new Date();
+  const since = Utilities.formatDate(new Date(today.getFullYear(), today.getMonth(), 1), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const until = Utilities.formatDate(today, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  Logger.log("sampleIds: " + JSON.stringify(sampleIds) + ", since=" + since + ", until=" + until);
+
+  const baseFields = ["impCnt", "clkCnt", "salesAmt"];
+  const candidateFields = ["ctr", "cpc", "avgRnk", "ccnt", "ccnt1d"];
+
+  candidateFields.forEach(function(candidate){
+
+    const fields = baseFields.concat([candidate]);
+
+    const statsResult = callNaverSearchAdApi_("GET", "/stats", {
+      ids: sampleIds,
+      fields: JSON.stringify(fields),
+      timeRange: JSON.stringify({ since: since, until: until })
+    });
+
+    Logger.log(
+      "--- 후보 필드: " + candidate + " ---\n" +
+      "statusCode: " + statsResult.statusCode + "\n" +
+      "응답 본문: " + JSON.stringify(statsResult.body, null, 2)
+    );
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — ccnt/salesAmt 조회 가능 기간 진단(GET /stats, impCnt/clkCnt 제외)
+ *
+ * WHY (2026-08-05)
+ * Search_OPS Spent/Results가 캠페인 시작일(2025년 중반)부터가 아니라 최근
+ * 90일치만 반영돼 사용자가 금액이 작다고 지적 — 원인은 92일 제약이 있는
+ * impCnt/clkCnt를 salesAmt/ccnt와 같은 호출에 묶어서 요청했기 때문(salesAmt
+ * 단독은 이미 Ad_Spend_Cache 파이프라인에서 730일까지 조회 가능함이 확인돼
+ * 있음, `fetchNaverSearchAdStats_()` 참고). ccnt도 salesAmt와 같은 730일
+ * 허용 범위를 공유하는지, 아니면 impCnt/clkCnt처럼 92일로 별도 제한되는지는
+ * 아직 미확인 — impCnt/clkCnt를 완전히 빼고 salesAmt+ccnt만 92일보다 긴
+ * 기간(400일)으로 요청해 실측한다. 200이면 92일보다 넓은 범위 허용 확정
+ * (정확한 상한은 몰라도 무방 — 기존 salesAmt 월별 백필 패턴처럼 매달
+ * 반복 호출하다 11004 뜨는 달만 건너뛰면 됨), 400이면 ccnt도 92일
+ * 제약이라는 뜻.
+ * ==========================================================
+ */
+function runDebugNaverSearchAdStatsCcntRangeLimit(){
+
+  const campaignsResult = callNaverSearchAdApi_("GET", "/ncc/campaigns", {});
+
+  if(!Array.isArray(campaignsResult.body) || campaignsResult.body.length === 0){
+    Logger.log("캠페인 목록을 못 가져옴 — statusCode: " + campaignsResult.statusCode +
+      ", body: " + JSON.stringify(campaignsResult.body));
+    return;
+  }
+
+  const sampleIds = campaignsResult.body.slice(0, 3).map(function(c){ return c.nccCampaignId; });
+
+  const today = todayDateString_();
+  const since400 = shiftDateString_(today, -399);
+
+  Logger.log("sampleIds: " + JSON.stringify(sampleIds) + ", since=" + since400 + ", until=" + today + " (400일 범위)");
+
+  const statsResult = callNaverSearchAdApi_("GET", "/stats", {
+    ids: sampleIds,
+    fields: JSON.stringify(["salesAmt", "ccnt"]),
+    timeRange: JSON.stringify({ since: since400, until: today })
   });
 
   Logger.log("statusCode: " + statsResult.statusCode);
@@ -1054,17 +1240,23 @@ function testComputeNaverSearchAdCampaignStatsFetchWindow(){
  * Accumulate Naver Search Ad Campaign Stats (순수 함수)
  *
  * WHY
- * 기존 누적 캐시(`existingTotals`) 위에 이번 조회 구간의 impCnt/clkCnt를
- * 캠페인 "이름"(id→name은 campaignMap으로 조인) 기준으로 더한다. 입력을
- * 변형하지 않고 새 객체를 반환.
+ * 기존 누적 캐시(`existingTotals`) 위에 이번 조회 구간의 impCnt/clkCnt/
+ * salesAmt/ccnt를 캠페인 "이름"(id→name은 campaignMap으로 조인) 기준으로
+ * 더한다(2026-08-05: salesAmt/spentKrw 추가 — Search_OPS "Spent" 컬럼
+ * 자동화, ccnt/results 추가 — "Results" 컬럼 자동화, 둘 다 사용자 요청).
+ * ccnt는 Naver 실측 확인 결과 항상 clkCnt 이하 값으로 응답돼 "전환수"로
+ * 판단(사용자 확인, `runDebugNaverSearchAdStatsExpandedFields()` 실측).
+ * 입력을 변형하지 않고 새 객체를 반환.
  *
  * INPUT
- * existingTotals : Object  {campaignName: {impressions, clicks}}
+ * existingTotals : Object  {campaignName: {impressions, clicks, spentKrw, results}}
  * campaignMap : Object  {nccCampaignId: name}
- * statsRows : Array<{id, impCnt, clkCnt}>
+ * statsRows : Array<{id, impCnt, clkCnt, salesAmt, ccnt}>
  *
  * OUTPUT
- * Object  {campaignName: {impressions, clicks}}  (새 객체)
+ * Object  {campaignName: {impressions, clicks, spentKrw, results}}  (새 객체,
+ *   spentKrw는 원 단위 KRW 원본 — NZD 변환은 72_Search_Build.js가 IO
+ *   경계에서 수행. results는 통화와 무관해 변환 없이 그대로 사용)
  *
  * TEST
  * testAccumulateNaverSearchAdCampaignStats() 참고
@@ -1077,7 +1269,9 @@ function accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, stat
   Object.keys(existingTotals || {}).forEach(function(name){
     totals[name] = {
       impressions: (existingTotals[name] && existingTotals[name].impressions) || 0,
-      clicks: (existingTotals[name] && existingTotals[name].clicks) || 0
+      clicks: (existingTotals[name] && existingTotals[name].clicks) || 0,
+      spentKrw: (existingTotals[name] && existingTotals[name].spentKrw) || 0,
+      results: (existingTotals[name] && existingTotals[name].results) || 0
     };
   });
 
@@ -1087,10 +1281,12 @@ function accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, stat
 
     if(!name) return;
 
-    if(!totals[name]) totals[name] = { impressions: 0, clicks: 0 };
+    if(!totals[name]) totals[name] = { impressions: 0, clicks: 0, spentKrw: 0, results: 0 };
 
     totals[name].impressions += Number(row.impCnt) || 0;
     totals[name].clicks += Number(row.clkCnt) || 0;
+    totals[name].spentKrw += Number(row.salesAmt) || 0;
+    totals[name].results += Number(row.ccnt) || 0;
 
   });
 
@@ -1107,7 +1303,7 @@ function accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, stat
 function testAccumulateNaverSearchAdCampaignStats(){
 
   const existingTotals = {
-    "2025-07-KOR-Naver SA Brand": { impressions: 100, clicks: 10 }
+    "2025-07-KOR-Naver SA Brand": { impressions: 100, clicks: 10, spentKrw: 1000, results: 4 }
   };
 
   const campaignMap = {
@@ -1116,9 +1312,9 @@ function testAccumulateNaverSearchAdCampaignStats(){
   };
 
   const statsRows = [
-    { id: "cmp-001", impCnt: 50, clkCnt: 5 },
-    { id: "cmp-002", impCnt: 20, clkCnt: 2 },
-    { id: "cmp-999", impCnt: 999, clkCnt: 999 } // campaignMap에 없음 — 무시돼야 함
+    { id: "cmp-001", impCnt: 50, clkCnt: 5, salesAmt: 500, ccnt: 2 },
+    { id: "cmp-002", impCnt: 20, clkCnt: 2, salesAmt: 300, ccnt: 1 },
+    { id: "cmp-999", impCnt: 999, clkCnt: 999, salesAmt: 999, ccnt: 999 } // campaignMap에 없음 — 무시돼야 함
   ];
 
   const result = accumulateNaverSearchAdCampaignStats_(existingTotals, campaignMap, statsRows);
@@ -1126,8 +1322,12 @@ function testAccumulateNaverSearchAdCampaignStats(){
   const pass =
     result["2025-07-KOR-Naver SA Brand"].impressions === 150 &&
     result["2025-07-KOR-Naver SA Brand"].clicks === 15 &&
+    result["2025-07-KOR-Naver SA Brand"].spentKrw === 1500 &&
+    result["2025-07-KOR-Naver SA Brand"].results === 6 &&
     result["2025-07-KOR-Naver SA ECL"].impressions === 20 &&
     result["2025-07-KOR-Naver SA ECL"].clicks === 2 &&
+    result["2025-07-KOR-Naver SA ECL"].spentKrw === 300 &&
+    result["2025-07-KOR-Naver SA ECL"].results === 1 &&
     Object.keys(result).length === 2 &&
     existingTotals["2025-07-KOR-Naver SA Brand"].impressions === 100; // 입력 불변 확인
 
@@ -1139,13 +1339,16 @@ function testAccumulateNaverSearchAdCampaignStats(){
 
 /**
  * ==========================================================
- * Fetch NaverSA Impressions/Clicks Stats (IO 래퍼)
+ * Fetch NaverSA Impressions/Clicks/Spend/Results Stats (IO 래퍼)
  *
  * WHY
- * `fetchNaverSearchAdStats_()`(salesAmt 전용, Ad_Spend_Cache 파이프라인
- * 소유)는 건드리지 않고 별도 함수로 분리 — 캠페인 통계 캐시가 요청하는
- * 필드(impCnt/clkCnt)가 다르고, 실패 시 처리 방식(호출부가 730일 제약과
- * 무관하도록 설계돼 있어 굳이 11004 특수 처리 불필요)도 다름.
+ * `fetchNaverSearchAdStats_()`(salesAmt 전용, Ad_Spend_Cache의 FY|Month|
+ * Segment 집계 파이프라인 소유)는 건드리지 않고 별도 함수로 분리 — 캠페인
+ * 통계 캐시가 요청하는 필드가 다르고(2026-08-05: Search_OPS "Spent"/"Results"
+ * 자동화로 salesAmt/ccnt 추가 — impCnt/clkCnt와 같은 호출에 넣어도 안전함,
+ * salesAmt/ccnt 둘 다 `runDebugNaverSearchAdStatsExpandedFields()` 실측으로
+ * 92일 윈도우 안에서 200 정상 응답 확인됨), 실패 시 처리 방식(호출부가
+ * 730일 제약과 무관하도록 설계돼 있어 굳이 11004 특수 처리 불필요)도 다름.
  * ==========================================================
  */
 function fetchNaverSearchAdImpressionsClicksStats_(ids, since, until){
@@ -1154,7 +1357,7 @@ function fetchNaverSearchAdImpressionsClicksStats_(ids, since, until){
 
   const result = callNaverSearchAdApiWithRetry_("GET", "/stats", {
     ids: ids,
-    fields: JSON.stringify(["impCnt", "clkCnt"]),
+    fields: JSON.stringify(["impCnt", "clkCnt", "salesAmt", "ccnt"]),
     timeRange: JSON.stringify({ since: since, until: until })
   });
 
@@ -1170,10 +1373,13 @@ function fetchNaverSearchAdImpressionsClicksStats_(ids, since, until){
  * WHY
  * Ad_Spend_Cache/Search_Engine과 동일 패턴(메인 스프레드시트 안 숨김
  * 시트) — Naver API 자격증명 없이도(Simple Trigger 등) 캐시된 값만
- * 읽을 수 있게 분리.
+ * 읽을 수 있게 분리. "Spent (KRW)"는 원본 그대로 저장(NZD 변환은
+ * 72_Search_Build.js가 IO 경계에서 수행 — Ad_Spend_Cache와 달리 이 캐시는
+ * 증분 누적이라, 변환 전 원본을 보존해야 재계산/검증이 쉬움). "Results"는
+ * 통화가 없어 변환 없이 그대로 저장/사용.
  * ==========================================================
  */
-const NAVER_CAMPAIGN_STATS_CACHE_HEADERS = ["Campaign Name", "Impressions", "Link Clicks"];
+const NAVER_CAMPAIGN_STATS_CACHE_HEADERS = ["Campaign Name", "Impressions", "Link Clicks", "Spent (KRW)", "Results"];
 
 function readNaverSearchAdCampaignStatsCache_(){
 
@@ -1194,7 +1400,9 @@ function readNaverSearchAdCampaignStatsCache_(){
 
     map[name] = {
       impressions: Number(values[i][1]) || 0,
-      clicks: Number(values[i][2]) || 0
+      clicks: Number(values[i][2]) || 0,
+      spentKrw: Number(values[i][3]) || 0,
+      results: Number(values[i][4]) || 0
     };
 
   }
@@ -1223,7 +1431,7 @@ function writeNaverSearchAdCampaignStatsCache_(totals){
   if(names.length > 0){
 
     const rows = names.map(function(name){
-      return [name, totals[name].impressions, totals[name].clicks];
+      return [name, totals[name].impressions, totals[name].clicks, totals[name].spentKrw, totals[name].results];
     });
 
     sheet.getRange(2, 1, rows.length, NAVER_CAMPAIGN_STATS_CACHE_HEADERS.length)
@@ -1240,14 +1448,85 @@ function writeNaverSearchAdCampaignStatsCache_(totals){
 
 /**
  * ==========================================================
+ * Convert Naver Campaign Stats Spend to NZD (순수 함수)
+ *
+ * WHY (2026-08-05)
+ * `readNaverSearchAdCampaignStatsCache_()`는 spentKrw를 원본 그대로
+ * 돌려주므로, Search_OPS "Spent" 컬럼에 쓰기 전에 이 함수로 NZD 변환.
+ * impressions/clicks는 통화와 무관해 그대로 통과, spentKrw만 rate를 곱해
+ * spent로 이름을 바꿔 반환(72_Search_Build.js가 fetchKrwToNzdRate_()
+ * (AD_004_SpendCache.js)로 구한 환율을 넘겨줌). results는 통화가 없어
+ * 변환 없이 그대로 통과(2026-08-05 추가).
+ *
+ * INPUT
+ * naverStatsMap : Object  {campaignName: {impressions, clicks, spentKrw, results}}
+ * rate : number  KRW→NZD 환율
+ *
+ * OUTPUT
+ * Object  {campaignName: {impressions, clicks, spent, results}}  (새 객체, 원본 불변)
+ *
+ * TEST
+ * testConvertNaverCampaignStatsSpendToNZD() 참고
+ * ==========================================================
+ */
+function convertNaverCampaignStatsSpendToNZD_(naverStatsMap, rate){
+
+  const result = {};
+
+  Object.keys(naverStatsMap || {}).forEach(function(name){
+
+    const entry = naverStatsMap[name];
+
+    result[name] = {
+      impressions: entry.impressions,
+      clicks: entry.clicks,
+      spent: (Number(entry.spentKrw) || 0) * rate,
+      results: entry.results
+    };
+
+  });
+
+  return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — convertNaverCampaignStatsSpendToNZD_()
+ * ==========================================================
+ */
+function testConvertNaverCampaignStatsSpendToNZD(){
+
+  const naverStatsMap = {
+    "2025-07-KOR-Naver SA Brand": { impressions: 100, clicks: 10, spentKrw: 1000, results: 4 }
+  };
+
+  const result = convertNaverCampaignStatsSpendToNZD_(naverStatsMap, 0.0012);
+
+  const pass =
+    result["2025-07-KOR-Naver SA Brand"].impressions === 100 &&
+    result["2025-07-KOR-Naver SA Brand"].clicks === 10 &&
+    Math.abs(result["2025-07-KOR-Naver SA Brand"].spent - 1000 * 0.0012) < 1e-9 &&
+    result["2025-07-KOR-Naver SA Brand"].results === 4 &&
+    naverStatsMap["2025-07-KOR-Naver SA Brand"].spentKrw === 1000; // 입력 불변 확인
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Refresh Naver Search Ad Campaign Stats Cache (IO 오케스트레이션)
  *
  * WHY
- * Search_OPS의 Campaign/Impressions/Link clicks를 자동으로 채우기 위한
- * 진입점(사용자 요청, 2026-08-05) — `08_PipelineAsync.js`의
+ * Search_OPS의 Campaign/Impressions/Link clicks/Spent를 자동으로 채우기
+ * 위한 진입점(사용자 요청, 2026-08-05) — `08_PipelineAsync.js`의
  * `refreshNaverSearchCampaignStats_()`가 매 Leads/MTA 백그라운드 실행마다
  * 호출, `72_Search_Build.js`의 `buildSearchOPS()`가 이 함수가 채워둔
- * 캐시(`readNaverSearchAdCampaignStatsCache_()`)를 읽어 매칭.
+ * 캐시(`readNaverSearchAdCampaignStatsCache_()`)를 읽고 NZD 변환해 매칭.
  * ==========================================================
  */
 function refreshNaverSearchAdCampaignStatsCache_(){
@@ -1296,6 +1575,314 @@ function refreshNaverSearchAdCampaignStatsCache_(){
 function runRefreshNaverSearchAdCampaignStatsCache(){
 
   refreshNaverSearchAdCampaignStatsCache_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Backfill Naver Campaign Stats Spent/Results (순수 함수)
+ *
+ * WHY (2026-08-05)
+ * Spent/Results 자동화(v2.9.0/v2.11.0) 배포 당일 실측 결과 두 컬럼이 0으로
+ * 나오는 문제 발견 — 원인: `refreshNaverSearchAdCampaignStatsCache_()`가
+ * `LAST_FETCHED_THROUGH_PROPERTY_KEY` 기준 "오늘 이미 갱신됨"이면 API 호출
+ * 자체를 스킵하는데, 이 코드 배포 이전에 이미 오늘자 갱신이 한 번 돌아서
+ * (impCnt/clkCnt만 있던 구버전 호출로) 오늘 날짜가 이미 기록돼 있었음 —
+ * 그 결과 새로 추가된 salesAmt/ccnt를 요청하는 갱신이 오늘 안에 한 번도
+ * 실행되지 못해 캐시 시트에 Spent(KRW)/Results 컬럼 자체가 아직 없는 상태.
+ *
+ * 이 함수는 `LAST_FETCHED_THROUGH_PROPERTY_KEY`(impressions/clicks 누적
+ * 진행률 추적용)를 전혀 건드리지 않고 **spentKrw/results만 최근
+ * MAX_QUERY_RANGE_DAYS(90일) 윈도우로 새로 채워 넣는다** — impressions/
+ * clicks는 기존 누적치 그대로 보존(이 백필과 무관), spentKrw/results는
+ * 지금까지 항상 0이었으므로 "0에서 시작해 이번 윈도우만큼 채움"과
+ * "누적"이 결과적으로 같음 — 실수로 두 번 실행돼도 매번 같은 90일
+ * 스냅샷으로 재설정될 뿐 중복 합산되지 않음(멱등).
+ *
+ * INPUT
+ * existingTotals : Object  {campaignName: {impressions, clicks, spentKrw, results}}
+ * campaignMap : Object  {nccCampaignId: name}
+ * statsRows : Array<{id, impCnt, clkCnt, salesAmt, ccnt}>  (impCnt/clkCnt는 무시)
+ *
+ * OUTPUT
+ * Object  {campaignName: {impressions, clicks, spentKrw, results}}  (새 객체,
+ *   impressions/clicks는 existingTotals 그대로, spentKrw/results만 이번
+ *   윈도우 값으로 교체)
+ *
+ * TEST
+ * testBackfillNaverCampaignStatsSpentResults() 참고
+ * ==========================================================
+ */
+function backfillNaverCampaignStatsSpentResults_(existingTotals, campaignMap, statsRows){
+
+  const totals = {};
+
+  Object.keys(existingTotals || {}).forEach(function(name){
+    totals[name] = {
+      impressions: existingTotals[name].impressions,
+      clicks: existingTotals[name].clicks,
+      spentKrw: 0,
+      results: 0
+    };
+  });
+
+  (statsRows || []).forEach(function(row){
+
+    const name = campaignMap[row.id];
+
+    if(!name) return;
+
+    if(!totals[name]) totals[name] = { impressions: 0, clicks: 0, spentKrw: 0, results: 0 };
+
+    totals[name].spentKrw += Number(row.salesAmt) || 0;
+    totals[name].results += Number(row.ccnt) || 0;
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — backfillNaverCampaignStatsSpentResults_()
+ * ==========================================================
+ */
+function testBackfillNaverCampaignStatsSpentResults(){
+
+  const existingTotals = {
+    "2025-07-KOR-Naver SA Brand": { impressions: 500, clicks: 30, spentKrw: 0, results: 0 }
+  };
+
+  const campaignMap = {
+    "cmp-001": "2025-07-KOR-Naver SA Brand",
+    "cmp-002": "2025-07-KOR-Naver SA ECL" // existingTotals에 없던 신규 캠페인
+  };
+
+  const statsRows = [
+    { id: "cmp-001", impCnt: 9999, clkCnt: 9999, salesAmt: 500, ccnt: 2 }, // impCnt/clkCnt는 무시돼야 함
+    { id: "cmp-002", impCnt: 9999, clkCnt: 9999, salesAmt: 300, ccnt: 1 },
+    { id: "cmp-999", impCnt: 1, clkCnt: 1, salesAmt: 1, ccnt: 1 } // campaignMap에 없음 — 무시돼야 함
+  ];
+
+  const result = backfillNaverCampaignStatsSpentResults_(existingTotals, campaignMap, statsRows);
+
+  const pass =
+    result["2025-07-KOR-Naver SA Brand"].impressions === 500 && // 기존 impressions 보존
+    result["2025-07-KOR-Naver SA Brand"].clicks === 30 &&       // 기존 clicks 보존
+    result["2025-07-KOR-Naver SA Brand"].spentKrw === 500 &&
+    result["2025-07-KOR-Naver SA Brand"].results === 2 &&
+    result["2025-07-KOR-Naver SA ECL"].impressions === 0 &&
+    result["2025-07-KOR-Naver SA ECL"].spentKrw === 300 &&
+    result["2025-07-KOR-Naver SA ECL"].results === 1 &&
+    Object.keys(result).length === 2 &&
+    existingTotals["2025-07-KOR-Naver SA Brand"].impressions === 500; // 입력 불변 확인
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Backfill Naver Campaign Stats Spent/Results (IO 오케스트레이션, 1회성)
+ *
+ * WHY
+ * 위 backfillNaverCampaignStatsSpentResults_() 참고 — 정상 배포 이후에는
+ * 다시 실행할 필요 없음(`refreshNaverSearchAdCampaignStatsCache_()`가 매
+ * Import마다 자동으로 salesAmt/ccnt까지 누적함), 이번 배포 공백만 메우는
+ * 1회성 함수.
+ * ==========================================================
+ */
+function runBackfillNaverSearchCampaignStatsSpentResults(){
+
+  const campaignMap = fetchNaverSearchAdCampaignMap_();
+  const ids = Object.keys(campaignMap);
+
+  const today = todayDateString_();
+  const window = computeNaverSearchAdCampaignStatsFetchWindow_(
+    null, today, AD.NAVER_SEARCH_CAMPAIGN_STATS.MAX_QUERY_RANGE_DAYS
+  );
+
+  const statsRows = fetchNaverSearchAdImpressionsClicksStats_(ids, window.since, window.until);
+
+  const existingTotals = readNaverSearchAdCampaignStatsCache_();
+  const newTotals = backfillNaverCampaignStatsSpentResults_(existingTotals, campaignMap, statsRows);
+
+  writeNaverSearchAdCampaignStatsCache_(newTotals);
+
+  Logger.log(
+    "runBackfillNaverSearchCampaignStatsSpentResults: " + window.since + " ~ " + window.until +
+    " Spent/Results 백필 완료 (" + Object.keys(newTotals).length + "개 캠페인)."
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Accumulate Naver Campaign Spend (KRW) By Name (순수 함수)
+ *
+ * WHY (2026-08-05)
+ * 위 90일 백필로는 캠페인 시작일(2025년 중반)부터의 전체 지출을 못 담아
+ * 사용자가 금액이 작다고 지적 — `runDebugNaverSearchAdStatsCcntRangeLimit()`
+ * 실측 결과 ccnt는 92일 제약을 그대로 받지만 salesAmt 단독 요청은 이미
+ * Ad_Spend_Cache 파이프라인에서 730일까지 확인돼 있음(`fetchNaverSearchAdStats_()`,
+ * `computeNaverSearchAdSpendHistorySummary_()` 참고) — salesAmt만 따로
+ * 월별 반복 호출해 캠페인 이름 단위로 누적하는 이 함수가 그 재사용.
+ * impressions/clicks/results는 건드리지 않고 spentKrw만 더한다(호출부가
+ * 매달 한 번씩 이 함수를 실행하며 totals를 스레딩 — 반복 누적).
+ *
+ * INPUT
+ * existingTotals : Object  {campaignName: {impressions, clicks, spentKrw, results}}
+ * campaignMap : Object  {nccCampaignId: name}
+ * statsRows : Array<{id, salesAmt}>
+ *
+ * OUTPUT
+ * Object  {campaignName: {impressions, clicks, spentKrw, results}}  (새 객체,
+ *   spentKrw만 이번 statsRows만큼 더해짐)
+ *
+ * TEST
+ * testAccumulateNaverCampaignSpendKrwByName() 참고
+ * ==========================================================
+ */
+function accumulateNaverCampaignSpendKrwByName_(existingTotals, campaignMap, statsRows){
+
+  const totals = {};
+
+  Object.keys(existingTotals || {}).forEach(function(name){
+    totals[name] = {
+      impressions: existingTotals[name].impressions || 0,
+      clicks: existingTotals[name].clicks || 0,
+      spentKrw: existingTotals[name].spentKrw || 0,
+      results: existingTotals[name].results || 0
+    };
+  });
+
+  (statsRows || []).forEach(function(row){
+
+    const name = campaignMap[row.id];
+
+    if(!name) return;
+
+    if(!totals[name]) totals[name] = { impressions: 0, clicks: 0, spentKrw: 0, results: 0 };
+
+    totals[name].spentKrw += Number(row.salesAmt) || 0;
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — accumulateNaverCampaignSpendKrwByName_()
+ * ==========================================================
+ */
+function testAccumulateNaverCampaignSpendKrwByName(){
+
+  const existingTotals = {
+    "2025-07-KOR-Naver SA Brand": { impressions: 500, clicks: 30, spentKrw: 100, results: 4 }
+  };
+
+  const campaignMap = {
+    "cmp-001": "2025-07-KOR-Naver SA Brand",
+    "cmp-002": "2025-07-KOR-Naver SA ECL"
+  };
+
+  const statsRows = [
+    { id: "cmp-001", salesAmt: 500 },
+    { id: "cmp-002", salesAmt: 300 },
+    { id: "cmp-999", salesAmt: 999 } // campaignMap에 없음 — 무시돼야 함
+  ];
+
+  const result = accumulateNaverCampaignSpendKrwByName_(existingTotals, campaignMap, statsRows);
+
+  const pass =
+    result["2025-07-KOR-Naver SA Brand"].impressions === 500 && // 보존
+    result["2025-07-KOR-Naver SA Brand"].clicks === 30 &&       // 보존
+    result["2025-07-KOR-Naver SA Brand"].results === 4 &&       // 보존
+    result["2025-07-KOR-Naver SA Brand"].spentKrw === 600 &&    // 100 + 500 누적
+    result["2025-07-KOR-Naver SA ECL"].spentKrw === 300 &&
+    Object.keys(result).length === 2 &&
+    existingTotals["2025-07-KOR-Naver SA Brand"].spentKrw === 100; // 입력 불변 확인
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Backfill Naver Campaign Spend History (IO 오케스트레이션, 1회성)
+ *
+ * WHY
+ * 캠페인 시작일부터의 전체 Spent를 채우기 위해, `computeNaverSearchAdSpendHistorySummary_()`
+ * 와 동일한 패턴(캠페인 목록 1회 조회 + `AD.NAVER_SEARCH.API.BACKFILL_START`
+ * 부터 이번 달까지 매달 salesAmt 단독 조회, "730일 밖" 에러(`{code:11004}`)만
+ * 그 달을 건너뛰고 계속)을 캠페인 이름 단위로 재사용. **spentKrw를 0으로
+ * 리셋 후 전체 재계산**(위 90일 백필로 이미 채워진 값과 겹쳐서 이중 합산되는
+ * 것을 방지) — impressions/clicks/results는 전혀 건드리지 않음. 정상 배포
+ * 이후에는 재실행 불필요(`refreshNaverSearchAdCampaignStatsCache_()`가 매
+ * Import마다 자동으로 이어서 누적), 이번 배포 공백만 메우는 1회성 함수.
+ * ==========================================================
+ */
+function runBackfillNaverSearchCampaignSpendHistory(){
+
+  const campaignMap = fetchNaverSearchAdCampaignMap_();
+  const ids = Object.keys(campaignMap);
+
+  const backfillStart = AD.NAVER_SEARCH.API.BACKFILL_START;
+  const today = new Date();
+  const months = generateCalendarMonthSequence_(
+    backfillStart.YEAR, backfillStart.MONTH, today.getFullYear(), today.getMonth() + 1
+  );
+
+  let totals = readNaverSearchAdCampaignStatsCache_();
+
+  Object.keys(totals).forEach(function(name){ totals[name].spentKrw = 0; });
+
+  let skippedMonths = 0;
+
+  months.forEach(function(m){
+
+    const range = buildCalendarMonthRange_(m.year, m.month);
+
+    let statsRows;
+
+    try {
+      statsRows = fetchNaverSearchAdStats_(ids, range.since, range.until);
+    } catch(e){
+
+      if(e.statusCode === 400 && e.body && e.body.code === 11004){
+
+        skippedMonths++;
+        Logger.log(m.year + "-" + m.month + " 건너뜀(730일 밖).");
+        return;
+
+      }
+
+      throw e;
+
+    }
+
+    totals = accumulateNaverCampaignSpendKrwByName_(totals, campaignMap, statsRows);
+
+  });
+
+  writeNaverSearchAdCampaignStatsCache_(totals);
+
+  Logger.log(
+    "runBackfillNaverSearchCampaignSpendHistory: " + months.length + "개월 순회(" +
+    skippedMonths + "개월 730일 밖으로 건너뜀), Spent 전체 소급 완료 (" +
+    Object.keys(totals).length + "개 캠페인)."
+  );
 
 }
 
