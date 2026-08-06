@@ -12,9 +12,16 @@
  * OPS.SHEET.OPS(Leads_OPS)를 그대로 참조 — 여기서 재정의하지 않는다.
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-06)
+ * - **`Spent`을 GROUP_3_MANUAL → GROUP_4_COMPUTED로 이동(사용자 확정)**.
+ *   카카오모먼트 비용(KakaoSMS_Raw, 향후 Meta 등 다른 플랫폼도 추가 예정)을
+ *   Events_OPS에 자동 반영하기로 하면서, 수동 입력(재빌드 시 기존 값 보존)
+ *   대신 매번 알고 있는 모든 플랫폼 합계로 새로 계산하는 방식으로 전환 —
+ *   재빌드를 여러 번 돌려도 중복 합산되지 않음. 실제 집계 로직은
+ *   `51_Events_Engine.js`의 `computeEventsKakaoSpendAggregates_()` 참고.
  * v1.8.0 (2026-08-06)
  * - TOP25_HIGHLIGHT 추가 — SF P1s/SF NLP1s/SP1%/SNP1% 4개 컬럼에서 값이
  *   상위 25%(PERCENTILE 0.75 이상, 컬럼별 독립 계산)인 셀에 배경색
@@ -243,8 +250,7 @@ const EVENTS = {
 
     "CVR",
     "Clicks",
-    "Results",
-    "Spent"
+    "Results"
 
   ],
 
@@ -258,7 +264,8 @@ const EVENTS = {
     "IC Bked",
     "IC Complete",
     "#Deals",
-    "Revenue"
+    "Revenue",
+    "Spent"
 
   ],
 

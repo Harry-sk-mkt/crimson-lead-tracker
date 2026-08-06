@@ -171,20 +171,76 @@
       adAccountId/channelProfileId/messageAdId 값과 메시지광고 목록 API의 정확한 요청
       body 스키마(문서에서 상세 미확인, 빈 body로 우선 호출해 에러로 확인하는 전략)를
       확인해야 다음 단계(`runDebugKakaoMomentsReportFirstRow()`) 구현 가능.
-- [ ] **실제 API 호출로 응답 필드명 검증 — 실 발송 데이터 없어 블로킹(2026-08-05)** —
-      `runDebugKakaoMomentsReportFirstRow()` 실행 결과: `statusCode 200`, `code:200,
-      message:"Success"`이지만 `data: []`(빈 배열). API 에러가 아니라 이 광고계정의
-      메시지광고 2건 중 발송 완료된 게 하나도 없어서로 판단(`msg-ad-1534139723687342080`은
-      오늘(2026-08-05) 18:30 발송 예정으로 아직 발송 전, `msg-ad-1534019703066779648`은
-      상태 `DEL`로 삭제된 테스트 메시지). **다음 단계**: 오늘 저녁 실제 발송 완료 후
-      `runDebugKakaoMomentsReportFirstRow()` 재실행해서 실제 데이터로 필드명 재검증 —
-      그전까지는 `Reach`/`Responsed` 필드 매핑 확정 불가, 임의로 처리하지 말 것. 참고로
-      리포트 API에 리포팅 지연(발송 후 즉시 집계 안 될 가능성)이 있을 수도 있음 — 재실행
-      결과가 또 비어있으면 하루 더 기다려볼 것.
-- [ ] API 응답 → `KakaoSMS_Raw` 컬럼 매핑 확정 (`Event type` 도출 방식 포함 — Business Segment
-      매핑 로직 필요 여부 사용자 확인)
-- [ ] `computeKakaoChannelSpendSummary_()`를 `KakaoSMS_Raw` 소스로 리포인트 (위 필수 변경사항 항목)
-- [ ] `AD.PLATFORMS`/`AD.RAW_SHEET` 등 Config 갱신, 테스트 함수 작성 (TDD 원칙 준수)
+- [x] **실제 API 호출로 응답 필드명 검증 완료(2026-08-06)** — 2026-08-05 18:30 발송 예정이던
+      `msg-ad-1534139723687342080`이 실제 발송 완료된 후 `runDebugKakaoMomentsReportFirstRow()`
+      재실행 결과 실데이터 확보: `msg_send: 7039`(발송), `msg_open: 2406`(열람, 이후 재확인 시점엔
+      2,935로 증가 — 실시간 집계), `msg_click: 44`(클릭), `msg_send_fail: 7`(발송실패),
+      `cost: 105585`(비용, KRW). `msg_open_rate`(34.181%) = `msg_open/msg_send`로 계산됨을 확인.
+      카카오 공식 문서(`type-info`)에도 `msg_send`가 "발송 시도"인지 "발송 성공"인지 명시 안 돼
+      있어(WebFetch로 확인 시도했으나 문서 자체에 정의 없음) 필드 의미는 사용자 확인으로 확정.
+- [x] **API 응답 → `KakaoSMS_Raw` 컬럼 매핑 확정(2026-08-06, 사용자 확인)** —
+      `Sent` → `msg_send`, `Reach` → `msg_open`(사용자 확정: "발송수는 Sent, 열람이 Reach"),
+      `Click` → `msg_click`, `Cost` → `cost`. `Push`는 레거시 컬럼으로 확인됨(사용자: "해당
+      이벤트에서 메시지 발송 회차를 의미 — 예전에 회차별 신청율을 보려던 것, 지금은 불필요") —
+      API 소스 없이 빈 값 유지(PIc와 동일 패턴). `Responsed`는 사용자 정의상 "클릭 이후의 별도
+      전환 행동(랜딩 액션 등)"인데 이 API 응답엔 대응 필드가 없어 빈 값 유지. `CTR`/`CvR`은
+      기존 정책(원본 수식값이라 비워둠) 그대로 유지. `msg_send_fail`(발송실패)은 기존 스키마에
+      대응 컬럼이 없어 미사용(현재 범위 밖, 필요시 별도 컬럼 추가는 추후 논의).
+      **`Responsed`/`CPL` 후속 확정(2026-08-06)** — 사용자가 "CPL = Cost/Responses"라고
+      정의하면서 `Responsed`가 API에 없다는 결정과 충돌 발견 → 재조사 결과, 카카오모먼트
+      대시보드의 "서비스신청 (7일)" 전환 지표가 `PIXEL_SDK_CONVERSION` 메트릭 그룹
+      (`conv_signup_7d`/`cost_per_conv_signup_7d`, 공식 문서 확인)에 있음을 발견.
+      `runDebugKakaoMomentsReportFirstRow()`의 metricsGroup에 추가해 재실행(`AD_006_KakaoMoments.js`
+      v1.5.0) → 실측: `conv_signup_7d: 4`, `cost_per_conv_signup_7d: 26396.25` = `105585÷4`
+      정확히 일치, CPL 공식과 부합 확인. **최종 확정**: `Responsed` → `conv_signup_7d`,
+      `CPL` → `cost_per_conv_signup_7d`(API가 이미 계산해서 주는 값 그대로 사용 — 직접
+      나눗셈하지 않음, 0 나눗셈 회피). 사용자가 대시보드에서 본 값(5)과 API 값(4)의 1건
+      차이는 `msg_open`이 조회 시점마다 늘어난 것(2,406→2,935)과 동일한 실시간 집계 지연으로
+      판단, 매핑 오류 아님.
+      **여전히 미해결**: `Event type` 도출 방식(Business Segment 매핑 로직 필요 여부)은
+      아직 미확인.
+- [x] **`Event type` 도출 방식 확정(2026-08-06)** — `runDebugKakaoMomentsMessageAdsList()`
+      실행 결과(사용자 확인) 실제 메시지광고 이름 3건 확보: `"KR_core_2026-08-12_grades-ecs-
+      kakao_event-online"`(campaign 스타일, Marketo UTM Campaign과 동일한 `event-online`
+      리터럴 포함), `"WB-2026-07-KOR-MOFU-Core EC for Each Year of High"`(detail 스타일,
+      `getBusinessSegment()`가 `"wb-"` 신호를 `detail` 파라미터에서만 체크), `"tese_2608041106"`
+      (삭제된 테스트 메시지, 무관). **발견**: 두 실제 메시지가 서로 다른 명명 규칙을 써서
+      Meta처럼 `getBusinessSegment(name)`(campaign 인자 하나만) 방식으로는 "WB-" 메시지가
+      Other로 잘못 분류됨(내용 확인 결과 둘 다 실제로는 웨비나 공지 메시지, 사용자 확인).
+      **최종 확정(사용자 결정)**: `getBusinessSegment(name, name)` — 같은 메시지광고 이름을
+      `campaign`/`detail` 두 인자에 동일하게 전달, 두 스타일의 신호(`campaign`의
+      `event-online`, `detail`의 `wb-`) 모두 적용되게 함. 부수효과(예: BOFU/Search 등
+      detail 전용 규칙도 같이 적용됨)는 사용자 확인 하에 감수하기로 함 — Kakao Channel처럼
+      별도 매핑 로직은 만들지 않음(기존 함수 그대로 재사용).
+      **최종 확정 매핑 요약**: `Sent`→`msg_send`, `Reach`→`msg_open`, `Click`→`msg_click`,
+      `Cost`→`cost`, `Responsed`→`conv_signup_7d`, `CPL`→`cost_per_conv_signup_7d`,
+      `Push`→소스 없음(레거시, 빈 값), `CTR`/`CvR`→기존 정책 유지(빈 값).
+- [x] **구현 완료(2026-08-06), 실행 검증 대기(TODO)** — `AD_006_KakaoMoments.js`(v1.6.0)에
+      `syncKakaoMomentsReportToKakaoSMSRaw_()`/`runSyncKakaoMomentsReportToKakaoSMSRaw()` 신규:
+      진단 체인(광고계정→채널 프로필→메시지광고 목록→리포트, `fetchKakaoMomentsAdAccountAndChannelProfile_()`
+      로 공용화, 실패 시 에러 throw)을 재사용해 발송 완료 메시지(metrics≠null)만
+      `computeKakaoMomentsSyncRow_()`(순수 함수, 확정 매핑 그대로 적용)로 행 계산 →
+      `mergeKakaoMomentsSyncRows_()`(순수 함수)로 `Message Ad ID` 키 upsert. 업서트가
+      필요한 이유(사용자 확인, 2026-08-06): 발송 후에도 msg_open/conv_signup_7d가 최대
+      7일까지 계속 늘어나 append-only(기존 Kakao Channel 패턴)로는 스냅샷이 영구 고정돼
+      과소평가됨. `AD_001_Config.js`(v1.17.0) `SYNC_COLUMNS` 맨 앞에 숨김 `"Message Ad ID"`
+      컬럼 추가(upsert 매칭 키, 기존 시트 구조 변경 — 사용자 승인 받음). 테스트 4개
+      (`testParseKakaoMomentsSendingDate`/`testComputeKakaoMomentsSyncRow`/
+      `testMergeKakaoMomentsSyncRows`) 추가, 2026-08-05 실측 응답값으로 검증. `node --check`/
+      naming/version-header/중복선언 검사 통과, `clasp push` 완료. **아직 실행 전** —
+      사용자가 `runSyncKakaoMomentsReportToKakaoSMSRaw()`를 Apps Script 편집기에서 직접
+      Run해서 `KakaoSMS_Raw`에 실제로 행이 채워지는지, 값이 맞는지 확인 필요.
+- [x] **`computeKakaoChannelSpendSummary_()`를 `KakaoSMS_Raw` 소스로 리포인트 완료(2026-08-06)** —
+      `AD_005_KakaoChannel.js`(v1.2.0) 신규 `readKakaoSMSRawRows_()`(AD.SPREADSHEET_ID 내부
+      읽기, 외부 스프레드시트 아니라 타임존 보정 불필요)로 교체. 기존 `readKakaoChannelRawRows_()`
+      (외부 수기 Performance 시트 리더)는 삭제하지 않고 유지(`syncKakaoChannelPerformanceToAD_()`/
+      진단 함수가 계속 참조, Decision Log상 그 함수 자체를 더 이상 실행 안 하는 것으로 전환
+      완료 처리). **아직 실행 전** — `runRefreshAdSpendCache()` 재실행 후 Ad_Spend_Cache/
+      ACQ_REP Spent 집계가 KakaoSMS_Raw 기준으로 정상 반영되는지 확인 필요(위 sync 함수를
+      먼저 실행해서 KakaoSMS_Raw에 데이터가 있어야 의미 있는 검증 가능).
+- [x] `AD.PLATFORMS`/`AD.RAW_SHEET` 등 Config 갱신, 테스트 함수 작성 (TDD 원칙 준수) — 완료,
+      위 두 항목 참고. `AD.PLATFORMS`/`AD.RAW_SHEET`는 이미 "Kakao Moments"/"Kakao Channel"
+      키로 등록돼 있어 추가 변경 불필요했음(2026-08-04 확인 사항 재확인).
 
 ## Surprises & Discoveries
 
@@ -212,6 +268,55 @@
   발급하는 방식이고 "장기 미사용 시 자동 만료"(정확한 기간 미명시) — 일반 카카오 로그인(Refresh
   Token 있음)과 다른 부분이라 실제로 조회하기 전까진 예상 못한 차이. 이전 세션(claude.ai)에서
   세운 "Time-driven Trigger로 Refresh Token 갱신" 계획이 이 발견으로 무효화됨 — Decision Log 참고.
+
+- **`Message Ad ID` 컬럼 추가 후 기존 KakaoSMS_Raw 데이터가 한 칸씩 밀린 사고 발견·복구
+  (2026-08-06)** — `AD_001_Config.js` v1.17.0에서 `SYNC_COLUMNS` 맨 앞에 `Message Ad ID`를
+  추가했는데, 시트 생성 로직(`syncKakaoChannelPerformanceToAD_()`/
+  `syncKakaoMomentsReportToKakaoSMSRaw_()` 둘 다)이 `!destSheet`(시트가 아직 없을 때)에만
+  헤더를 다시 쓰는 구조라, 이미 존재하던 291행짜리 KakaoSMS_Raw 시트는 헤더/데이터가 옛
+  17컬럼 레이아웃 그대로 남아있었음. 그 상태에서 사용자가 `runSyncKakaoChannelPerformanceToAD()`
+  로 신규 2행을 추가하자 그 2행만 새 18컬럼 레이아웃(A열=Message Ad ID)으로 써져서, 같은
+  시트 안에 두 레이아웃이 섞이는 사고 발생 — **Config(스키마)만 바꾸고 이미 존재하는 시트의
+  실제 헤더/데이터는 자동으로 안 바뀐다는 걸 놓친 것**(교훈: 기존 시트 구조를 바꾸는 Config
+  변경은 "새 시트 생성 시에만 적용"이 아니라 기존 시트 마이그레이션도 같이 고려해야 함).
+  **복구**: `runRepairKakaoSMSRawColumnAlignment()`(1회성) — 처음엔 "A열이 숫자면 옛
+  레이아웃"으로 판별했으나 293행 중 290행만 이동, 1행(시트 267행) 누락 발견 —
+  `runFindKakaoSMSRawFYColumnAnomalies()`로 원인 특정: 그 행은 원본 FY 자체가 공란이라
+  숫자 판별을 통과 못 했던 것. 판별 조건에 "B열이 알려진 Event type 문자열"도 OR로 추가해
+  재실행, 293행 전부 정렬 완료 확인(`runFindKakaoSMSRawFYColumnAnomalies()` "이상 행 없음").
+  진단/복구 함수 5개(`runDebugKakaoSMSRawColumnAlignment`/`runRepairKakaoSMSRawColumnAlignment`/
+  `runFindUnrepairedKakaoSMSRawRows`/`runFindKakaoSMSRawEventTypeAnomalies`/
+  `runFindKakaoSMSRawFYColumnAnomalies`)는 1회성 TEMP로 파일에 남아있음(재사용 목적 아님).
+
+- **`Marketo program` = 메시지광고 이름 그대로 저장(2026-08-06) — 향후 Events_OPS Cost 연동의
+  전제만 마련, 자동 반영은 아직 아님** — 사용자 질문("메시지광고이름 그대로 사용하면 나중에
+  Event_OPS에 cost반영 가능해?")에 조사 후 답변: 지금 캡처된 메시지명 중 "WB-2026-07-KOR-MOFU-
+  Core EC for Each Year of High"는 `51_Events_Engine.js`의 `isEligibleEventProgram_()`
+  (WB-/EV- Marketo Program 명명 전제)와 형식이 맞지만, **사용자 확인 결과 이건 예외/레거시
+  값이고 앞으로는 50자 제목 제한 때문에 UTM 스타일("KR_core_...")로 통일될 예정** — 즉 향후
+  메시지명은 Events_Engine의 Program명 매칭 로직과 형식이 안 맞음. 나중에 Events_OPS Cost
+  연동을 만들 땐 `isEligibleEventProgram_()` 방식이 아니라 Meta 때 쓴
+  `getBusinessSegment(campaignName)` 방식(UTM 스타일 매칭)에 더 가까운 새 로직이 필요할 것.
+  현재 `Events_OPS`의 `Spent` 컬럼 자체는 이미 존재하나(`50_Events_Config.js`) 채워주는
+  자동화가 없는 상태(Search_OPS가 Naver 자동화되기 전과 동일 상태) — 이 작업은 오늘 범위
+  밖, 별도 착수 필요.
+
+- **시트 스타일링 + 리포팅 지연 폴백 추가(2026-08-06, 사용자 요청)** — `applyKakaoSMSRawStyling_()`
+  신규(`AD_006_KakaoMoments.js`): I:M열(Sent/Reach/Click/Responsed/Cost)/P열(CPL) 천단위
+  콤마+정수 표시, N/O열(CTR/CvR)을 값 대신 수식(Click÷Reach, Responsed÷Click, "0.0%" 표시,
+  0 나누기 방지)으로 채움, SentAt 기준 내림차순 정렬(최신이 맨 위 — 정렬을 수식 생성보다
+  먼저 해야 수식의 행 번호 참조가 안 꼬임), 전체 데이터 범위 테두리. 두 sync 함수(API/수기)
+  끝에서 모두 호출해 어느 경로로 갱신되든 일관 유지. `computeKakaoMomentsSyncRow_()`도
+  추가 수정: FY를 숫자로 통일(기존 수기 행과 형식 통일), `Marketo program`=메시지광고 이름,
+  `Keyword`=메시지 본문(mainTitle) 앞 30자(줄바꿈은 공백 치환 후 자름 — 셀이 여러 줄로
+  안 보이게). **리포팅 지연 폴백**: message-ads/reports(전환 지표 포함)가 발송 직후엔 빈
+  응답을 주는 현상이 8/5·8/6 메시지 둘 다에서 재현됨 — message-ads/list 응답에 이미 있는
+  messageAd.metrics(cost/msg_send/msg_click/msg_open, 전환 지표는 없음)로 Sent/Reach/
+  Click/Cost는 즉시 채우고 Responsed/CPL만 리포트 전용이라 계속 빈 값으로 남김(다음 sync
+  재실행 시 리포트가 채워지면 자동 반영). **참고**: `Marketo program`에 메시지 이름을 그대로
+  쓰는 게 나중에 Events_OPS Cost 연동에 도움되는지 사용자가 질문 — 지금 캡처된 "WB-..." 이름은
+  레거시 예외이고 앞으로는 50자 제한 때문에 UTM 스타일("KR_core_...")로 통일될 예정이라는 걸
+  사용자가 확인(위 항목 참고).
 
 ## Decision Log
 

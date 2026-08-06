@@ -1,5 +1,43 @@
 # Changelog — 2026-08-06
 
+## 카카오모먼트 메시지 발송 검증 완료 + KakaoSMS_Raw 실제 sync 구현 + Events_OPS Spent 자동화
+
+- **카카오모먼트 메시지 발송 검증**: 2026-08-05 발송된 메시지 실제 API 응답으로 필드 매핑 확정
+  (Sent=msg_send/Reach=msg_open/Click=msg_click/Cost=cost/Responsed=conv_signup_7d/
+  CPL=cost_per_conv_signup_7d). Event type은 메시지광고 이름을 `getBusinessSegment()`의
+  campaign/detail 두 인자에 동일하게 전달해 판정(실제 메시지 2건이 서로 다른 명명 스타일이라
+  한쪽 인자만으론 분류 실패 확인).
+
+- **`KakaoSMS_Raw` 실제 sync 구현**(`AD_006_KakaoMoments.js`): `runSyncKakaoMomentsReportToKakaoSMSRaw()`
+  신규 — messageAdId 키로 upsert(발송 후에도 지표가 최대 7일까지 계속 늘어나 append-only 대신
+  upsert 채택), 리포팅 지연 시(message-ads/reports가 발송 직후 빈 응답) message-ads/list의
+  임베디드 metrics로 Sent/Reach/Click/Cost 폴백. 스타일링 자동화(`applyKakaoSMSRawStyling_()`) —
+  숫자 서식/CTR·CvR 수식/SentAt 내림차순 정렬/테두리. `AD_005_KakaoChannel.js`의
+  `computeKakaoChannelSpendSummary_()`를 외부 수기 시트 대신 `KakaoSMS_Raw`로 리포인트,
+  `Ad_Spend_Cache`→ACQ_REP Spent 반영 확인.
+
+- **사고 발견·복구**: `Message Ad ID` 숨김 컬럼 추가 후 기존 291행이 새 18컬럼 레이아웃으로
+  안 밀린 채 남아있던 문제 발견 — 진단 함수 여러 개로 원인(FY 공란 행이 판별 조건을 통과 못함)
+  특정 후 전체 정렬 복구 완료.
+
+- **`Marketo program` 컬럼 원복**: 처음엔 메시지광고 이름(UTM 스타일)을 자동 채웠으나, 조사 결과
+  Events_OPS 매칭에 쓰는 실제 Marketo Program명(WB-/EV- 형식, Lead Source Detail에 찍힘)과는
+  서로 다른 네이밍 체계라 자동 매칭 불가 확인 — 사람이 직접 입력하는 매칭용 컬럼으로 원복. 이
+  과정에서 upsert가 수동 입력 컬럼(PIC/Push/비고/Marketo program)을 재동기화 때마다 덮어쓰던
+  버그도 함께 발견·수정(`preserveColIndexes`).
+
+- **Events_OPS `Spent` 자동 집계 신규**(사용자 확정 — Spent를 GROUP_3_MANUAL→GROUP_4_COMPUTED로
+  전환, `50_Events_Config.js`): `computeEventsKakaoSpendAggregates_()`(`51_Events_Engine.js`)가
+  `KakaoSMS_Raw`의 `Marketo program`(수동 입력)+`Cost`를 다른 Events 매칭과 동일한 키 정규화로
+  프로그램별 합산, KRW→NZD 변환(`fetchKrwToNzdRate_()` 재사용) 후 `refreshEventsEngine_()`에
+  배선 — 재빌드 때마다 알고 있는 모든 플랫폼 합계로 새로 계산(중복 합산 없음). 향후 Meta 등
+  다른 플랫폼 자동화 시 같은 패턴으로 합산 예정.
+
+- **`Success %` 공식 버그 수정**(`53_Events_Merge.js`): `Success ÷ SF Reg.`로 잘못 계산되고
+  있었음 — `Success ÷ Mkt Reg.`로 정정(사용자 발견). SP1%/SNP1%는 원래부터 맞는 분모였음.
+
+- 상세 진행 기록: `docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md`
+
 ## Revenue 숫자서식 버그 수정, Events/Search_OPS 개편, ACQ_REP/NewP1_REP Generate 성능 대개선
 
 - **Revenue 숫자서식 버그 수정**: `writeMTAMaster()`가 이전 세션에서 `writeSheetRecords()`(overwrite) →

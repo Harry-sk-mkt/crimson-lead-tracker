@@ -15,9 +15,24 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.9.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-08-06)
+ * - **버그 수정 — Kakao Spent가 KRW 그대로 들어감(사용자 발견)**.
+ *   `computeEventsKakaoSpendAggregates_()`가 `fetchKrwToNzdRate_()`/
+ *   `convertSpendSummaryCurrency_()`(AD_004_SpendCache.js, Naver Search/
+ *   Kakao Channel의 Ad_Spend_Cache 집계와 동일 패턴)로 NZD 변환하도록 수정.
+ * v1.10.0 (2026-08-06)
+ * - **`Spent` 자동 집계 추가(사용자 확정 — Spent를 GROUP_3_MANUAL→
+ *   GROUP_4_COMPUTED로 전환, `50_Events_Config.js` v1.9.0)**. 신규
+ *   `computeEventsKakaoSpendAggregates_()`(IO)/`aggregateKakaoSpendByProgram_()`
+ *   (순수 함수) — `readKakaoSMSRawProgramCostRows_()`(AD_006_KakaoMoments.js
+ *   v1.19.0)로 KakaoSMS_Raw의 `Marketo program`(수동 입력)+`Cost`를 읽어
+ *   다른 Events 매칭과 동일한 키 정규화로 프로그램별 합산. `refreshEventsEngine_()`
+ *   의 allKeys 수집/rows 배열에 kakaoSpendAgg 추가(EVENTS_ENGINE_HEADERS가
+ *   GROUP_4_COMPUTED를 그대로 이어붙이므로 Spent가 자동으로 마지막 컬럼이 됨).
+ *   테스트 추가. 향후 다른 플랫폼(Meta 등) 자동화 시 같은 패턴으로 합산 예정.
  * v1.9.0 (2026-08-06)
  * - stripLGSuffix_() 추가 — 사용자가 실제 중복 사례 발견: 같은 프로그램인데
  *   Marketo Program 이름이 " LG"로만 끝나는 변형이 별도 키로 잡혀 매칭이
@@ -104,6 +119,7 @@ function refreshEventsEngine_() {
   const leadsAgg = computeLeadsAggregates_();
   const funnelAgg = computeFunnelAggregates_(leadsAgg.leadIdToKey);
   const dealAgg = computeEventsDealAggregates_();
+  const kakaoSpendAgg = computeEventsKakaoSpendAggregates_();
 
   const allKeys = {};
 
@@ -111,7 +127,8 @@ function refreshEventsEngine_() {
     mtaAgg.allRegistered, mtaAgg.p1All,
     leadsAgg.newRegistered, leadsAgg.nlP1,
     funnelAgg.icRequest, funnelAgg.icBooked,
-    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue
+    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue,
+    kakaoSpendAgg
   ].forEach(function (map) {
     Object.keys(map).forEach(function (key) {
       allKeys[key] = true;
@@ -134,7 +151,8 @@ function refreshEventsEngine_() {
       funnelAgg.icBooked[key] || 0,
       funnelAgg.icComplete[key] || 0,
       dealAgg.dealsWon[key] || 0,
-      dealAgg.revenue[key] || 0
+      dealAgg.revenue[key] || 0,
+      kakaoSpendAgg[key] || 0
     ];
 
   });
@@ -569,6 +587,104 @@ function testComputeEventsDealAggregates_() {
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Kakao Spend By Program (순수 함수)
+ *
+ * WHY (2026-08-06)
+ * KakaoSMS_Raw의 `Marketo program`(수동 입력, 실제 Marketo Program명)+
+ * `Cost`를 다른 Events 매칭 로직과 동일한 방식(stripLGSuffix_+
+ * stripRegistrationFormSuffix_+isEligibleEventProgram_)으로 정규화해
+ * 프로그램별 Cost를 합산한다. 카카오 메시지 이름(UTM 스타일)과 이 매칭 키는
+ * 서로 다른 네이밍 체계라 자동 매칭이 불가능함을 확인(exec-plan
+ * 2026-08-04-kakao-moments-api-integration.md 참고) — 그래서 KakaoSMS_Raw의
+ * Marketo program을 사람이 직접 채워야 하고, 이 컬럼이 비어있는 행은
+ * readKakaoSMSRawProgramCostRows_()(AD_006_KakaoMoments.js)가 이미 제외한다.
+ *
+ * INPUT
+ * records : Array<{marketoProgram, cost}>
+ *
+ * OUTPUT
+ * Object  키 programKey → 합산 Cost
+ *
+ * TEST
+ * testAggregateKakaoSpendByProgram 참고
+ * ==========================================================
+ */
+function aggregateKakaoSpendByProgram_(records) {
+
+  const spend = {};
+
+  (records || []).forEach(function (r) {
+
+    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r.marketoProgram));
+
+    if (!key || !isEligibleEventProgram_(key)) return;
+
+    spend[key] = (spend[key] || 0) + (Number(r.cost) || 0);
+
+  });
+
+  return spend;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateKakaoSpendByProgram_()
+ * ==========================================================
+ */
+function testAggregateKakaoSpendByProgram() {
+
+  const records = [
+    { marketoProgram: "WB-2025-07-KOR-MOFU-Core A", cost: 1000 },
+    { marketoProgram: "WB-2025-07-KOR-MOFU-Core A", cost: 500 },   // 같은 프로그램 — 합산
+    { marketoProgram: "WF-2025-07-KOR-MOFU-Core B", cost: 300 },   // WF 제외 대상
+    { marketoProgram: "WB-2025-07-US-MOFU-Core C", cost: 200 }     // KOR 아님, 제외
+  ];
+
+  const result = aggregateKakaoSpendByProgram_(records);
+
+  const pass =
+    result["WB-2025-07-KOR-MOFU-Core A"] === 1500 &&
+    Object.keys(result).length === 1;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Events Kakao Spend Aggregates (IO 래퍼)
+ *
+ * WHY
+ * `readKakaoSMSRawProgramCostRows_()`(AD_006_KakaoMoments.js)로 KakaoSMS_Raw를
+ * 읽어 `aggregateKakaoSpendByProgram_()`로 정규화/집계 — `refreshEventsEngine_()`이
+ * 다른 aggregate 함수들과 동일한 패턴으로 호출한다.
+ *
+ * **KRW→NZD 변환(2026-08-06, 사용자 확인)**: KakaoSMS_Raw의 Cost는 KRW 원본 —
+ * Events_OPS의 다른 지표/Revenue와 통화 단위를 맞추기 위해 `fetchKrwToNzdRate_()`/
+ * `convertSpendSummaryCurrency_()`(AD_004_SpendCache.js, Naver Search/Kakao
+ * Channel의 Ad_Spend_Cache 집계 때와 동일한 GOOGLEFINANCE 우회 패턴)를 그대로
+ * 재사용해 NZD로 변환한 값을 반환한다.
+ *
+ * OUTPUT
+ * Object  키 programKey → 합산 Cost(NZD)
+ * ==========================================================
+ */
+function computeEventsKakaoSpendAggregates_() {
+
+  const spendKRW = aggregateKakaoSpendByProgram_(readKakaoSMSRawProgramCostRows_());
+  const rate = fetchKrwToNzdRate_();
+
+  return convertSpendSummaryCurrency_(spendKRW, rate);
 
 }
 

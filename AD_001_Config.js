@@ -21,9 +21,18 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.16.0
+ * v1.17.0
  *
  * Change Log
+ * v1.17.0 (2026-08-06)
+ * - **`KAKAO_CHANNEL.SYNC_COLUMNS`에 `"Message Ad ID"` 컬럼 신규 추가(맨 앞,
+ *   숨김 예정)**. 카카오모먼트 API 동기화(`AD_006_KakaoMoments.js`
+ *   `runSyncKakaoMomentsReportToKakaoSMSRaw()`)가 같은 메시지광고를 재동기화할
+ *   때(발송 후에도 열람/전환 지표가 계속 늘어남) 기존 행을 찾아 upsert하기
+ *   위한 키 — 기존엔 재조회 시 값을 매칭할 고유 식별자가 없었음(사용자 확인
+ *   후 추가, 기존 시트 구조 변경이라 승인 받음). 수기 소스(Kakao Channel
+ *   Performance) 기반 과거 행은 이 컬럼이 빈 값으로 남음(영향 없음). 상세:
+ *   docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md
  * v1.16.0 (2026-08-05)
  * - **버그 수정(실측)** — `NAVER_SEARCH_CAMPAIGN_STATS.INITIAL_LOOKBACK_DAYS`(729)
  *   가 실제 API 제약과 안 맞았음: `runRefreshNaverSearchAdCampaignStatsCache()`
@@ -379,6 +388,7 @@ const AD = {
     */
 
     SYNC_COLUMNS: [
+      { header: "Message Ad ID", source: null },
       { header: "FY", source: "FY" },
       { header: "Event type", source: "Event type" },
       { header: "PIC", source: null },

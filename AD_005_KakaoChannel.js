@@ -38,9 +38,28 @@
  * AD (2026-07-30 네이밍 컨벤션)
  *
  * Version
- * v1.1.0
+ * v1.2.2
  *
  * Change Log
+ * v1.2.2 (2026-08-06)
+ * - `syncKakaoChannelPerformanceToAD_()` 끝에 `applyKakaoSMSRawStyling_()`
+ *   (AD_006_KakaoMoments.js 신규) 호출 추가 — 어느 sync 경로로 갱신되든
+ *   숫자 서식/CTR·CvR 수식/테두리가 일관되게 유지되도록(사용자 요청).
+ * v1.2.1 (2026-08-06)
+ * - **버그 수정 — `syncKakaoChannelPerformanceToAD_()`가 시트를 새로 만들 때
+ *   "Message Ad ID"(1열) 숨김 처리 누락**. 사용자가 API sync보다 먼저 수기
+ *   sync를 돌려 밀린 최신 행부터 KakaoSMS_Raw에 반영하기로 함(2026-08-06) —
+ *   이 경로로 시트가 먼저 생성될 수 있어, `syncKakaoMomentsReportToKakaoSMSRaw_()`
+ *   (AD_006_KakaoMoments.js)와 동일하게 `hideColumns(1)` 추가.
+ * v1.2.0 (2026-08-06)
+ * - **`computeKakaoChannelSpendSummary_()`를 `KakaoSMS_Raw` 소스로 리포인트
+ *   (카카오모먼트 API 이관)**. 신규 `readKakaoSMSRawRows_()`(AD.SPREADSHEET_ID
+ *   내부 KakaoSMS_Raw 읽기, AD_006_KakaoMoments.js의 sync 함수가 채움)로
+ *   교체 — 기존 `readKakaoChannelRawRows_()`(외부 수기 Performance 시트)는
+ *   `syncKakaoChannelPerformanceToAD_()`/`runDebugKakaoChannelRawFirstRow()`가
+ *   계속 쓰므로 그대로 유지(코드 삭제 안 함, Decision Log상 그 함수 자체를
+ *   더 이상 안 돌리는 것으로 전환 완료 처리). 상세:
+ *   docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md
  * v1.1.0 (2026-07-31)
  * - **`KakaoSMS_Raw` 뷰 탭 동기화 기능 추가(사용자 요청 — "API로 가져오더라도
  *   어차피 performance는 봐야해서")**. 캠페인 지출 스프레드시트
@@ -288,12 +307,66 @@ function readKakaoChannelRawRows_(){
 
 /**
  * ==========================================================
+ * Read KakaoSMS_Raw Rows (IO 래퍼)
+ *
+ * WHY (2026-08-06, 카카오모먼트 API 이관)
+ * `computeKakaoChannelSpendSummary_()`의 데이터 소스를 외부 수기 시트
+ * (Performance, `readKakaoChannelRawRows_()`)에서 `KakaoSMS_Raw`
+ * (AD.SPREADSHEET_ID 내부, AD_006_KakaoMoments.js의
+ * `runSyncKakaoMomentsReportToKakaoSMSRaw()`가 채움)로 전환한다 — 카카오모먼트
+ * API 전환 후 신규 데이터는 이 탭에만 쌓이므로, 리포인트 안 하면 이 시점부터
+ * Ad_Spend_Cache→ACQ_REP Spent 집계가 조용히 멈춤(exec-plan
+ * 2026-08-04-kakao-moments-api-integration.md 필수 변경사항 항목 참고).
+ * `KakaoSMS_Raw`는 같은 AD.SPREADSHEET_ID 안(외부 스프레드시트 아님)이라
+ * `normalizeExternalCalendarDate_()` 타임존 보정이 필요 없음 — 쓸 때 이미
+ * 이 스크립트 타임존 기준 Date로 기록됨.
+ *
+ * OUTPUT
+ * Array<{eventType, sentAt, cost}>  readKakaoChannelRawRows_()와 동일한 형태
+ * ==========================================================
+ */
+function readKakaoSMSRawRows_(){
+
+  const ss = SpreadsheetApp.openById(AD.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(AD.RAW_SHEET["Kakao Channel"]);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < 2 || lastCol === 0) return [];
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function(h){ return String(h).trim(); });
+
+  const eventTypeCol = headers.indexOf("Event type");
+  const sentAtCol = headers.indexOf("SentAt");
+  const costCol = headers.indexOf("Cost");
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  return values
+    .map(function(row){
+      return {
+        eventType: row[eventTypeCol],
+        sentAt: row[sentAtCol],
+        cost: parseCurrencyValue_(row[costCol])
+      };
+    })
+    .filter(function(record){ return !!record.eventType; });
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Kakao Channel Spend Summary (IO 래퍼)
  * ==========================================================
  */
 function computeKakaoChannelSpendSummary_(){
 
-  return aggregateKakaoChannelSpendByFYMonthSegment_(readKakaoChannelRawRows_());
+  return aggregateKakaoChannelSpendByFYMonthSegment_(readKakaoSMSRawRows_());
 
 }
 
@@ -414,6 +487,7 @@ function syncKakaoChannelPerformanceToAD_(){
   if(!destSheet){
     destSheet = destSS.insertSheet(AD.RAW_SHEET["Kakao Channel"]);
     destSheet.getRange(1, 1, 1, headerValues.length).setValues([headerValues]);
+    destSheet.hideColumns(1); // "Message Ad ID" — syncKakaoMomentsReportToKakaoSMSRaw_()의 upsert 키, 이 경로로 시트가 먼저 생성돼도 동일하게 숨김
   }
 
   const existingDataRowCount = Math.max(destSheet.getLastRow() - 1, 0);
@@ -433,6 +507,8 @@ function syncKakaoChannelPerformanceToAD_(){
 
   destSheet.getRange(existingDataRowCount + 2, 1, newValues.length, headerValues.length)
     .setValues(newValues);
+
+  applyKakaoSMSRawStyling_(destSheet);
 
   Logger.log(
     newValues.length + "행 추가됨(" + AD.RAW_SHEET["Kakao Channel"] + ", 총 " +

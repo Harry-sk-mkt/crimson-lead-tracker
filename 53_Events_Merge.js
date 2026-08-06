@@ -9,9 +9,14 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-08-06)
+ * - **버그 수정 — `Success %` 분모가 잘못됨(사용자 발견)**. `applyGroup5Derived_()`가
+ *   `Success ÷ SF Reg.`로 계산하고 있었는데, 사용자 확인 결과 올바른 공식은
+ *   `Success ÷ Mkt Reg.`(시트 R열÷N열) — SP1%(T÷P)/SNP1%(V÷Q)는 원래부터 맞는
+ *   분모였음. `testApplyGroup5Derived()` 기대값도 함께 수정(0.2→0.4).
  * v1.9.0 (2026-08-06)
  * - "NP1%" → "SNP1%"로 컬럼명 정정(사용자 요청) — applyGroup5Derived_()/
  *   testApplyGroup5Derived() 참조도 함께 갱신(아래 v1.8.0 로그 텍스트에도
@@ -309,14 +314,17 @@ function applyGroup4Computed_(row, engineRow) {
  * #DIV/0! 14건+ 발견됐던 원인 재발 방지가 이 기능의 존재 이유.
  *
  * Success %/SP1%/SNP1%(2026-08-06 추가)는 Match Rate와 동일한 패턴 —
- * 수동 관찰값(Success/SP1/SNPL1)을 SF 매칭 분모(SF Reg./SF P1s/SF NLP1s)
- * 대비 비율로 환산.
+ * 수동 관찰값(Success/SP1/SNPL1)을 분모 대비 비율로 환산. **분모 정정
+ * (2026-08-06, 사용자 확인)**: Success %는 SF Reg.가 아니라 Mkt Reg.
+ * 대비(Success÷Mkt Reg., 시트 R열÷N열) — 마케팅 등록 전체 대비 최종 성공률을
+ * 보기 위함(SF 매칭된 부분집합만 대비하면 안 됨). SP1%(SP1÷SF P1s, T열÷P열)/
+ * SNP1%(SNPL1÷SF NLP1s, V열÷Q열)는 원래부터 맞는 분모였음.
  * ==========================================================
  */
 function applyGroup5Derived_(row) {
 
   row["Match Rate"] = divideGuard_(row["SF Reg."], row["Mkt Reg."]);
-  row["Success %"] = divideGuard_(row["Success"], row["SF Reg."]);
+  row["Success %"] = divideGuard_(row["Success"], row["Mkt Reg."]);
   row["SP1%"] = divideGuard_(row["SP1"], row["SF P1s"]);
   row["SNP1%"] = divideGuard_(row["SNPL1"], row["SF NLP1s"]);
   row["CPNP1"] = divideGuard_(row["Spent"], row["SF NLP1s"]);
@@ -343,7 +351,7 @@ function testApplyGroup5Derived() {
 
   const pass =
     row["Match Rate"] === 2 &&
-    row["Success %"] === 0.2 &&
+    row["Success %"] === 0.4 &&  // Success÷Mkt Reg.(R/N) — 2026-08-06 사용자 수정(기존엔 SF Reg.로 잘못 나눔)
     row["SP1%"] === 0.25 &&
     row["SNP1%"] === 0.2 &&
     row["CPNP1"] === 40 &&
