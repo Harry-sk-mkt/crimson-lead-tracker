@@ -22,9 +22,27 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.25.0
+ * v1.26.0
  *
  * Change Log
+ * v1.26.0 (2026-08-07)
+ * - **버그 수정 — 주의 "월"/"FY" 귀속을 월요일 기준 → 과반(4일 이상) 기준으로 변경**
+ *   (사용자 리포트: "8/31이 하루라도 포함되면 AUG로 분류되고 있다"). 신규
+ *   `getWeekMajorityDate_()`(그 주 목요일=월요일+3일 — 7일이 어느 비율로
+ *   나뉘어도 항상 과반 쪽에 위치함을 이용한 순수 함수) + 이를 공유하는
+ *   `getWeekMonthLabel_()`/`getWeekFiscalYear_()`, `generateCalendarWeeksForFY_()`가
+ *   `getFiscalMonthLabel(monday)`/`getFiscalYear(monday)` 대신 이걸 씀.
+ *   `computeWeeksInMonthCounts_()` 등 하위 로직은 이미 이 함수의 week.month/week.fy를
+ *   그대로 재사용하는 구조라 추가 수정 없이 자동 반영. 91_TargetReport.js의
+ *   `computeTargetActualCPNP1ByGroupMonth_()`가 독립적으로 재계산하던 month/fy도
+ *   같은 함수로 교체해 키 불일치 방지(v1.9.0 참고). **처음엔 월만 고치고 FY는
+ *   월요일 기준으로 남겨뒀으나(월경계 주만 어긋나는 좁은 문제로 보고, FY26/FY27
+ *   실측 영향 없음 확인), 검토 중 "FY와 월 귀속 기준이 서로 다르면 아주 드물게
+ *   (Aug 1이 화~목요일에 걸리는 해) 한 FY 리포트 안에 AUG가 처음/끝 두 번
+ *   나타나고 Ad_Spend_Cache 조회 키(FY|Month)도 어긋날 수 있다"는 구조적 위험이
+ *   발견돼, 사용자 확인 후 FY 귀속도 같은 과반 기준으로 확장** — node 스크립트로
+ *   FY25~32 전체 시뮬레이션해 매 FY 첫 주 AUG/마지막 주 JUL 유지 + 인접 FY 사이
+ *   공백·중복 0 확인.
  * v1.25.0 (2026-08-06)
  * - 신규 `computeWeeksInMonthCountsForFYRange_()` — `generateCalendarWeeksForFY_()`/
  *   `computeWeeksInMonthCounts_()`를 Start~End FY 여러 해에 걸쳐 합산(사용자
@@ -500,6 +518,113 @@ function addDaysToDate_(date, days){
 
 /**
  * ==========================================================
+ * Get Week Majority Date (그 주(월~일)에서 과반을 차지하는 날 — 대표일)
+ *
+ * WHY
+ * 한 주(7일)는 최대 한 번만 월 경계를 넘을 수 있으므로, 과반(4일 이상)을
+ * 차지하는 쪽은 항상 그 주의 목요일(월요일+3일)이 속한 쪽과 일치한다(7일이
+ * 어느 비율로 나뉘어도 — 1/6, 2/5, 3/4 — 목요일은 항상 더 큰 쪽에 있음).
+ * 이 "대표일"을 getFiscalYear()/getFiscalMonthLabel()에 그대로 넘기면 그
+ * 주의 FY/월 귀속을 둘 다 과반 기준으로 일관되게 구할 수 있다 —
+ * getWeekFiscalYear_()/getWeekMonthLabel_()이 이 함수를 공유한다(단일 소스,
+ * 계산이 어긋나면 안 됨).
+ *
+ * @param {Date} monday  그 주의 월요일(시각 없음)
+ * @return {Date}
+ * ==========================================================
+ */
+function getWeekMajorityDate_(monday){
+
+  return addDaysToDate_(monday, 3);
+
+}
+
+
+/**
+ * ==========================================================
+ * Get Week Fiscal Year (그 주(월~일)가 귀속되는 FY — 일수 과반 기준)
+ *
+ * WHY
+ * getWeekMonthLabel_()과 동일한 이유(주석 참고) — 기존엔 그 주 월요일의
+ * 달력월로 FY를 정했는데, 이러면 월 귀속(과반 기준)과 FY 귀속(월요일 기준)이
+ * 서로 다른 기준을 쓰게 돼, 아주 드물게(Aug 1이 화~목요일에 걸리는 해)
+ * "그 FY의 마지막 주인데 과반 기준 월은 다음 FY 시작월(AUG)" 같은 어긋난
+ * 상태가 생길 수 있음이 발견됨(2026-08-07, node 스크립트로 FY25~32
+ * 시뮬레이션해 확인 — FY26/27은 이 경계에 안 걸려 지금까지 드러나지 않았음).
+ * FY/월 귀속을 둘 다 같은 과반 기준(대표일)으로 통일하면 이런 어긋남 자체가
+ * 구조적으로 발생하지 않는다(FY25~32 전체 시뮬레이션 — 매 FY 첫 주 AUG/
+ * 마지막 주 JUL 유지, 인접 FY 사이 공백·중복 0 확인).
+ *
+ * @param {Date} monday  그 주의 월요일(시각 없음)
+ * @return {number}  예: 27 (FY27)
+ *
+ * TEST
+ * getWeekFiscalYear_(new Date(2028,6,31)) === 29 (FY29 첫 주 — 대표일 8/3/2028)
+ * ==========================================================
+ */
+function getWeekFiscalYear_(monday){
+
+  return Number(getFiscalYear(getWeekMajorityDate_(monday)).replace("FY", ""));
+
+}
+
+
+/**
+ * ==========================================================
+ * Get Week Month Label (그 주(월~일)의 대표 월 — 일수 과반 기준)
+ *
+ * WHY
+ * 기존엔 그 주의 월요일이 속한 달력월을 그대로 그 주의 "월"로 썼는데, 월
+ * 경계에 걸친 주(예: 2026-08-31(월)~09-06(일))는 월요일 하루만 8월이고
+ * 나머지 6일이 9월인데도 "AUG"로 분류되는 문제가 있었음(사용자 리포트,
+ * 2026-08-07 — Target_REP의 Actual/Target CPNP1이 월 단위 값을 그 달 모든
+ * 주에 반복 표시하는 구조라, 이 오분류가 그대로 "9월이 아직 시작도 안 했는데
+ * 8월 실적/목표가 표시"되는 결과로 이어짐). getWeekMajorityDate_() WHY 참고
+ * — 이 함수를 월요일 기반 getFiscalMonthLabel() 대신 써서, 그 주를 "월"로
+ * 분류하는 모든 지점(Target Engine의 주간 목표 계산 + Target_REP의 Actual
+ * CPNP1 집계)이 항상 같은 과반 규칙을 쓰도록 통일한다.
+ *
+ * @param {Date} monday  그 주의 월요일(시각 없음)
+ * @return {string}  getFiscalMonthLabel()과 동일한 3글자 라벨(예: "SEP")
+ *
+ * TEST
+ * getWeekMonthLabel_(new Date(2026,7,31)) === "SEP" (8/31(월)~9/6(일), 9월 6일 과반)
+ * getWeekMonthLabel_(new Date(2026,7,3))  === "AUG" (8/3(월)~8/9(일), 전부 8월)
+ * ==========================================================
+ */
+function getWeekMonthLabel_(monday){
+
+  return getFiscalMonthLabel(getWeekMajorityDate_(monday));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getWeekMonthLabel_() / getWeekFiscalYear_()
+ * ==========================================================
+ */
+function testGetWeekMonthLabel(){
+
+  const augustBoundaryWeek = getWeekMonthLabel_(new Date(2026, 7, 31)); // 8/31~9/6
+  const midMonthWeek = getWeekMonthLabel_(new Date(2026, 7, 3));        // 8/3~8/9
+  const fyBoundaryWeek = getWeekFiscalYear_(new Date(2028, 6, 31));     // FY29 첫 주(대표일 8/3/2028)
+
+  const pass =
+    augustBoundaryWeek === "SEP" &&
+    midMonthWeek === "AUG" &&
+    fyBoundaryWeek === 29;
+
+  Logger.log("8/31(월)~9/6(일) => " + augustBoundaryWeek + " (expected SEP)");
+  Logger.log("8/3(월)~8/9(일) => " + midMonthWeek + " (expected AUG)");
+  Logger.log("2028-07-31(월)~08-06(일) FY => " + fyBoundaryWeek + " (expected 29)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Resolve Target FY To Calendar Year (2자리 FY → 실제 4자리 연도)
  *
  * WHY
@@ -545,10 +670,21 @@ function testResolveTargetFYCalendarYear(){
  * Generate Calendar Weeks For Fiscal Year (월~일 주 전체 나열)
  *
  * WHY
- * Target_REP 리포트 영역 = 대상 FY의 월~일 주 전체(52~53행). 각 주의
- * 월 귀속은 그 주 월요일의 FY/Month(getFiscalYear/getFiscalMonthLabel
- * 재사용 — Fiscal Month 라벨은 실제로 그 달력월 그대로라 계산월과
- * 캘린더월이 1:1 대응한다, docs/TargetReportDesign.md §4/§6 참고).
+ * Target_REP 리포트 영역 = 대상 FY의 월~일 주 전체(52~53행). 각 주의 FY/월
+ * 귀속 둘 다 **2026-08-07부터 그 주 7일 중 과반을 차지하는 대표일 기준**
+ * (`getWeekFiscalYear_()`/`getWeekMonthLabel_()`, 둘 다 `getWeekMajorityDate_()`
+ * 공유) — 원래는 둘 다 월요일 기준이었으나(docs/TargetReportDesign.md §4에
+ * 그렇게 기록돼 있었음), 월 경계에 걸친 주(예: 2026-08-31(월)~09-06(일))가
+ * 월요일 하루만 속한 8월로 잘못 분류돼 Target/Actual CPNP1(월 단위 값을
+ * 그 달 모든 주에 반복 표시하는 구조)이 실제로는 9월인 주에 8월 값으로
+ * 표시되는 문제가 사용자 리포트로 발견됨. **FY 귀속도 월요일이 아니라 같은
+ * 과반 기준으로 통일**(2026-08-07, 처음엔 월만 고치고 FY는 월요일 기준으로
+ * 남겨뒀으나, 그러면 아주 드물게(Aug 1이 화~목요일에 걸리는 해) 그 FY의
+ * 마지막 주가 과반 기준 월로는 "AUG"인데 FY는 그대로 그 해(월요일 기준)에
+ * 남아 한 리포트 안에 AUG가 두 번 나오고 Ad_Spend_Cache 조회 키(FY|Month)도
+ * 어긋나는 문제가 있어, 사용자 확인 후 FY까지 과반 기준으로 확장) —
+ * getWeekFiscalYear_() WHY 참고, node 스크립트로 FY25~32 전체 시뮬레이션해
+ * 매 FY 첫 주 AUG/마지막 주 JUL 유지 + 인접 FY 사이 공백·중복 0 확인.
  *
  * @param {number} targetFY  예: 27 (FY27 = 2026-08-01 ~ 2027-07-31)
  * @return {Array<{weekStart:Date, weekEnd:Date, fy:number, month:string}>}
@@ -571,7 +707,7 @@ function generateCalendarWeeksForFY_(targetFY){
 
     safety++;
 
-    const fy = Number(getFiscalYear(monday).replace("FY", ""));
+    const fy = getWeekFiscalYear_(monday);
 
     if(fy > targetFY) break;
 
@@ -581,7 +717,7 @@ function generateCalendarWeeksForFY_(targetFY){
         weekStart: monday,
         weekEnd: addDaysToDate_(monday, 6),
         fy: fy,
-        month: getFiscalMonthLabel(monday)
+        month: getWeekMonthLabel_(monday)
       });
 
     }

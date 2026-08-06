@@ -19,9 +19,23 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-07)
+ * - **버그 수정 2건(사용자 리포트)**: (1) 아직 시작하지 않은 미래 주에도 Actual
+ *   CPNP1이 표시되던 문제 — Actual CPNP1은 월 단위 값을 그 달 모든 주에 반복
+ *   표시하는 구조라, 이번 달이 진행 중이면 아직 오지 않은 주까지 월 누적 값을
+ *   미리 보여주고 있었음. `generateTargetReport_()`/`updateTargetReportActuals_()`에
+ *   "weekStart > 이번 주 월요일이면 공란" 가드 추가(docs/TargetReportDesign.md
+ *   §7 "미래 주는 Target만, Actual 공란" 원칙을 실제로 지키도록 수정). (2)
+ *   `computeTargetActualCPNP1ByGroupMonth_()`가 month를 `getFiscalMonthLabel(weekStart)`
+ *   (월요일 기준)로, fyByMonth를 `getFiscalYear(weekStart)`(마찬가지로 월요일 기준)로
+ *   각각 독립 재계산하던 걸 신규 `getWeekMonthLabel_()`/`getWeekFiscalYear_()`
+ *   (90_TargetEngine.js v1.26.0, 둘 다 과반 기준)로 교체 — 그대로 두면 리포트
+ *   C열/week.fy(월 경계 주는 이제 과반 기준으로 다르게 표시)와 이 함수의
+ *   "group|month" 키·spendKey가 어긋나 그 주의 Actual CPNP1이 조회 실패로 빈
+ *   값이 됐을 것.
  * v1.8.0 (2026-08-04)
  * - **Actual CPNP1 소스를 Target_Engine 수동 입력 → Ad_Spend_Cache 자동 집계로
  *   전환**(사용자 확정 — NewP1_REP과 동일 전환 이유). `computeTargetActualCPNP1ByGroupMonth_()`
@@ -332,6 +346,15 @@ function computeTargetActualP1ByWeek_(weekStarts){
  * 달의 Actual CPNP1을 모든 주에 같은 값(월 Spent ÷ 그 달 Actual P1 합계)으로
  * 반복 표시한다.
  *
+ * **2026-08-07**: 여기서 쓰는 "group|month" 키의 month는 `getWeekMonthLabel_()`
+ * (90_TargetEngine.js, 그 주 7일 중 과반을 차지하는 달 — 월요일만 보고 정하던
+ * 예전 방식은 월 경계에 걸친 주를 오분류하는 문제가 있었음, 함수 주석 참고)로
+ * 계산하고, `fyByMonth`(spendKey 조립용 FY)도 같은 이유로 `getWeekFiscalYear_()`
+ * (월요일 기준 `getFiscalYear()` 아님)로 계산한다. `generateCalendarWeeksForFY_()`가
+ * 리포트 C열("month")/week.fy에 쓰는 값과 반드시 같은 규칙이어야 한다 — 다르면
+ * 여기서 만든 ratio의 키와 리포트가 조회하는 키가 어긋나 그 주의 Actual CPNP1이
+ * 빈 값으로 나온다.
+ *
  * @param {Array<Date>} weekStarts     리포트에 나열된 모든 Week Start
  * @param {Object} actualP1ByWeek      computeTargetActualP1ByWeek_() 결과
  * @return {Object}  "group|month" -> ratio (그 달 Actual P1 합계가 0이거나
@@ -353,9 +376,9 @@ function computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek){
 
     if(!(weekStart instanceof Date)) return;
 
-    const month = getFiscalMonthLabel(weekStart);
+    const month = getWeekMonthLabel_(weekStart);
 
-    fyByMonth[month] = Number(getFiscalYear(weekStart).replace("FY", ""));
+    fyByMonth[month] = getWeekFiscalYear_(weekStart);
 
     const counts = actualP1ByWeek[toKey(weekStart)] || {};
 
@@ -576,11 +599,13 @@ function generateTargetReport_(){
 
   const actualP1ByWeek = computeTargetActualP1ByWeek_(weekStarts);
   const actualCPNP1ByGroupMonth = computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek);
+  const currentWeekMonday = getMondayOfWeek_(new Date());
 
   const outputRows = weekOrder.map(function(key){
 
     const week = weekMap[key];
     const actualCounts = actualP1ByWeek[key] || {};
+    const weekHasStarted = week.weekStart <= currentWeekMonday;
 
     const row = [week.weekStart, week.weekEnd, week.month];
 
@@ -595,9 +620,12 @@ function generateTargetReport_(){
       const actualP1 = actualCounts[group] || 0;
 
       // 그 달의 Actual CPNP1 값을 그 달 모든 주에 동일하게 반복 표시(Target CPNP1과
-      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
+      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고). 단, 아직
+      // 시작하지 않은 미래 주(weekStart > 이번 주 월요일)에는 표시하지 않는다 — 월
+      // 단위 값이라 아직 오지 않은 주까지 "이번 달 실적"을 미리 보여주면 실제로는
+      // 존재하지 않는 데이터처럼 오해를 줌(2026-08-07 사용자 리포트).
       const actualCPNP1Key = group + "|" + week.month;
-      const actualCPNP1 = actualCPNP1ByGroupMonth[actualCPNP1Key];
+      const actualCPNP1 = weekHasStarted ? actualCPNP1ByGroupMonth[actualCPNP1Key] : undefined;
 
       // 2026-07-30 컬럼 순서 재배치(달성% 제거, 사용자 확인 — "Progress는 다른
       // 시트에서 확인") — Target 4컬럼(New P1/Pipeline P1/P1/CPNP1) 다음 Actual
@@ -672,6 +700,7 @@ function updateTargetReportActuals_(sheet){
 
   const actualP1ByWeek = computeTargetActualP1ByWeek_(weekStarts);
   const actualCPNP1ByGroupMonth = computeTargetActualCPNP1ByGroupMonth_(weekStarts, actualP1ByWeek);
+  const currentWeekMonday = getMondayOfWeek_(new Date());
 
   const toKey = function(date){
     return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
@@ -686,6 +715,7 @@ function updateTargetReportActuals_(sheet){
     const key = toKey(weekStart);
     const month = row[2]; // Month 컬럼(라벨만, 예 "AUG") — 리포트에 이미 기록된 값 재사용
     const actualCounts = actualP1ByWeek[key] || {};
+    const weekHasStarted = weekStart <= currentWeekMonday;
 
     CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
 
@@ -698,8 +728,9 @@ function updateTargetReportActuals_(sheet){
       const actualP1 = actualCounts[group] || 0;
 
       // 그 달의 Actual CPNP1을 그 달 모든 주에 동일하게 반복 표시(generateTargetReport_()와
-      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고).
-      const actualCPNP1 = actualCPNP1ByGroupMonth[group + "|" + month];
+      // 동일한 패턴 — computeTargetActualCPNP1ByGroupMonth_() WHY 참고). 아직 시작하지
+      // 않은 미래 주는 표시하지 않음(generateTargetReport_()와 동일 가드).
+      const actualCPNP1 = weekHasStarted ? actualCPNP1ByGroupMonth[group + "|" + month] : undefined;
 
       row[baseCol + 4] = actualP1;
       row[baseCol + 5] = actualCPNP1 === undefined ? "" : actualCPNP1;
