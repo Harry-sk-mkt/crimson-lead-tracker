@@ -1,4 +1,74 @@
-# Changelog — 2026-08-06
+# Changelog — 2026-08-07
+
+## 세션 시작 자동 Pull 원칙 추가
+
+- `scripts/start-session.sh`: 로컬이 origin보다 뒤처지기만 하고(ahead 없음) 로컬에 커밋 안 된
+  변경사항이 없으면, 확인 없이 자동으로 `git pull`까지 진행하도록 수정(fast-forward만 가능한
+  안전한 상황이므로). uncommitted 변경이 있거나 진짜 divergence(ahead+behind 동시)면 여전히
+  자동 pull 안 하고 알림만. `CLAUDE.md`의 "Session-Start Git Sync Check" 항목에도 반영.
+
+## Target_REP 버그 2건 수정 — 미래 주 Actual CPNP1 노출 + 월/FY 경계 주 오분류
+
+- **버그 발견·수정 — 아직 시작하지 않은 미래 주에도 Actual CPNP1이 표시됨**: Actual CPNP1은
+  월 단위 값을 그 달 모든 주에 반복 표시하는 구조라, 이번 달이 진행 중이면 아직 오지 않은
+  주까지 월 누적 값을 미리 보여주고 있었음(사용자 리포트). `generateTargetReport_()`/
+  `updateTargetReportActuals_()`(`91_TargetReport.js` v1.9.0)에 "weekStart > 이번 주 월요일이면
+  공란" 가드 추가 — `docs/TargetReportDesign.md`에 이미 기록돼 있던 "미래 주는 Target만,
+  Actual 공란" 원칙을 실제로 지키도록 수정.
+
+- **버그 발견·수정 — 월 경계에 걸친 주가 월요일 하루만 보고 잘못 분류됨**(사용자 리포트: "8/31이
+  하루라도 포함되면 AUG로 분류되고 있다"): 기존엔 그 주의 월요일이 속한 달력월을 그대로 그
+  주의 "월"로 썼는데, 예를 들어 2026-08-31(월)~09-06(일) 주는 월요일 하루만 8월이고 나머지
+  6일이 9월인데도 "AUG"로 분류되고 있었음. 신규 `getWeekMajorityDate_()`(그 주 목요일=월요일
+  +3일이 항상 과반 쪽에 위치함을 이용한 순수 함수) + 이를 공유하는 `getWeekMonthLabel_()`/
+  `getWeekFiscalYear_()`(`90_TargetEngine.js` v1.26.0)로 교체. **처음엔 월만 고치고 FY 귀속은
+  월요일 기준으로 남겨뒀으나**, 검토 중 "FY와 월 귀속 기준이 다르면 아주 드물게 한 FY 리포트
+  안에 AUG가 두 번 나타나고 Ad_Spend_Cache 조회 키(FY|Month)도 어긋날 수 있다"는 구조적 위험이
+  발견돼 FY 귀속도 같은 과반 기준으로 확장(사용자 확인) — node 스크립트로 FY25~32 전체
+  시뮬레이션해 매 FY 첫 주 AUG/마지막 주 JUL 유지 + 인접 FY 사이 공백·중복 0건 확인.
+  `91_TargetReport.js`의 `computeTargetActualCPNP1ByGroupMonth_()`가 독립적으로 재계산하던
+  month/fy도 같은 함수로 교체해 키 불일치 방지. `docs/TargetReportDesign.md` §4/§7 갱신.
+
+## 실무자 공유용 OPS/REP 스펙 요약 Artifact 제작
+
+- Leads_OPS/Search_OPS/Events_OPS/BOFU_OPS/Content_OPS(운영 시트 5개)와 ACQ_REP/NewP1_REP/
+  Target_REP(리포트 3개)의 목적·데이터 소스·갱신 방식을 마케팅 실무자가 한눈에 볼 수 있게
+  정리한 웹페이지 제작(Claude Artifact). FY_REP은 이 시점엔 미구현이라 제외.
+
+## FY_REP 재착수 — 데이터 소스 전수 조사 + Config 확정
+
+- **배경**: 2026-07-30 "별도 리포트 대신 ACQ_REP/NewP1_REP Target 컬럼 확장"으로 방향을
+  틀었던 FY_REP을, 사용자가 "FY24/25/26 monthly Segment/Sales Funnel 비교"로 다시 요청 —
+  이번엔 Marketing/ACQ/Pipeline/Revenue 4개 섹션 구조로 독립 `FY_REP` 시트 신규 제작 최종
+  확정(기존 ACQ_REP/NewP1_REP Target 확장은 대체 아니고 그대로 유지·병행).
+- **외부 데이터 소스 3개 실물 조사**(전부 읽기 전용 진단 함수로 확인, `96_TempQA_FYRepExternalSheet.js`
+  신규): (1) 레거시 "0. Weekly" 외부시트 — FY23~26 Target/Spent는 있으나 세그먼트별 분해
+  없음, 대부분 컬럼이 숨김 처리돼 있었으나 Apps Script는 숨김 여부와 무관하게 정상 읽음 확인.
+  (2) 사용자가 공유한 디지털팀 다운로드 트래커(xlsx, Excel COM이 PowerShell에서 막혀 zip
+  내부 XML 직접 파싱으로 확인) — 플랫폼별(Meta/Google/Naver) 월별 상세 데이터가 있으나 1개
+  연도(파일명 "FY26"인데 실제론 우리 기준 FY27, 연도 rollover 시 이름을 안 바꾸는 습관 확인)
+  분량만 존재. (3) `AD.SPREADSHEET_ID`(Campaigns 2.0) — 사용자가 "캠페인 데이터 재적재 시트"로
+  언급한 게 실은 이미 파이프라인에 연결된 기존 소스였음을 확인(Meta_Raw/KakaoSMS_Raw 이미
+  연동됨), `GoogleSearch_Raw`는 완전히 빈 탭이라 Google 자동 수집이 이 프로젝트 어디에도
+  없다는 것도 함께 확인.
+- **최종 소스 확정**: 사용자가 이 세션 중 신규 생성한 `perfTrackerByFY`(FY24/FY25/FY26 3개
+  탭)로 확정 — Quarterly Summary(회사 전체 월별 Target/Spent/Revenue)와 플랫폼 블록(Meta/
+  Google 여러 종류/Naver, 월별 Spent/Clicks/Leads/CPL을 상담·이벤트·콘텐츠 유형별로 분해)
+  둘 다 보유. 헤더 행(FY24/25=25행, FY26=27행)과 월 컬럼(3~14열=8월~7월) 매핑까지 실측
+  확정, "FY26" 탭 이름은 오표기이고 실제 데이터는 진짜 2025-08~2026-07(우리 기준 FY26)
+  맞음을 사용자 확인. 연도별로 추적 플랫폼 구성이 다르고(FY24/25엔 TikTok/LinkedIn/Bing/
+  Snapchat도 있었으나 FY26엔 빠짐), 플랫폼 통화도 서로 달라(NZD/AUD/USD/KRW) 전부 NZD로
+  환산 표시하기로 확정.
+- **`CONFIG.FYREP` 신규**(`00_Config.js` v1.29.0) — 위 실측 결과 전부 반영. 세그먼트는
+  Target_REP의 5개가 아니라 Leads_OPS Business Segment 전체 7개(Referral/Other 포함, 목표
+  배분이 아니라 실적 비교라 사용자 확정). Revenue 섹션의 세그먼트별 Target은 과거 실측값이
+  시스템 어디에도 없어 회사 전체 Target × 그 FY Deal Tracker 딜 비중으로 추정할 수밖에 없음 —
+  리포트에 "추정치"임을 명확히 라벨링하기로 확정.
+- **진행 상황**: `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md`에 전체 설계/
+  결정사항/진행 체크리스트 기록. 실제 Engine/Report/Styles 구현은 다음 세션으로 이어짐 —
+  Config까지만 완료.
+
+
 
 ## MTA lock-skip 유실 버그 대응 + Pipeline Status RUNNING/FAILED 표시·색상 추가
 

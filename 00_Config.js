@@ -9,9 +9,14 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.28.0
+ * v1.29.0
  *
  * Change Log
+ * v1.29.0 (2026-08-07)
+ * - `CONFIG.FYREP` 신규 — FY24/25/26 Marketing/ACQ/Pipeline/Revenue 비교
+ *   리포트(신규 시트 `FY_REP`) 설정. 외부 스프레드시트(`perfTrackerByFY`,
+ *   사용자가 이 세션 중 생성) 구조를 여러 차례 실측 확인한 뒤 확정된 값 —
+ *   상세 배경은 docs/exec-plans/active/2026-08-07-fy-rep-implementation.md.
  * v1.28.0 (2026-08-06)
  * - `PROPERTIES.DEAL_TRACKER_LAST_ROW`/`TARGET.DEAL_TRACKER_ENGINE_SHEET`
  *   신규 — Deal Tracker(외부 시트) 직접 openById() 대신 내부 캐시
@@ -820,6 +825,98 @@ const CONFIG = {
       SEGMENT_HEADER_COLORS: ["#caddf5", "#fad9cc", "#c6ebde", "#fbe8bf", "#f9dee8"]
 
     }
+
+  },
+
+  /**
+   * FY_REP (FY24/25/26 Marketing/ACQ/Pipeline/Revenue 비교 리포트)
+   *
+   * docs/exec-plans/active/2026-08-07-fy-rep-implementation.md 참고 — 실물 구조
+   * 확인(외부 스프레드시트 헤더 행/컬럼 매핑 실측)까지 마친 뒤 확정된 값들이다.
+   * TARGET과 달리 세그먼트는 CONFIG.ACQ.SEGMENTS 전체 7개(Referral/Other 포함,
+   * 사용자 확정) — 마케팅 타겟 배분 대상만 골랐던 TARGET.GROUP_ORDER(5개)와는
+   * 다른 목적(실적 비교이지 목표 배분이 아님)이라 그대로 안 씀.
+   */
+  FYREP: {
+
+    SHEET: "FY_REP",
+
+    // 비교 대상 FY(오래된 순) — 우리 시스템 기준 FY(getFiscalYear() 컨벤션:
+    // 8월 시작). 새 FY가 생기면 이 배열만 늘리면 됨(코드는 FYS를 순회하는
+    // 구조로 작성).
+    FYS: [24, 25, 26],
+
+    // Marketing 섹션 — 사용자가 새로 만든 통합 트래커. 3개 탭(FY24/FY25/FY26)
+    // 모두 "0. Weekly"(레거시) 원본과 값 일치 실측 확인(2026-08-07, Facebook
+    // Amount spent $66,172 등 교차검증). ⚠️ "FY26" 탭 이름은 오표기 —
+    // 실제로는 2025-08~2026-07(우리 기준 진짜 FY26) 데이터가 맞음(사용자
+    // 확인, exec-plan Decision Log 참고). 탭 이름 자체는 그대로 신뢰해서 씀
+    // (FYS 배열의 24/25/26과 탭명 "FY24"/"FY25"/"FY26"이 1:1 대응).
+    MARKETING_SOURCE: {
+
+      SPREADSHEET_ID: "1DhJynLE6eySh6X9X-Zsgbs6HvuXDT5omjf_m0XjXQ3o",
+
+      // FY별 탭명 + 플랫폼 블록 헤더 행(실측 확인, 2026-08-07). 헤더 행 기준
+      // C~N열(3~14) = 8월~7월 고정 12개월, 3개 탭 전부 일치. FY26 탭만
+      // O열(15)에 FY 합계 추가(다른 탭은 없음 — 합계는 코드에서 직접 sum).
+      TABS: {
+        24: { NAME: "FY24", PLATFORM_HEADER_ROW: 25 },
+        25: { NAME: "FY25", PLATFORM_HEADER_ROW: 25 },
+        26: { NAME: "FY26", PLATFORM_HEADER_ROW: 27 }
+      },
+
+      // 플랫폼 블록의 월 데이터는 항상 헤더행 기준 3~14열(8월~7월) — 탭마다
+      // 동일(실측 확인).
+      MONTH_COL_START: 3,
+      MONTH_COL_COUNT: 12,
+
+      // 플랫폼명(A열)에 줄바꿈으로 통화가 표기됨(예: "Google Paid Search\nCORE\n(AUD)").
+      // 괄호 안 3자리 통화 코드를 추출해 FX 변환에 쓴다 — 표기 없으면 NZD로 간주
+      // (Facebook 등 일부 블록은 통화 표기가 없고 컬럼명 자체가 "(NZD)"라 원래 NZD).
+      DEFAULT_CURRENCY: "NZD",
+
+      // 플랫폼 블록 안에서 실제로 읽는 지표(B열 라벨) — Marketing 섹션
+      // Spent/Results/CPL에 필요한 것만. 나머지(ROAS/Deals/IC booked 등)는
+      // 이번 라운드에선 안 읽음(필요해지면 여기 추가).
+      //
+      // ⚠️ SPENT는 정확히 일치가 아니라 접두사 매칭 필요(실측 확인,
+      // 2026-08-07) — Facebook 블록만 "Amount spent (total) (NZD)"이고
+      // Google Paid Search 등 다른 블록은 "Amount spent (total)"(통화
+      // 접미사 없음)이라 라벨 문구가 블록마다 다름. 실제 통화는 라벨이
+      // 아니라 A열 플랫폼명의 괄호 표기(예 "(AUD)")로 판단할 것 —
+      // SPENT_PREFIX로 `startsWith` 매칭.
+      METRIC_ROW_LABELS: {
+        SPENT_PREFIX: "Amount spent (total)",
+        CLICKS: "Clicks",
+        IMPRESSIONS: "Impressions"
+        // Leads/CPL은 상담(consults)/이벤트(event)/콘텐츠(content) 3분할이라
+        // 별도 처리 필요 — LEAD_TYPE_SUFFIXES 참고
+      },
+
+      // Leads/CPL은 "Leads - consults" 처럼 유형 접미사가 붙는다(FY26 탭은
+      // "Cost - consults"도 별도로 있음 — FY24/25엔 없고 Amount spent 총액만
+      // 있음, 유형별 Cost가 없는 연도는 유형별 CPL을 못 구하므로 공란 처리).
+      LEAD_TYPE_SUFFIXES: ["consults", "event", "content"]
+
+    },
+
+    // ACQ/Pipeline 섹션(Actual) — Leads_OPS/Deal Tracker 재사용, 별도 시트 없음
+    // (NewP1_REP/Target_REP과 동일 소스, OPS.HEADER/CONFIG.TARGET.EXTERNAL.DEAL_TRACKER
+    // 그대로 재사용 — 이 블록엔 FY_REP 전용 설정만).
+    //
+    // Pipeline/Revenue 섹션에서 Upsell/Referral을 별도 라인으로 분리할 때는
+    // Deal Tracker의 SEGMENT 컬럼(H, "Other"에 Upsell이 섞여 있음)이 아니라
+    // LEAD_SOURCE 컬럼(F)을 CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.EXCLUDE_LEAD_SOURCES
+    // 값("upsell"/"referral")과 대소문자 무시 비교해서 식별한다 — SEGMENT 컬럼만
+    // 보면 Upsell 딜과 진짜 Other 딜을 구분 못 함(00_Config.js TARGET.EXTERNAL.DEAL_TRACKER
+    // 주석 참고).
+
+    // Revenue 섹션 — 세그먼트별 Target은 실제 과거 데이터가 없어 회사 전체
+    // Target(MARKETING_SOURCE 탭의 Quarterly Summary Revenue Target) × 그 FY
+    // Deal Tracker 딜 비중으로 추정한다. 추정치라는 걸 리포트에 라벨링할 것
+    // (정확한 문구는 Report/Styles 작성 시 확정) — 절대 "실제 세그먼트별
+    // 목표였다"처럼 보이면 안 됨(사용자 확정 사항).
+    REVENUE_TARGET_IS_ESTIMATED: true
 
   },
 

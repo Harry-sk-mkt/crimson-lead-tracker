@@ -114,21 +114,29 @@ Tracker`처럼 `SpreadsheetApp.openById()`로 별도 시트를 읽고/쓴다(코
 
 ## 계획 중 (End Goal과 별개)
 
-### FY별 Sales Funnel 대시보드 → ACQ_REP/NewP1_REP Target 확장으로 방향 전환
+### FY별 Sales Funnel 대시보드 — 2026-08-07 재착수, 독립 FY_REP 시트로 최종 확정
 
-리드 → SAL → IC Booked → IC Complete → Won 등 세일스 퍼널 전 단계를 FY(Fiscal Year)별로 보는
-대시보드 구축 필요(2026-07-30 사용자 확정). **설계 착수 후 별도 신규 리포트(FY_REP) 대신
-기존 리포트 확장으로 방향 전환(2026-07-30, 같은 세션)** — `docs/FYReportDesign.md`(superseded,
-검토 과정 보존)의 원래 설계는 채택 안 함. 대신:
+**2026-08-07 재확정**: 2026-07-30엔 "별도 리포트 대신 ACQ_REP/NewP1_REP 확장"으로 방향을
+틀었으나, 사용자가 "FY24/25/26 monthly Segment/Sales Funnel 비교"를 다시 요청하면서 요구
+범위가 커짐(Marketing/ACQ/Pipeline/Revenue 4개 섹션, 플랫폼별 채널 데이터까지) — 이번엔
+**독립 `FY_REP` 신규 시트로 최종 확정**(기존 리포트에 끼워넣기엔 grain이 안 맞음). 상세 설계/
+진행 상황은 `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md` 참고.
+`docs/FYReportDesign.md`(2026-07-30 superseded 처리됐던 원래 설계 검토 기록)는 이번 재착수의
+배경 참고 자료로 남겨두되, 실제 구조는 새 exec-plan 기준.
+
+아래는 2026-07-30 당시의 대안이었고, **FY_REP과 별개로 이미 구현·배포 완료됨**(대체 관계
+아님 — 둘 다 살아있음, `docs/OpenItems.md` #17 참고. 단, Target_Engine이 한 번에 FY 하나만
+갖는 구조적 한계 때문에 이 확장은 "현재 설정된 FY 하나"만 보여줄 수 있고 여러 FY 동시 비교는
+못 함 — 그 한계를 해소하는 게 이번 FY_REP 재착수의 핵심 동기 중 하나):
 
 - **`ACQ_REP`**: Revenue Target/Target% + New P1 Target/Target% 컬럼 추가 (달성 시 하이라이트)
 - **`NewP1_REP`**: New P1 Target/Target% + Spent + CPNP1(실적) 컬럼 추가
 
-Target 원천은 `Target_Engine`(Block C Deal Share, Block D New P1 Target — 이미 계산 중)을
-재사용. Pipeline P1 Target(구 코호트 딜의 이번 FY 전환분)은 이번 확장에서 **제외** — 실제
-클로징 여부가 불확실한 영역이라 New P1(리드 생성 카운트) 목표와 성격이 다르다는 사용자 판단
-(2026-07-30). 상세 설계는 `docs/ACQReportDesign.md`/`docs/NewP1ReportDesign.md`에 구현 시 추가
-예정, 진행 중이면 `docs/exec-plans/active/`에 대응 문서.
+Target 원천은 `Target_Engine`(Block C Deal Share, Block D New P1 Target)을 재사용. Pipeline
+P1 Target(구 코호트 딜의 이번 FY 전환분)은 이 확장에서 제외 — 실제 클로징 여부가 불확실한
+영역이라 New P1(리드 생성 카운트) 목표와 성격이 다르다는 사용자 판단(2026-07-30). 상세:
+`docs/ACQReportDesign.md`/`docs/NewP1ReportDesign.md`, `docs/exec-plans/active/
+2026-07-30-acq-newp1-target-columns.md`(또는 completed/로 이동됐을 수 있음).
 
 ## 진행 중 (exec-plans/active/에 대응 문서 있음)
 

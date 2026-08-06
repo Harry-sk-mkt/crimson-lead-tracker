@@ -1,6 +1,12 @@
-# FY_REP Design (FY별 Sales Funnel 대시보드) — SUPERSEDED
+# FY_REP Design (FY별 Sales Funnel 대시보드) — 2026-08-07 재착수(아래는 초기 검토 기록)
 
-> Status: **채택 안 함(superseded), 미구현 — 2026-07-30**. 아래 설계 전체를 진행하는 대신,
+> **2026-08-07 재착수**: 사용자가 FY24/25/26 monthly Segment/Sales Funnel 비교를 다시
+> 요청하면서 독립 `FY_REP` 시트로 최종 확정 — 아래 2026-07-30 "superseded" 판단은 뒤집힘.
+> 최신 설계/데이터 소스/진행 상황은 `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md`
+> 참고(구조가 아래 원안과 상당히 다름 — Marketing/ACQ/Pipeline/Revenue 4섹션, 세그먼트
+> 7개, 플랫폼별 채널 데이터 포함). 아래 본문은 2026-07-30 당시 검토 과정 기록으로 보존.
+
+> Status(2026-07-30 당시 기록, 아래는 그 시점 판단): **채택 안 함(superseded), 미구현**. 아래 설계 전체를 진행하는 대신,
 > **기존 `ACQ_REP`/`NewP1_REP`에 Target 컬럼을 추가하는 방식으로 대체**하기로 결정(같은 날,
 > 같은 세션). 사유: 이 문서가 새로 만들려던 New Leads/P1NL/SAL/ICBooked/Completed/Deals/
 > Revenue는 이미 `ACQ_REP`(Event 기준, Deal Tracker Revenue)과 `NewP1_REP`(Cohort 기준,
