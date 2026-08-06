@@ -22,9 +22,40 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.12.1
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-08-06)
+ * - **Pipeline Status 셀 색상 추가**(사용자 요청 — "running이면 빨갛게, done이면
+ *   초록색으로 bold처리까지 하자"). 신규 순수 함수 `computePipelineStatusGridStyles_(grid)`
+ *   가 `buildPipelineStatusGrid_()` 출력을 받아 배경/글자색/굵기 병렬 2D 배열을
+ *   계산(헤더 행·라벨 열 제외, 값이 "RUNNING"/"DONE"으로 시작하면 각각 빨강
+ *   (#F4CCCC bg·#CC0000 font)/초록(#D9EAD3 bg·#38761D font) + bold, 그 외(FAILED/
+ *   IDLE/빈 문자열)는 명시적으로 null/normal — 이전 상태의 색이 안 남게 리셋).
+ *   `writePipelineStatusToReadme_()`가 `setValues()` 직후 `setBackgrounds()`/
+ *   `setFontColors()`/`setFontWeights()`로 매번 같이 적용 — 별도 조건부 서식
+ *   규칙 없이 값 갱신 때마다 색도 항상 최신 유지. FAILED는 이번 요청 범위 밖이라
+ *   미채색으로 남겨둠(사용자 확인 필요 시 별도 색상 추가 예정, 임의로 처리하지
+ *   않음). `testComputePipelineStatusGridStyles()` 신규.
+ * v1.13.0 (2026-08-06)
+ * - **Pipeline Status 컬럼(Master Update~Target_REP)에 RUNNING/FAILED 표시
+ *   추가**(사용자 요청 — "이 칸들에는 running인지 done인지 fail인지만 알려주면
+ *   좋겠어"). 지금까지는 `state.stages[key]`가 boolean(`true`/없음)이라 그
+ *   단계가 통째로 끝나기 전까지는 빈 칸이었고, `refreshOPSSheets_()`/
+ *   `refreshReportGenerate_()`의 하위 단계가 실패해도(격리된 try/catch라
+ *   Logger에만 남고 조용히 삼켜짐) 해당 컬럼이 "아직 시작 전"과 똑같이 영원히
+ *   빈 칸으로 남아 실패 여부를 README에서 알 수 없었음. `state.stages[key]`를
+ *   `"RUNNING"|"DONE"|"FAILED"` 문자열로 확장 — `advancePipelineStage_()`는
+ *   `stageFn()` 호출 전에 RUNNING, 성공하면 DONE, 던지면 FAILED(그대로
+ *   rethrow) 기록. 신규 `setPipelineStageStatus_(type, state, key, status)`가
+ *   단일 컬럼 상태를 즉시 README에 반영하는 공용 헬퍼 — `refreshOPSSheets_()`/
+ *   `refreshReportGenerate_()`의 하위 단계 4~3개 전부 호출 직전 RUNNING, catch에서
+ *   FAILED로 마킹하도록 배선. `markPipelineStageComplete_(type, state, key)`는
+ *   기존 호출부 호환을 위해 `setPipelineStageStatus_(..., "DONE")` 얇은 래퍼로
+ *   유지(시그니처 변경 없음). `buildPipelineStatusGrid_()`의 `buildRow()`는
+ *   `stages[col.KEY] ? "Complete" : ""` 대신 `stages[col.KEY] || ""`로 단순화
+ *   (저장된 문자열을 그대로 노출). `testBuildPipelineStatusGrid()` 새 포맷에
+ *   맞게 갱신.
  * v1.12.1 (2026-08-06)
  * - **버그 수정 — schedulePipelineTail_() 중복 예약으로 인한 "유령 실행"**:
  *   같은 handlerName으로 짧은 시간 내 여러 번 호출되면(예: Generate
@@ -285,16 +316,17 @@ function buildPipelineStatusCell_(state){
  *
  * INPUT
  * leadsState / mtaState : { status, stage, startedAt, finishedAt, error, stages }
- *   stages : { [CONFIG.PIPELINE.STATUS_COLUMNS[i].KEY]: true }  (완료된 키만 존재)
+ *   stages : { [CONFIG.PIPELINE.STATUS_COLUMNS[i].KEY]: "RUNNING"|"DONE"|"FAILED" }
+ *   (진입한 적 없는 키는 아예 없음 — 그 컬럼은 빈 문자열로 렌더링됨)
  *   각 필드 미제공 시 status는 "IDLE", stages는 {}로 간주(전 컬럼 빈 문자열).
  *
  * OUTPUT
  * string[3][2 + N]  (A열부터, 1~3행 그대로 — 헤더 1행 + New Leads/MTA Leads 2행)
  *
  * TEST
- * buildPipelineStatusGrid_() 참고 — RUNNING/FAILED/완료된 stages 조합을 넣으면
- * Status 셀과 각 단계 컬럼("Complete"/"")에 그대로 반영되어야 하고, 빈
- * 객체({})를 넣으면 Status가 "IDLE"이고 모든 단계 컬럼이 빈 문자열이어야 함.
+ * buildPipelineStatusGrid_() 참고 — RUNNING/FAILED/DONE 조합을 넣으면 Status
+ * 셀과 각 단계 컬럼(그 상태 문자열 그대로, 진입 전이면 "")에 반영되어야 하고,
+ * 빈 객체({})를 넣으면 Status가 "IDLE"이고 모든 단계 컬럼이 빈 문자열이어야 함.
  * ==========================================================
  */
 function buildPipelineStatusGrid_(leadsState, mtaState){
@@ -313,7 +345,7 @@ function buildPipelineStatusGrid_(leadsState, mtaState){
     const stages = state.stages || {};
 
     const stageCells = columns.map(function(col){
-      return stages[col.KEY] ? "Complete" : "";
+      return stages[col.KEY] || "";
     });
 
     return [rowLabel, buildPipelineStatusCell_(state)].concat(stageCells);
@@ -325,6 +357,92 @@ function buildPipelineStatusGrid_(leadsState, mtaState){
     buildRow("New Leads", leads),
     buildRow("MTA Leads", mta)
   ];
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Pipeline Status Grid Styles
+ *
+ * WHY
+ * 사용자 요청(2026-08-06) — Status 셀이 RUNNING이면 빨갛게, DONE이면
+ * 초록색으로 bold 처리해 한눈에 진행 상태가 보이도록. `buildPipelineStatusGrid_()`
+ * 출력(문자열 그리드)을 그대로 입력받아 배경/글자색/굵기 3개의 병렬 2D
+ * 배열을 만드는 순수 함수로 분리(Sheet IO와 분리해 Node 하네스로 테스트
+ * 가능하게 하는 기존 패턴, `buildPipelineStatusGrid_()`와 동일 원칙).
+ *
+ * 대상 셀: 헤더 행(0행)과 라벨 열(0열, "New Leads"/"MTA Leads")은 제외하고
+ * 나머지 전부 — Status 열(1열, "RUNNING · started ..." / "DONE · ..." 같은
+ * 압축 표시)과 단계 컬럼(2열~, "RUNNING"/"DONE"/"FAILED"/"") 둘 다 값이
+ * "RUNNING"/"DONE"으로 *시작*하면 칠해짐(startsWith 판정 — Status 열의
+ * 타임스탬프 접미사와 무관하게 매치).
+ *
+ * FAILED/IDLE/빈 문자열은 의도적으로 미채색(사용자가 RUNNING/DONE 2가지만
+ * 요청) — 배경/글자색 null로 리셋해 이전 RUNNING/DONE 상태에서 넘어왔을 때
+ * 잔여 색이 남지 않도록 함.
+ *
+ * INPUT
+ * grid : string[][]  (buildPipelineStatusGrid_() 출력)
+ *
+ * OUTPUT
+ * { backgrounds: string[][], fontColors: string[][], fontWeights: string[][] }
+ *   grid와 동일한 shape — Range.setBackgrounds()/setFontColors()/setFontWeights()에
+ *   그대로 전달 가능.
+ *
+ * TEST
+ * testComputePipelineStatusGridStyles() 참고.
+ * ==========================================================
+ */
+function computePipelineStatusGridStyles_(grid){
+
+  const RUNNING_BG = "#F4CCCC";
+  const RUNNING_FONT = "#CC0000";
+  const DONE_BG = "#D9EAD3";
+  const DONE_FONT = "#38761D";
+
+  const backgrounds = [];
+  const fontColors = [];
+  const fontWeights = [];
+
+  grid.forEach(function(row, r){
+
+    const bgRow = [];
+    const colorRow = [];
+    const weightRow = [];
+
+    row.forEach(function(cell, c){
+
+      const isHeaderOrLabel = (r === 0 || c === 0);
+      const value = String(cell || "");
+
+      if(!isHeaderOrLabel && value.indexOf("RUNNING") === 0){
+        bgRow.push(RUNNING_BG);
+        colorRow.push(RUNNING_FONT);
+        weightRow.push("bold");
+      } else if(!isHeaderOrLabel && value.indexOf("DONE") === 0){
+        bgRow.push(DONE_BG);
+        colorRow.push(DONE_FONT);
+        weightRow.push("bold");
+      } else {
+        bgRow.push(null);
+        colorRow.push(null);
+        weightRow.push("normal");
+      }
+
+    });
+
+    backgrounds.push(bgRow);
+    fontColors.push(colorRow);
+    fontWeights.push(weightRow);
+
+  });
+
+  return {
+    backgrounds: backgrounds,
+    fontColors: fontColors,
+    fontWeights: fontWeights
+  };
 
 }
 
@@ -472,6 +590,11 @@ function writePipelineStatusState_(type, state){
  * 옛 타이틀을 감지하면 그 7행을 먼저 통째로 지운 뒤 새 블록 공간을 확보한다.
  * 이미 새 레이아웃으로 마이그레이션된 시트(타이틀 "Pipeline Status")는 기존
  * 3행 블록을 그대로 덮어쓰기만 함(삽입 없음).
+ *
+ * **2026-08-06 색상 추가**: 값 쓰기 직후 `computePipelineStatusGridStyles_()`로
+ * RUNNING(빨강)/DONE(초록) 배경+글자색+bold를 매번 같이 덮어씀 — 상태가 바뀔
+ * 때마다 이 함수가 호출되므로 별도 조건부 서식 규칙 없이 매번 값과 함께
+ * 색도 최신 상태로 유지됨.
  * ==========================================================
  */
 function writePipelineStatusToReadme_(){
@@ -504,9 +627,16 @@ function writePipelineStatusToReadme_(){
     sheet.insertRowsBefore(anchorRow, grid.length + 1);
   }
 
-  sheet
-    .getRange(anchorRow, anchorCol, grid.length, grid[0].length)
-    .setValues(grid);
+  const range =
+    sheet.getRange(anchorRow, anchorCol, grid.length, grid[0].length);
+
+  range.setValues(grid);
+
+  const styles = computePipelineStatusGridStyles_(grid);
+
+  range.setBackgrounds(styles.backgrounds);
+  range.setFontColors(styles.fontColors);
+  range.setFontWeights(styles.fontWeights);
 
 }
 
@@ -531,32 +661,52 @@ function nowTimestamp_(){
  * catch 블록이 "어느 단계에서 실패했는지" 알 수 있음(설계 문서 "실패 지점 기록"
  * 요구사항).
  *
- * `completedKeys`(선택, 2026-08-05 신규): `stageFn()`이 성공적으로 끝나면
- * `CONFIG.PIPELINE.STATUS_COLUMNS`의 해당 key(들)를 `state.stages`에 true로
- * 표시하고 다시 README에 반영 — Pipeline Status 표의 그 단계 컬럼이 실행
- * 도중에도 실시간으로 "Complete"로 바뀜. 단계 하나가 여러 컬럼을 한 번에
- * 완료시키는 경우(예: MTA의 `syncMTAFunnelToOPS_`처럼 여러 실무 영역이 한
- * 함수 안에 뭉쳐있는 경우, 사용자 확정 — 09_MTAFunnelSync.js는 리팩토링하지
- * 않음)에도 배열로 넘기면 됨. 여러 컬럼을 개별 시점에 나눠 완료시켜야 하는
- * 단계(`refreshOPSSheets_`/`refreshReportGenerate_`)는 이 파라미터 대신
- * 자기 자신이 `(type, state)`를 받아 내부에서 직접 완료 표시함.
+ * `completedKeys`(선택, 2026-08-05 신규): `stageFn()` 실행 전에
+ * `CONFIG.PIPELINE.STATUS_COLUMNS`의 해당 key(들)를 `state.stages`에 "RUNNING"
+ * 으로 먼저 표시(2026-08-06부터, 진행 중임을 실시간으로 보여주기 위함),
+ * 성공하면 "DONE"으로, 도중에 던지면 "FAILED"로 표시하고 그대로 rethrow —
+ * 매번 README에 반영. 단계 하나가 여러 컬럼을 한 번에 완료시키는 경우(예:
+ * MTA의 `syncMTAFunnelToOPS_`처럼 여러 실무 영역이 한 함수 안에 뭉쳐있는
+ * 경우, 사용자 확정 — 09_MTAFunnelSync.js는 리팩토링하지 않음)에도 배열로
+ * 넘기면 됨. 여러 컬럼을 개별 시점에 나눠 완료시켜야 하는 단계
+ * (`refreshOPSSheets_`/`refreshReportGenerate_`)는 이 파라미터 대신 자기
+ * 자신이 `(type, state)`를 받아 내부에서 직접 상태 표시함.
  * ==========================================================
  */
 function advancePipelineStage_(type, state, stageName, stageFn, completedKeys){
 
   state.stage = stageName;
 
+  if(completedKeys && completedKeys.length){
+    if(!state.stages) state.stages = {};
+    completedKeys.forEach(function(key){
+      state.stages[key] = "RUNNING";
+    });
+  }
+
   writePipelineStatusState_(type, state);
   writePipelineStatusToReadme_();
 
-  stageFn();
+  try{
+    stageFn();
+  } catch(err){
+
+    if(completedKeys && completedKeys.length){
+      completedKeys.forEach(function(key){
+        state.stages[key] = "FAILED";
+      });
+      writePipelineStatusState_(type, state);
+      writePipelineStatusToReadme_();
+    }
+
+    throw err;
+
+  }
 
   if(completedKeys && completedKeys.length){
 
-    if(!state.stages) state.stages = {};
-
     completedKeys.forEach(function(key){
-      state.stages[key] = true;
+      state.stages[key] = "DONE";
     });
 
     writePipelineStatusState_(type, state);
@@ -569,24 +719,46 @@ function advancePipelineStage_(type, state, stageName, stageFn, completedKeys){
 
 /**
  * ==========================================================
- * Mark Pipeline Stage Complete (단일 컬럼 즉시 완료 표시)
+ * Set Pipeline Stage Status (단일 컬럼 상태 즉시 반영)
  *
  * WHY
  * `refreshOPSSheets_()`/`refreshReportGenerate_()`처럼 한 함수 안에 여러
  * Pipeline Status 컬럼(예: Events_OPS/BOFU_OPS/Search_OPS/Content_OPS)이
- * 개별 시점에 완료되는 경우, `advancePipelineStage_()`의 `completedKeys`
- * (함수 전체가 끝나야 한 번에 표시)로는 표현할 수 없어 각 하위 단계가
- * 끝날 때마다 직접 이 함수를 호출해 그 컬럼만 즉시 "Complete"로 반영한다.
+ * 개별 시점에 RUNNING→DONE(또는 FAILED)으로 넘어가는 경우, `advancePipelineStage_()`의
+ * `completedKeys`(함수 전체가 끝나야 한 번에 표시)로는 표현할 수 없어 각
+ * 하위 단계 진입/종료 시점마다 직접 이 함수를 호출해 그 컬럼만 즉시 반영한다
+ * (2026-08-06 — RUNNING/FAILED 표시 추가 전에는 "Complete"/빈 문자열
+ * 2단계뿐이라 `markPipelineStageComplete_(type, state, key)`이었음, 상태
+ * 파라미터를 받도록 일반화).
+ *
+ * @param {string} status  "RUNNING" | "DONE" | "FAILED"
+ * ==========================================================
+ */
+function setPipelineStageStatus_(type, state, key, status){
+
+  if(!state.stages) state.stages = {};
+
+  state.stages[key] = status;
+
+  writePipelineStatusState_(type, state);
+  writePipelineStatusToReadme_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Mark Pipeline Stage Complete (하위 호환 래퍼)
+ *
+ * WHY
+ * 기존 호출부(`setPipelineStageStatus_()` 도입 전부터 있던 `refreshReportGenerate_()`/
+ * `refreshOPSSheets_()` 성공 경로)의 함수명/시그니처를 그대로 유지하기 위한
+ * 얇은 래퍼 — `setPipelineStageStatus_(type, state, key, "DONE")`과 동일.
  * ==========================================================
  */
 function markPipelineStageComplete_(type, state, key){
 
-  if(!state.stages) state.stages = {};
-
-  state.stages[key] = true;
-
-  writePipelineStatusState_(type, state);
-  writePipelineStatusToReadme_();
+  setPipelineStageStatus_(type, state, key, "DONE");
 
 }
 
@@ -666,30 +838,36 @@ function refreshReportFYDropdowns_(){
  */
 function refreshReportGenerate_(type, state){
 
+  setPipelineStageStatus_(type, state, "acqRep", "RUNNING");
   try{
     generateACQReport_();
     markPipelineStageComplete_(type, state, "acqRep");
   } catch(err){
+    setPipelineStageStatus_(type, state, "acqRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: ACQ_REP Generate 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
 
+  setPipelineStageStatus_(type, state, "newP1Rep", "RUNNING");
   try{
     generateNewP1Report_();
     markPipelineStageComplete_(type, state, "newP1Rep");
   } catch(err){
+    setPipelineStageStatus_(type, state, "newP1Rep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: NewP1_REP Generate 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
 
+  setPipelineStageStatus_(type, state, "targetRep", "RUNNING");
   try{
     generateTargetReport_();
     markPipelineStageComplete_(type, state, "targetRep");
   } catch(err){
+    setPipelineStageStatus_(type, state, "targetRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: Target_REP Generate 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
@@ -732,40 +910,48 @@ function refreshReportGenerate_(type, state){
  */
 function refreshOPSSheets_(type, state){
 
+  setPipelineStageStatus_(type, state, "eventsOps", "RUNNING");
   try{
     buildEventsOPS();
     markPipelineStageComplete_(type, state, "eventsOps");
   } catch(err){
+    setPipelineStageStatus_(type, state, "eventsOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Events_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
 
+  setPipelineStageStatus_(type, state, "bofuOps", "RUNNING");
   try{
     buildBOFUOPS();
     markPipelineStageComplete_(type, state, "bofuOps");
   } catch(err){
+    setPipelineStageStatus_(type, state, "bofuOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: BOFU_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
 
+  setPipelineStageStatus_(type, state, "searchOps", "RUNNING");
   try{
     buildSearchOPS();
     markPipelineStageComplete_(type, state, "searchOps");
   } catch(err){
+    setPipelineStageStatus_(type, state, "searchOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Search_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
     );
   }
 
+  setPipelineStageStatus_(type, state, "contentOps", "RUNNING");
   try{
     buildContentOPS();
     markPipelineStageComplete_(type, state, "contentOps");
   } catch(err){
+    setPipelineStageStatus_(type, state, "contentOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Content_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
       (err && err.message ? err.message : err)
@@ -1244,7 +1430,7 @@ function testBuildPipelineStatusGrid(){
       startedAt: "2026-08-04 10:00:00 KST",
       finishedAt: "",
       error: "",
-      stages: { masterUpdate: true, leadsOps: true }
+      stages: { masterUpdate: "DONE", leadsOps: "RUNNING" }
     },
     {
       status: "FAILED",
@@ -1252,7 +1438,7 @@ function testBuildPipelineStatusGrid(){
       startedAt: "2026-08-04 09:00:00 KST",
       finishedAt: "2026-08-04 09:05:00 KST",
       error: "Boom",
-      stages: { masterUpdate: true, campaignSpend: true }
+      stages: { masterUpdate: "DONE", campaignSpend: "FAILED" }
     }
   );
 
@@ -1265,10 +1451,10 @@ function testBuildPipelineStatusGrid(){
     grid[0][11] === "Target_REP" &&
     grid[1][0] === "New Leads" &&
     grid[1][1] === "RUNNING · started 2026-08-04 10:00:00 KST" &&
-    grid[1][2] === "Complete" && grid[1][3] === "Complete" && grid[1][4] === "" &&
+    grid[1][2] === "DONE" && grid[1][3] === "RUNNING" && grid[1][4] === "" &&
     grid[2][0] === "MTA Leads" &&
     grid[2][1] === "FAILED · 2026-08-04 09:05:00 KST · Boom" &&
-    grid[2][2] === "Complete" && grid[2][3] === "" && grid[2][8] === "Complete";
+    grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED";
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +
@@ -1283,6 +1469,39 @@ function testBuildPipelineStatusGrid(){
   Logger.log(
     "testBuildPipelineStatusGrid (empty defaults): " +
     (emptyOk ? "PASS" : "FAIL")
+  );
+
+}
+
+
+function testComputePipelineStatusGridStyles(){
+
+  const grid = [
+    ["Pipeline Status", "Status", "Master Update", "Leads_OPS"],
+    ["New Leads", "RUNNING · started 2026-08-06 10:00:00 KST", "DONE", "RUNNING"],
+    ["MTA Leads", "FAILED · 2026-08-06 09:05:00 KST · Boom", "FAILED", ""]
+  ];
+
+  const styles = computePipelineStatusGridStyles_(grid);
+
+  const ok =
+    // 헤더 행/라벨 열은 값과 무관하게 항상 미채색
+    styles.backgrounds[0][0] === null && styles.backgrounds[0][1] === null &&
+    styles.backgrounds[1][0] === null && styles.backgrounds[2][0] === null &&
+    // Status 열(타임스탬프 접미사 있어도 접두사로 매치)
+    styles.backgrounds[1][1] === "#F4CCCC" && styles.fontColors[1][1] === "#CC0000" &&
+    styles.fontWeights[1][1] === "bold" &&
+    styles.backgrounds[2][1] === null && styles.fontWeights[2][1] === "normal" && // FAILED는 미채색
+    // 단계 컬럼 — DONE/RUNNING/FAILED/빈 문자열
+    styles.backgrounds[1][2] === "#D9EAD3" && styles.fontColors[1][2] === "#38761D" &&
+    styles.fontWeights[1][2] === "bold" &&
+    styles.backgrounds[1][3] === "#F4CCCC" && styles.fontWeights[1][3] === "bold" &&
+    styles.backgrounds[2][2] === null && styles.fontWeights[2][2] === "normal" &&
+    styles.backgrounds[2][3] === null && styles.fontWeights[2][3] === "normal";
+
+  Logger.log(
+    "testComputePipelineStatusGridStyles: " + (ok ? "PASS" : "FAIL") +
+    " styles=" + JSON.stringify(styles)
   );
 
 }

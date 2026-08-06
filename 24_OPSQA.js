@@ -14,9 +14,19 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.6.0
+ * v1.6.1
  *
  * Change Log
+ * v1.6.1 (2026-08-06)
+ * - **버그 수정 — `runAutoDeleteExactDuplicateTouchRows()`(MTA_Master)가 v1.6.0의
+ *   배치 삭제 수정에서 누락됨**. v1.6.0은 `runAutoDeleteExactDuplicateLeadRows()`
+ *   (Leads_Master)만 `sheet.deleteRow()` 반복 → `groupConsecutiveDescendingRows_()` +
+ *   `sheet.deleteRows()` 구간 배치로 교체했고, 동일 문제를 가진 MTA_Master 쪽
+ *   자매 함수는 그대로 남아있었음(백포트 누락) — `runMTAPipelineTail()` 실사용 중
+ *   삭제 대상 1299건에서 `sheet.deleteRow()` 1299회 반복 호출이 5분여만에 자동
+ *   취소(Canceled)되는 것으로 실측 확인(2026-08-06, `docs/OpenItems.md` #9 실사용
+ *   검증 중 발견). 동일 패턴으로 교체. `findExactDuplicateTouchRowsToDelete_()`
+ *   (삭제 대상 판정 로직)는 변경 없음, 삭제 "방법"만 교체.
  * v1.6.0 (2026-08-05)
  * - **버그 수정 — `runAutoDeleteExactDuplicateLeadRows()` 실행이 저절로 중단됨(실측)**.
  *   Leads_Master에 7월 한 달만 중복 659건이 쌓여있던 상태(원인: 파이프라인 tail이 이
@@ -1759,8 +1769,12 @@ function runAutoDeleteExactDuplicateTouchRows() {
   Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
   Logger.log("삭제 대상 시트 행 번호(내림차순): " + rowsToDelete.join(", "));
 
-  rowsToDelete.forEach(function (rowIndex) {
-    sheet.deleteRow(rowIndex);
+  const deleteRanges = groupConsecutiveDescendingRows_(rowsToDelete);
+
+  Logger.log("배치 삭제 구간 수: " + deleteRanges.length + " (deleteRow() 개별 호출 대신 deleteRows() 구간 단위)");
+
+  deleteRanges.forEach(function (range) {
+    sheet.deleteRows(range.startRow, range.numRows);
   });
 
   SpreadsheetApp.flush();

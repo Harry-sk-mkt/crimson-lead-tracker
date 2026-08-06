@@ -11,9 +11,18 @@
  * - Master 빌드
  *
  * Version
- * v3.6.0
+ * v3.7.0
  *
  * Change Log
+ * v3.7.0 (2026-08-06)
+ * - **lock-skip 알림 문구 수정(사용자 요청)** — `formatAppendSummary_()`의
+ *   `backgroundSkipped` 메시지가 "Leads_OPS/Report는 다음 정상 실행 때 자동
+ *   반영됩니다"라고 안내했으나 실제로는 자동 재시도 경로가 없어 사실과 다름을
+ *   실사용 중 발견(07_IncrementalMasterBuild.js v1.9.0과 동일 배경). "자동
+ *   재시도 안 됨 + 몇 분 후 08_PipelineAsync.js의 runLeadsPipelineTail()/
+ *   runMTAPipelineTail() 직접 Run" 안내로 교체 — 어느 함수를 안내할지 알아야
+ *   해서 `formatAppendSummary_()`에 `importType` 파라미터 추가(옵셔널 아님,
+ *   호출부 `importCsv()` 1곳만 수정).
  * v3.6.0 (2026-08-04)
  * - importCsv()가 LEADS/MTA Raw 기록 직후 appendNewLeads()/appendNewMTA()를
  *   silent=true로 자동 호출하도록 변경(사용자 요청 — Import 끝나면 Append까지
@@ -91,12 +100,18 @@ function showUploadDialog_(importType) {
  * INPUT
  * appendResult : { appended, backgroundScheduled?, backgroundSkipped? } | null
  *   (IC_FUNNEL처럼 대응하는 append 함수가 없는 Import Type이면 null)
+ * importType : "LEADS" | "MTA" | "IC_FUNNEL"
+ *   backgroundSkipped 케이스에서 어느 파이프라인 tail 함수를 안내할지 결정
+ *   (MTA면 runMTAPipelineTail(), 그 외엔 runLeadsPipelineTail() — 2026-08-06 추가).
  *
  * OUTPUT
  * string
+ *
+ * TEST
+ * testFormatAppendSummary() 참고.
  * ==========================================================
  */
-function formatAppendSummary_(appendResult){
+function formatAppendSummary_(appendResult, importType){
 
   if(!appendResult){
     return "Master 🏗️Append를 실행해주세요.";
@@ -111,14 +126,58 @@ function formatAppendSummary_(appendResult){
   }
 
   if(appendResult.backgroundSkipped){
+
+    const tailFn =
+      (importType === "MTA")
+        ? "runMTAPipelineTail()"
+        : "runLeadsPipelineTail()";
+
     return (
-      "Master Append : " + appendResult.appended + "건 반영 완료\n" +
+      "⚠️ Master Append : " + appendResult.appended + "건 반영 완료\n" +
       "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
-      "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다."
+      "반영했습니다. Leads_OPS/Report 갱신은 자동으로 재시도되지 않습니다 — " +
+      "몇 분 후(다른 작업이 끝난 뒤) 08_PipelineAsync.js의 " + tailFn + "을 " +
+      "Apps Script 편집기에서 직접 Run 해주세요."
     );
   }
 
   return "Master Append : 반영할 신규 레코드가 없었습니다.";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — formatAppendSummary_()
+ * ==========================================================
+ */
+function testFormatAppendSummary(){
+
+  const mtaSkipped = formatAppendSummary_(
+    { appended: 343, backgroundSkipped: true }, "MTA"
+  );
+  const leadsSkipped = formatAppendSummary_(
+    { appended: 32, backgroundSkipped: true }, "LEADS"
+  );
+  const scheduled = formatAppendSummary_(
+    { appended: 10, backgroundScheduled: true }, "LEADS"
+  );
+  const noNew = formatAppendSummary_({ appended: 0 }, "MTA");
+  const nullResult = formatAppendSummary_(null, "IC_FUNNEL");
+
+  const ok =
+    mtaSkipped.indexOf("runMTAPipelineTail()") !== -1 &&
+    mtaSkipped.indexOf("자동으로 재시도되지 않습니다") !== -1 &&
+    leadsSkipped.indexOf("runLeadsPipelineTail()") !== -1 &&
+    scheduled.indexOf("백그라운드에서 진행됩니다") !== -1 &&
+    noNew.indexOf("반영할 신규 레코드가 없었습니다") !== -1 &&
+    nullResult.indexOf("Append를 실행해주세요") !== -1;
+
+  Logger.log(
+    "testFormatAppendSummary: " + (ok ? "PASS" : "FAIL") +
+    "\n  mtaSkipped=" + mtaSkipped +
+    "\n  leadsSkipped=" + leadsSkipped
+  );
 
 }
 
@@ -287,7 +346,7 @@ function importCsv(
     return (
       formatValidationSummary_(summary) +
       "\n\n" +
-      formatAppendSummary_(appendResult)
+      formatAppendSummary_(appendResult, importType)
     );
 
   }

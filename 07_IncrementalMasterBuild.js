@@ -10,9 +10,19 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-06)
+ * - **lock-skip 알림 문구 수정(사용자 요청)** — `appendNewLeads()`/`appendNewMTA()`가
+ *   `PIPELINE_LOCK`이 걸려있어 백그라운드 refresh를 건너뛸 때 뜨던 alert가
+ *   "Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다"라고 안내했으나, 실제로는
+ *   `LEADS_LAST_ROW`/`MTA_LAST_ROW`가 이미 전진해 있어 재실행해도 "신규 레코드
+ *   없음"으로 조기 종료될 뿐이고 자동 재시도 경로가 없어 이 문구가 사실과 다름을
+ *   실사용 중 발견(2026-08-06, MTA 343건 batch가 이 경로로 유실될 뻔함,
+ *   `docs/OpenItems.md` #9 실사용 검증 항목 참고). "자동 재시도 안 됨 + 몇 분 후
+ *   08_PipelineAsync.js의 runLeadsPipelineTail()/runMTAPipelineTail()을 직접 Run"
+ *   안내로 교체.
  * v1.8.0 (2026-08-06)
  * - appendNewMTA()의 appendSheetRecords() 호출에 numberColumns=["Revenue"] 추가 —
  *   Revenue가 날짜로 자동 오인식되는 것 방지(14_MasterWriter.js writeMTAMaster()에
@@ -159,11 +169,13 @@ function appendNewLeads(silent){
 
     if(!silent){
       SpreadsheetApp.getUi().alert(
-        "✅ Leads_Master Append 완료 (백그라운드 처리는 건너뜀)",
+        "⚠️ Leads_Master Append 완료 (백그라운드 처리는 건너뜀 — 수동 재시도 필요)",
         "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
         "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
-        "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다.",
+        "반영했습니다. Leads_OPS/Report 갱신은 자동으로 재시도되지 않습니다 — " +
+        "몇 분 후(다른 작업이 끝난 뒤) 08_PipelineAsync.js의 runLeadsPipelineTail()을 " +
+        "Apps Script 편집기에서 직접 Run 해주세요.",
         SpreadsheetApp.getUi().ButtonSet.OK
       );
     }
@@ -295,11 +307,13 @@ function appendNewMTA(silent){
 
     if(!silent){
       SpreadsheetApp.getUi().alert(
-        "✅ MTA_Master Append 완료 (백그라운드 처리는 건너뜀)",
+        "⚠️ MTA_Master Append 완료 (백그라운드 처리는 건너뜀 — 수동 재시도 필요)",
         "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
         "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
-        "반영했습니다. Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다.",
+        "반영했습니다. Leads_OPS/Report 갱신은 자동으로 재시도되지 않습니다 — " +
+        "몇 분 후(다른 작업이 끝난 뒤) 08_PipelineAsync.js의 runMTAPipelineTail()을 " +
+        "Apps Script 편집기에서 직접 Run 해주세요.",
         SpreadsheetApp.getUi().ButtonSet.OK
       );
     }

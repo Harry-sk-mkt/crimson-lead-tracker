@@ -1,5 +1,46 @@
 # Changelog — 2026-08-06
 
+## MTA lock-skip 유실 버그 대응 + Pipeline Status RUNNING/FAILED 표시·색상 추가
+
+- **버그 발견·복구 — MTA 343건 batch가 백그라운드 refresh 없이 유실될 뻔함**: MTA Import 직후
+  README Pipeline Status의 "New Leads" 행이 (관련 없는) 과거 실행의 DONE 상태를 그대로 보여주고
+  있어 사용자가 혼동 — 조사 결과 `appendNewMTA()`가 `PIPELINE_LOCK`(당시 New Leads 백그라운드
+  실행이 5분 전 진행 중이었음)을 못 잡아 백그라운드 refresh를 스킵했는데, 이 skip 경로가
+  상태 기록도 재시도 마커도 안 남기는 설계 허점이었음(`docs/OpenItems.md` #9 실사용 검증 항목
+  — 정확히 이 시나리오가 미검증 상태로 남아있었음). `MTA_LAST_ROW`가 이미 전진해 있어 재Import도
+  무효, `runRetryPipelineTail()`도 FAILED 전용이라 못 잡음 — 이 batch를 자동으로 복구할 경로가
+  없었음.
+
+- **버그 발견·수정 — `runAutoDeleteExactDuplicateTouchRows()`(MTA_Master, `24_OPSQA.js` v1.6.1)
+  배치 삭제 누락**: 위 batch 복구를 위해 `runMTAPipelineTail()`을 수동 실행했다가 삭제 대상
+  1299건에서 5분여만에 Canceled — 원인은 이 함수가 2026-08-05 Leads_Master 쪽
+  (`runAutoDeleteExactDuplicateLeadRows()`)에 적용된 배치 삭제 수정(`groupConsecutiveDescendingRows_()`
+  + `sheet.deleteRows()`)을 못 받고 여전히 `sheet.deleteRow()` 1299회 반복 호출 중이었던 것
+  — 동일 패턴으로 교체. 재실행 결과 828건 삭제 4초 완료, 이어 MTA Funnel Sync→전체 Engine
+  refresh→OPS 재작성→Report Generate까지 전 구간 정상 완료 확인. 이어서 재실행한
+  `runLeadsPipelineTail()`(중복 32건 배치 삭제→Leads_OPS Build→전체 체인)도 에러 없이 완료.
+
+- **lock-skip 알림 문구 수정**(`07_IncrementalMasterBuild.js` v1.9.0, `00_Import.js` v3.7.0):
+  "Leads_OPS/Report는 다음 정상 실행 때 자동 반영됩니다"라는 기존 문구가 위 버그로 사실이 아님이
+  확인돼, "자동 재시도 안 됨 + 몇 분 후 08_PipelineAsync.js의 runLeadsPipelineTail()/
+  runMTAPipelineTail() 직접 Run" 안내로 교체 — 메뉴 직접 실행(alert)/CSV Import 다이얼로그
+  (`formatAppendSummary_()`) 둘 다 반영.
+
+- **Pipeline Status 컬럼(Master Update~Target_REP) RUNNING/FAILED 표시 추가**(`08_PipelineAsync.js`
+  v1.13.0, 사용자 요청): 기존엔 `state.stages[key]`가 boolean이라 그 단계가 끝나기 전까지 빈
+  칸이었고, `refreshOPSSheets_()`/`refreshReportGenerate_()` 하위 단계 실패도 격리된 try/catch에
+  조용히 삼켜져 영원히 빈 칸으로 남았음 — `"RUNNING"|"DONE"|"FAILED"` 문자열로 확장해 진행/실패
+  여부가 실시간으로 드러나도록 함. 신규 `setPipelineStageStatus_()` 공용 헬퍼, `markPipelineStageComplete_()`는
+  하위 호환 래퍼로 유지.
+
+- **Pipeline Status 셀 색상 추가**(v1.14.0, 사용자 요청 — "running이면 빨갛게, done이면
+  초록색으로 bold"): 신규 순수 함수 `computePipelineStatusGridStyles_()`가 RUNNING(빨강)/DONE
+  (초록) 배경+글자색+bold를 계산, `writePipelineStatusToReadme_()`가 값 쓰기 직후 매번 같이
+  적용. FAILED는 사용자 확인 결과 의도적으로 미채색 유지.
+
+- `docs/OpenItems.md`에 22번 항목 신규 추가 — "Marketo Campaign ↔ UTM 딕셔너리 구축"(상세
+  스코프 미정, 착수 전 확인 필요).
+
 ## 카카오모먼트 메시지 발송 검증 완료 + KakaoSMS_Raw 실제 sync 구현 + Events_OPS Spent 자동화
 
 - **카카오모먼트 메시지 발송 검증**: 2026-08-05 발송된 메시지 실제 API 응답으로 필드 매핑 확정
