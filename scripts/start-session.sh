@@ -23,6 +23,15 @@ ahead="$(git log --oneline origin/main..main)"
 
 if [ -z "$behind" ] && [ -z "$ahead" ]; then
   echo "✅ origin/main과 동기화됨 (divergence 없음)."
+elif [ -n "$behind" ] && [ -z "$ahead" ]; then
+  echo "⚠️  로컬이 origin보다 뒤처짐 — origin에만 있는 커밋:"
+  echo "$behind" | sed 's/^/    /'
+  if [ -z "$(git status --porcelain)" ]; then
+    echo "   → 로컬 변경사항 없음 (fast-forward 가능) — 자동으로 git pull 진행."
+    git pull
+  else
+    echo "   → 로컬에 커밋 안 된 변경사항이 있어 자동 pull을 건너뜀. 수동으로 확인 후 pull할 것."
+  fi
 else
   if [ -n "$behind" ]; then
     echo "⚠️  로컬이 origin보다 뒤처짐 — origin에만 있는 커밋:"
@@ -32,7 +41,7 @@ else
     echo "⚠️  로컬이 origin보다 앞섬 — 로컬에만 있는 커밋(아직 push 안 됨):"
     echo "$ahead" | sed 's/^/    /'
   fi
-  echo "   → 코드 수정 전에 이 divergence의 의미를 먼저 파악할 것 (CLAUDE.md 참고)."
+  echo "   → divergence(양쪽에 커밋 존재)라 자동 pull 안 함 — 코드 수정 전에 의미를 먼저 파악할 것 (CLAUDE.md 참고)."
 fi
 
 echo ""
