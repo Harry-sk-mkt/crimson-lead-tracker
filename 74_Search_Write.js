@@ -8,7 +8,14 @@
  * data), mirrors 64_BOFU_Write.js.
  *
  * Version
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-08-05)
+ * - `SEARCH_SUBTOTAL_COLUMNS`의 "Results" → "Results 90D"로 갱신
+ *   (70_Search_Config.js v1.7.0 헤더 개명 반영, 사용자 요청).
  * v1.0.0
+ * - 최초 구현.
  * ==========================================================
  */
 
@@ -17,7 +24,7 @@
  */
 const SEARCH_SUBTOTAL_COLUMNS =
   SEARCH.GROUP_2_MANUAL
-    .concat(["Impressions", "Reach", "Link clicks", "Results", "Spent"])
+    .concat(["Impressions", "Reach", "Link clicks", "Results 90D", "Spent"])
     .concat(SEARCH.GROUP_4_COMPUTED);
 
 

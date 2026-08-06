@@ -12,9 +12,18 @@
  * 실행도 계속 가능.
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-05)
+ * - **Search_OPS "Spent" 자동화(사용자 요청)** — `readNaverSearchAdCampaignStatsCache_()`가
+ *   돌려주는 spentKrw(원본)를 `fetchKrwToNzdRate_()`(AD_004_SpendCache.js,
+ *   GOOGLEFINANCE 기반)로 구한 환율로 `convertNaverCampaignStatsSpendToNZD_()`
+ *   (AD_003_NaverSearch.js)가 NZD 변환 후 `mergeSearchOPS_()`에 전달. 환율
+ *   조회 실패(GOOGLEFINANCE 미계산 등) 시 전체 Build를 막지 않도록 try/catch로
+ *   감싸고, 실패하면 Impressions/Link clicks만 자동 채우고 Spent는 이번
+ *   실행에서 스킵(기존 값 유지) — Ad_Spend_Cache 갱신 실패 시에도 핵심
+ *   파이프라인을 막지 않는 기존 방침(08_PipelineAsync.js)과 동일하게 처리.
  * v1.2.0 (2026-08-05)
  * - `readNaverSearchAdCampaignStatsCache_()`(AD_003_NaverSearch.js) 결과를
  *   `mergeSearchOPS_()`에 3번째 인자로 전달 — Campaign/Impressions/Link
@@ -42,7 +51,17 @@ function buildSearchOPS() {
 
     const engineMap = readSearchEngineMap_();
 
-    const naverStatsMap = readNaverSearchAdCampaignStatsCache_();
+    let naverStatsMap = readNaverSearchAdCampaignStatsCache_();
+
+    try {
+      const rate = fetchKrwToNzdRate_();
+      naverStatsMap = convertNaverCampaignStatsSpendToNZD_(naverStatsMap, rate);
+    } catch (fxError) {
+      Logger.log(
+        "⚠️ KRW→NZD 환율 조회 실패 — 이번 실행에서 Spent 자동 매칭 스킵" +
+        "(Impressions/Link clicks는 정상 진행): " + fxError
+      );
+    }
 
     //======================================
     // Merge

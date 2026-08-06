@@ -1,4 +1,99 @@
+# Changelog — 2026-08-06
+
+## Revenue 숫자서식 버그 수정, Events/Search_OPS 개편, ACQ_REP/NewP1_REP Generate 성능 대개선
+
+- **Revenue 숫자서식 버그 수정**: `writeMTAMaster()`가 이전 세션에서 `writeSheetRecords()`(overwrite) →
+  `appendSheetRecords()`로 잘못 바뀐 채 미완성 상태였음(Full Rebuild마다 MTA_Master 전체가 중복 append되는
+  회귀). `writeSheetRecords()`(`05_SheetWriter.js`)에도 `numberColumns` 지원을 추가해 원복하고,
+  Revenue가 날짜로 오인식되지 않도록 `numberColumns=["Revenue"]`를 `writeMTAMaster()`
+  (`14_MasterWriter.js`)와 증분 경로 `appendNewMTA()`(`07_IncrementalMasterBuild.js`) 둘 다에 적용.
+
+- **Events_OPS 헤더 재구성**(사용자 요청): `50_Events_Config.js` HEADER 전체 재배치 — 신규
+  `EV IC REQ.`(수동입력, Salesforce가 이벤트 단위 IC 신청 총계를 못 보여줘서 Ops가 직접 관찰값 입력),
+  `Success %`/`SP1%`/`SNP1%`(Derived, Success/SF Reg. 등 SF 매칭 분모 대비 비율) 신규. `Mkt P1s`/
+  `Mkt NLP1s`/`LP CVR`/`LG CVR`/`CPL` 삭제, `All CVR`→`CVR`/`Leads(Meta)`→`Results` 리네임.
+  `stripLGSuffix_()`(`51_Events_Engine.js`) 신규 — Marketo Program 이름이 " LG"로 끝나는 변형을
+  같은 프로그램으로 매칭(실제 중복 사례 발견). SF P1s/SF NLP1s/SP1%/SNP1% 4개 컬럼에 상위 25%(0 제외,
+  컬럼별 독립 계산) 조건부 서식 강조(`#01ef18`) 추가(`55_Events_Styles.js`
+  `applyTop25HighlightRules_()`/`buildPercentileHighlightFormula_()`). Revenue `$#,##0.00` 서식.
+
+- **Search_OPS**: Naver 자동매칭 "Campaign" 컬럼 기본 숨김 처리(`70_Search_Config.js`
+  `HIDDEN_COLUMN_NAMES` 신규, `75_Search_Styles.js`).
+
+- **ACQ_REP/NewP1_REP Generate 성능 대개선** (실측 211초 → 최종 수 초~10여 초):
+  1. Generate 체크박스가 매번 `refreshACQSummary_()`/`refreshNewP1Engine_()` 전체 재계산
+     (MTA_Master 8만+행/Leads_OPS 3만5천+행 스캔)을 돌리게 시도했으나, All Leads/New P1/SAL/IC
+     Booked/IC Complete는 Leads/MTA Import 시에만 바뀌고 이미 백그라운드 파이프라인이 최신 유지 중이라
+     Generate 시점 재스캔이 무의미하다는 걸 확인 — Revenue(Deal Tracker)만 Import와 무관하게 바뀔 수
+     있어 재조회 가치가 있다고 판단, `refreshACQSummaryRevenueOnly_()`(`31_ACQSummary.js` 신규)/
+     `refreshNewP1EngineRevenueOnly_()`(`40_NewP1Report.js` 신규)로 Revenue만 경량 갱신하도록 축소.
+     Spent는 범위 제외(기존 백그라운드 파이프라인에 계속 맡김).
+  2. `readDealTrackerRawRows_()`(`90_TargetEngine.js`)가 외부 스프레드시트를 매번 두 번 여는 버그
+     발견·수정(`findSheetByGid_()` 분리, `openById()` 1회로 통합).
+  3. 그래도 여전히 느려서(Deal Tracker 행마다 `Utilities.formatDate()` 호출 등) **`DealTracker_Engine`
+     내부 캐시 신규 도입**(사용자 제안) — `appendNewDealTrackerRows_()`(체크포인트 이후 신규 딜만 증분
+     동기화, Generate 클릭 시점 포함)와 `rebuildDealTrackerEngine_()`(전체 재구축, 08_PipelineAsync.js
+     양쪽 파이프라인 테일에 배선 — 기존 행 수정/재분류까지 반영하는 정합성 보정)로 이중화, `appendNewMTA()`/
+     `appendNewLeads()`의 체크포인트 패턴과 동일 원리. `readDealTrackerRawRows_()`는 이제 이 캐시만
+     읽어서 8개+ 기존 호출부(Events/BOFU/Content Engine 등)가 코드 변경 없이 전부 자동으로 빨라짐.
+     최초 1회 `runRebuildDealTrackerEngine()` 수동 실행 필요.
+  4. Generate를 설치형(Installable) onEdit 트리거로 전환(`handleReportGenerateEdit()`,
+     `runInstallReportGenerateTrigger()` — 최초 1회 수동 실행 필요) — Simple Trigger의 외부 API/
+     스프레드시트 접근 제한 회피. 시간 기반 1회성 트리거로 비동기 위임하는 방식도 시도했으나 Apps
+     Script의 트리거 디스패치 자체가 1~2분+ 지연될 수 있음이 실측 확인돼(플랫폼 한계, 코드 버그
+     아님) 최종적으로 동기 실행으로 재전환. 그 과정에서 발견한 별도 버그
+     `schedulePipelineTail_()`(`08_PipelineAsync.js`)의 트리거 중복 예약(짧은 시간 내 반복 호출 시
+     실행 큐에 계속 쌓이는 문제)도 수정 — `runLeadsPipelineTail()`/`runMTAPipelineTail()` 예약에도
+     동일하게 적용되는 일반적 수정.
+  5. **ACQ_REP F/J/S/T/V 컬럼 하이라이트 재설계**(사용자 요청, `32_ACQReportStyles.js`): F(All P1%)/
+     J(New P1%)는 세그먼트별 상위 25%(0 제외) 조건부 서식으로 교체(기존 중앙값 강조 폐기, H는 유지).
+     S(Revenue Target)/T(Revenue Target%)/V(New P1 Target%)는 "On Track"(Target÷그 달의 주 수 페이스
+     대비 실적, `90_TargetEngine.js` `computeWeeksInMonthCountsForFYRange_()` 신규) 기준으로 교체(기존
+     100% 고정 기준 폐기). N(Revenue) `$#,##0.00` 서식. 배경색 적용을 행별 개별 API 호출에서 JS
+     배열 계산 후 `setBackgrounds()` 일괄 호출로 전환(성능 개선 겸용).
+
+- **CLAUDE.md 갱신**: `clasp push` 원칙에 "코드 수정 후 함수 실행을 요청하기 직전엔 반드시 push
+  여부를 스스로 확인" 문구 추가 — 이번 세션 중 push를 깜빡하고 실행을 요청해 사용자가 옛 코드로
+  실행된 결과를 보고서야 발견한 사고 재발 방지.
+
 # Changelog — 2026-08-05
+
+## Search_OPS Naver 캠페인 매핑 10개 완료 + Spent/Results 자동화 (`docs/OpenItems.md` #21)
+
+이전 세션에서 미확인이던 Naver 캠페인 5개 매핑을 사용자가 확인해주면서 이어간 라운드.
+Impressions/Link clicks만 자동화돼있던 Search_OPS에 Spent/Results까지 추가로 자동화.
+
+- **나머지 5개 캠페인 매핑 완료**: College Specific/UK Meds/Competitions/Brand(HStoDS)/
+  Expo(사용자 확인) — `73_Search_Merge.js`의 `NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE`
+  10개 전체 매핑 완료. `expo_earlybird2_ptc`는 캠페인명의 "expo" 키워드 때문에
+  `getBusinessSegment()`가 Seminar로 우선 판정 중이었으나 실제로는 Search가 맞다고
+  사용자가 확인 — `BUSINESS_SEGMENT_EXCEPTIONS`(16_TransformHelper.js)에 예외 추가(Search_Engine이
+  Business Segment=Search만 집계하는 구조라 Search_OPS 키 매핑만으로는 부족했음).
+- **버그 발견·수정 — 캠페인 충돌 시 통계 덮어쓰기**: `HStoDS_contact`가 기존 `brand_contact`와
+  같은 Search_OPS 키를 공유하게 되면서, 2개 이상의 Naver 캠페인이 같은 키로 번역될 때 나중
+  캠페인이 먼저 것을 조용히 덮어써 통계가 누락되는 문제 발견 — 합산하도록 수정(사용자 확인).
+- **Spent 자동화**: Naver `salesAmt`(KRW)를 기존 Impressions/Link clicks 누적 캐시에 얹어
+  캠페인별로 누적, `fetchKrwToNzdRate_()`(AD_004_SpendCache.js)로 NZD 변환 후 Search_OPS
+  "Spent"에 자동 매칭(사용자 확정 — ACQ_REP과 통화 통일). 환율 조회 실패 시 기존 값 보존.
+- **Results 자동화 — Naver API 필드 실측 후 확정**: 공식 문서 사이트가 SPA라 필드 목록을
+  스크레이핑할 수 없어 실제 `/stats` 호출로 후보 필드(ctr/cpc/avgRnk/ccnt/ccnt1d)를 개별
+  실측 — `ccnt`가 200 정상 응답하고 값이 항상 clkCnt 이하라 "전환수"로 판단(사용자 확인),
+  Spent와 동일한 패턴으로 Results 자동화 반영.
+- **배포 직후 버그 발견·수정 — Spent/Results가 0으로 표시됨**: 원인은 이 코드 배포 이전에
+  이미 오늘자 갱신이 한 번 돌아서 `refreshNaverSearchAdCampaignStatsCache_()`의 "오늘 이미
+  갱신됨" 가드가 신규 필드 요청 자체를 막고 있었던 것 — 1회성 백필 함수로 해소.
+- **Spent 전체 기간 소급, Results는 API 하드 리밋으로 90일 롤링 확정**: 백필 후에도 사용자가
+  "캠페인 시작일부터의 전체 금액치고 작다"고 지적 — 실측 결과 `ccnt`는 salesAmt와 같이
+  묶든 안 묶든 92일 제약을 그대로 받아(`{code:11004}`) Results는 전체 기간 소급이 원천적으로
+  불가능함을 확인. 반면 `salesAmt` 단독은 이미 Ad_Spend_Cache 파이프라인에서 730일까지
+  확인돼 있어, 기존 월별 반복 백필 패턴(`computeNaverSearchAdSpendHistorySummary_()`)을
+  캠페인 이름 단위로 재사용해 Spent만 전체 기간(BACKFILL_START~오늘) 소급 백필 구현.
+- **헤더 개명(사용자 요청)**: "Results" → "Results 90D" — ccnt가 API 자체 하드 리밋으로
+  항상 최근 90일 롤링 값만 반영 가능하다는 걸 헤더에서 바로 알 수 있게 함. CvR 계산식/SUBTOTAL
+  대상 컬럼 목록 등 관련 참조 전부 갱신(70/73/74_Search_*.js).
+
+**검증**: Node vm 하네스로 신규/변경 pure 함수 전부 테스트 PASS, `check-syntax`/`check-naming`/
+`check-version-header`/`check-duplicate-declarations` 매 라운드 통과, 매 라운드 `clasp push` 완료.
 
 ## 카카오모먼트 비즈니스 토큰 발급 완료 + 리포트 API 진단 착수
 
@@ -2073,59 +2168,3 @@ Leads_OPS에 흡수 합치는 대신, 별도 sync로 이 시트를 읽어 Email 
   일치 — 코드 변경 없음, 향후 구현 시 지킬 가드레일로 기록.
 - 참고로 `IC Booked Date` 등 `OPS.SYNC_COLUMNS`는 애초에 `Leads_Master`를 거치지 않고
   `syncMTAFunnelToOPS_()`가 `MTA_Master`에서 직접 `Leads_OPS`로 쓰기 때문에 이 문제와 무관 (이미 안전).
-
-## 14. 2026-08-06 세션 — Revenue 숫자서식 버그 수정, Events/Search_OPS 개편, ACQ_REP/NewP1_REP Generate 성능 대개선
-
-- **Revenue 숫자서식 버그 수정**: `writeMTAMaster()`가 이전 세션에서 `writeSheetRecords()`(overwrite) →
-  `appendSheetRecords()`로 잘못 바뀐 채 미완성 상태였음(Full Rebuild마다 MTA_Master 전체가 중복 append되는
-  회귀). `writeSheetRecords()`(`05_SheetWriter.js`)에도 `numberColumns` 지원을 추가해 원복하고,
-  Revenue가 날짜로 오인식되지 않도록 `numberColumns=["Revenue"]`를 `writeMTAMaster()`
-  (`14_MasterWriter.js`)와 증분 경로 `appendNewMTA()`(`07_IncrementalMasterBuild.js`) 둘 다에 적용.
-
-- **Events_OPS 헤더 재구성**(사용자 요청): `50_Events_Config.js` HEADER 전체 재배치 — 신규
-  `EV IC REQ.`(수동입력, Salesforce가 이벤트 단위 IC 신청 총계를 못 보여줘서 Ops가 직접 관찰값 입력),
-  `Success %`/`SP1%`/`SNP1%`(Derived, Success/SF Reg. 등 SF 매칭 분모 대비 비율) 신규. `Mkt P1s`/
-  `Mkt NLP1s`/`LP CVR`/`LG CVR`/`CPL` 삭제, `All CVR`→`CVR`/`Leads(Meta)`→`Results` 리네임.
-  `stripLGSuffix_()`(`51_Events_Engine.js`) 신규 — Marketo Program 이름이 " LG"로 끝나는 변형을
-  같은 프로그램으로 매칭(실제 중복 사례 발견). SF P1s/SF NLP1s/SP1%/SNP1% 4개 컬럼에 상위 25%(0 제외,
-  컬럼별 독립 계산) 조건부 서식 강조(`#01ef18`) 추가(`55_Events_Styles.js`
-  `applyTop25HighlightRules_()`/`buildPercentileHighlightFormula_()`). Revenue `$#,##0.00` 서식.
-
-- **Search_OPS**: Naver 자동매칭 "Campaign" 컬럼 기본 숨김 처리(`70_Search_Config.js`
-  `HIDDEN_COLUMN_NAMES` 신규, `75_Search_Styles.js`).
-
-- **ACQ_REP/NewP1_REP Generate 성능 대개선** (실측 211초 → 최종 수 초~10여 초):
-  1. Generate 체크박스가 매번 `refreshACQSummary_()`/`refreshNewP1Engine_()` 전체 재계산
-     (MTA_Master 8만+행/Leads_OPS 3만5천+행 스캔)을 돌리게 시도했으나, All Leads/New P1/SAL/IC
-     Booked/IC Complete는 Leads/MTA Import 시에만 바뀌고 이미 백그라운드 파이프라인이 최신 유지 중이라
-     Generate 시점 재스캔이 무의미하다는 걸 확인 — Revenue(Deal Tracker)만 Import와 무관하게 바뀔 수
-     있어 재조회 가치가 있다고 판단, `refreshACQSummaryRevenueOnly_()`(`31_ACQSummary.js` 신규)/
-     `refreshNewP1EngineRevenueOnly_()`(`40_NewP1Report.js` 신규)로 Revenue만 경량 갱신하도록 축소.
-     Spent는 범위 제외(기존 백그라운드 파이프라인에 계속 맡김).
-  2. `readDealTrackerRawRows_()`(`90_TargetEngine.js`)가 외부 스프레드시트를 매번 두 번 여는 버그
-     발견·수정(`findSheetByGid_()` 분리, `openById()` 1회로 통합).
-  3. 그래도 여전히 느려서(Deal Tracker 행마다 `Utilities.formatDate()` 호출 등) **`DealTracker_Engine`
-     내부 캐시 신규 도입**(사용자 제안) — `appendNewDealTrackerRows_()`(체크포인트 이후 신규 딜만 증분
-     동기화, Generate 클릭 시점 포함)와 `rebuildDealTrackerEngine_()`(전체 재구축, 08_PipelineAsync.js
-     양쪽 파이프라인 테일에 배선 — 기존 행 수정/재분류까지 반영하는 정합성 보정)로 이중화, `appendNewMTA()`/
-     `appendNewLeads()`의 체크포인트 패턴과 동일 원리. `readDealTrackerRawRows_()`는 이제 이 캐시만
-     읽어서 8개+ 기존 호출부(Events/BOFU/Content Engine 등)가 코드 변경 없이 전부 자동으로 빨라짐.
-     최초 1회 `runRebuildDealTrackerEngine()` 수동 실행 필요.
-  4. Generate를 설치형(Installable) onEdit 트리거로 전환(`handleReportGenerateEdit()`,
-     `runInstallReportGenerateTrigger()` — 최초 1회 수동 실행 필요) — Simple Trigger의 외부 API/
-     스프레드시트 접근 제한 회피. 시간 기반 1회성 트리거로 비동기 위임하는 방식도 시도했으나 Apps
-     Script의 트리거 디스패치 자체가 1~2분+ 지연될 수 있음이 실측 확인돼(플랫폼 한계, 코드 버그
-     아님) 최종적으로 동기 실행으로 재전환. 그 과정에서 발견한 별도 버그
-     `schedulePipelineTail_()`(`08_PipelineAsync.js`)의 트리거 중복 예약(짧은 시간 내 반복 호출 시
-     실행 큐에 계속 쌓이는 문제)도 수정 — `runLeadsPipelineTail()`/`runMTAPipelineTail()` 예약에도
-     동일하게 적용되는 일반적 수정.
-  5. **ACQ_REP F/J/S/T/V 컬럼 하이라이트 재설계**(사용자 요청, `32_ACQReportStyles.js`): F(All P1%)/
-     J(New P1%)는 세그먼트별 상위 25%(0 제외) 조건부 서식으로 교체(기존 중앙값 강조 폐기, H는 유지).
-     S(Revenue Target)/T(Revenue Target%)/V(New P1 Target%)는 "On Track"(Target÷그 달의 주 수 페이스
-     대비 실적, `90_TargetEngine.js` `computeWeeksInMonthCountsForFYRange_()` 신규) 기준으로 교체(기존
-     100% 고정 기준 폐기). N(Revenue) `$#,##0.00` 서식. 배경색 적용을 행별 개별 API 호출에서 JS
-     배열 계산 후 `setBackgrounds()` 일괄 호출로 전환(성능 개선 겸용).
-
-- **CLAUDE.md 갱신**: `clasp push` 원칙에 "코드 수정 후 함수 실행을 요청하기 직전엔 반드시 push
-  여부를 스스로 확인" 문구 추가 — 이번 세션 중 push를 깜빡하고 실행을 요청해 사용자가 옛 코드로
-  실행된 결과를 보고서야 발견한 사고 재발 방지.

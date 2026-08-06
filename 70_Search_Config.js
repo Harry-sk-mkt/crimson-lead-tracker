@@ -15,14 +15,31 @@
  * (Apps Script 전역 네임스페이스 — 같은 이름 재정의 시 충돌 발생).
  *
  * Version
- * v1.5.0
+ * v1.8.0
  *
  * Change Log
- * v1.5.0 (2026-08-06)
+ * v1.8.0 (2026-08-06)
  * - HIDDEN_COLUMN_NAMES 추가(사용자 요청) — "Campaign"(Naver Search Ad API
  *   자동 매칭된 실제 네이버 캠페인 이름, GROUP_3A_AUTO) 컬럼을 기본 숨김
  *   처리. HIDE_COLUMN_COUNT(선행 N개 연속 숨김)와 달리 HEADER 중간에 있는
  *   컬럼이라 이름 기준으로 별도 처리(75_Search_Styles.js 참고).
+ * v1.7.0 (2026-08-05)
+ * - 헤더 "Results" → "Results 90D"로 개명(사용자 요청) — ccnt가 Naver API
+ *   자체 하드 리밋으로 항상 최근 90일 롤링 값만 반영 가능하다는 걸(Spent는
+ *   전체 기간 소급 가능한 것과 대비) 헤더에서 바로 알 수 있게 함. `HEADER`/
+ *   `GROUP_3A_AUTO`/`HEADER_COLOR_GROUPS.META` 전부 반영. Search_OPS는 매
+ *   빌드마다 전체 재작성이라 기존 시트의 옛 헤더 텍스트가 남지 않음.
+ * v1.6.0 (2026-08-05)
+ * - `GROUP_3_MANUAL`에서 "Results"도 분리 → `GROUP_3A_AUTO`(Naver Search Ad
+ *   API ccnt 자동 매칭, 사용자 요청 — `runDebugNaverSearchAdStatsExpandedFields()`
+ *   실측 결과 ccnt가 항상 clkCnt 이하라 "전환수"로 확정). "Reach"만 API에
+ *   대응 필드가 없어 계속 수동. 상세: 72_Search_Build.js/73_Search_Merge.js/
+ *   AD_003_NaverSearch.js 참고.
+ * v1.5.0 (2026-08-05)
+ * - `GROUP_3_MANUAL`에서 "Spent"도 분리 → `GROUP_3A_AUTO`(Naver Search Ad API
+ *   salesAmt 자동 매칭, KRW→NZD 변환, 사용자 요청). "Reach"/"Results"는 API에
+ *   대응 필드가 없어(Results는 실측 진단 대기) 계속 수동. 상세:
+ *   72_Search_Build.js/73_Search_Merge.js/AD_003_NaverSearch.js 참고.
  * v1.4.0 (2026-08-05)
  * - `GROUP_3_MANUAL`에서 "Campaign"/"Impressions"/"Link clicks" 분리 →
  *   신규 `GROUP_3A_AUTO`(Naver Search Ad API 자동 매칭, 사용자 요청).
@@ -179,9 +196,11 @@ const SEARCH = {
   ==========================================================
   GROUP 3 — 순수 수동 입력 (자동 소스 없음)
 
-  2026-08-05: "Campaign"/"Impressions"/"Link clicks"는 GROUP_3A_AUTO로
-  분리됨(Naver Search Ad API 자동 매칭, 사용자 요청) — "Reach"는 Naver
-  API에 해당 지표가 없어 여전히 순수 수동.
+  2026-08-05: "Campaign"/"Impressions"/"Link clicks"/"Spent"/"Results"는
+  전부 GROUP_3A_AUTO로 분리됨(Naver Search Ad API 자동 매칭, 사용자 요청,
+  Results는 실측 결과 ccnt 필드로 확정 — AD_003_NaverSearch.js
+  runDebugNaverSearchAdStatsExpandedFields() 참고). "Reach"만 Naver API에
+  해당 지표가 없어 여전히 순수 수동.
   ==========================================================
   */
   GROUP_3_MANUAL: [
@@ -189,27 +208,33 @@ const SEARCH = {
     "Off/On",
     "Start Date",
     "End Date",
-    "Reach",
-    "Results",
-    "Spent"
+    "Reach"
 
   ],
 
   /*
   ==========================================================
-  GROUP 3A — Naver Search Ad API 자동 매칭 (2026-08-05 신규)
+  GROUP 3A — Naver Search Ad API 자동 매칭 (2026-08-05 신규, Spent/Results 추가)
 
   Search_OPS 키(Marketo Program명 또는 raw UTM)와 Naver 캠페인 실제
-  이름이 매칭되면 이 3개 필드를 캐시값으로 덮어씀(73_Search_Merge.js의
+  이름이 매칭되면 이 5개 필드를 캐시값으로 덮어씀(73_Search_Merge.js의
   applySearchNaverCampaignStats_() 참고) — 매칭 안 되면 기존 값(수동
-  입력 또는 빈 값) 그대로 유지(copyColumns_() fallback).
+  입력 또는 빈 값) 그대로 유지(copyColumns_() fallback). "Spent"는
+  Naver salesAmt(KRW)를 GOOGLEFINANCE 환율로 NZD 변환한 값(사용자 확정 —
+  ACQ_REP과 통화 통일, 72_Search_Build.js 참고). "Results 90D"는 Naver ccnt
+  (전환수로 추정, 실측 확인 — 사용자 확정)를 변환 없이 그대로 사용 —
+  헤더명에 "90D"를 명시(2026-08-05, 사용자 요청): ccnt는 Naver API 자체
+  하드 리밋으로 최근 90일만 조회 가능해 Spent(전체 기간 소급 가능, 사용자
+  확인)와 달리 항상 최근 90일 롤링 값이라는 걸 헤더에서 바로 알 수 있게 함.
   ==========================================================
   */
   GROUP_3A_AUTO: [
 
     "Campaign",
     "Impressions",
-    "Link clicks"
+    "Link clicks",
+    "Spent",
+    "Results 90D"
 
   ],
 
@@ -286,7 +311,7 @@ const SEARCH = {
     "Reach",
     "Link clicks",
     "CTR",
-    "Results",
+    "Results 90D",
     "CvR",
     "Spent",
     "CPL",
@@ -338,7 +363,7 @@ const SEARCH = {
 
     META: [
       "Off/On", "Campaign", "Start Date", "End Date", "Impressions", "Reach",
-      "Link clicks", "Results", "Spent"
+      "Link clicks", "Results 90D", "Spent"
     ],
 
     DERIVED: [
