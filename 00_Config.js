@@ -9,9 +9,14 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.27.0
+ * v1.28.0
  *
  * Change Log
+ * v1.28.0 (2026-08-06)
+ * - `PROPERTIES.DEAL_TRACKER_LAST_ROW`/`TARGET.DEAL_TRACKER_ENGINE_SHEET`
+ *   신규 — Deal Tracker(외부 시트) 직접 openById() 대신 내부 캐시
+ *   DealTracker_Engine을 읽도록 전환하기 위한 설정(90_TargetEngine.js
+ *   참고, 사용자 요청 — ACQ_REP/NewP1_REP Generate 성능 개선).
  * v1.27.0 (2026-08-05)
  * - `PIPELINE.STATUS_COLUMNS` 신규 — Pipeline Status 표 레이아웃 전환(행=단계 →
  *   컬럼=단계, 사용자 요청) 지원용. 상세: 08_PipelineAsync.js 참고.
@@ -285,7 +290,12 @@ const CONFIG = {
     PIPELINE_LOCK: "PIPELINE_CHAIN_LOCK",
     PIPELINE_LAST_FAILED_TYPE: "PIPELINE_LAST_FAILED_TYPE",
     PIPELINE_STATUS_LEADS: "PIPELINE_STATUS_LEADS",
-    PIPELINE_STATUS_MTA: "PIPELINE_STATUS_MTA"
+    PIPELINE_STATUS_MTA: "PIPELINE_STATUS_MTA",
+
+    // 2026-08-06 추가 — DealTracker_Engine 증분 동기화 체크포인트
+    // (appendNewDealTrackerRows_(), 90_TargetEngine.js). LEADS_LAST_ROW/
+    // MTA_LAST_ROW와 동일 관례: 이미 처리한 "데이터 행 개수"(헤더 제외, 0-based).
+    DEAL_TRACKER_LAST_ROW: "DEAL_TRACKER_LAST_PROCESSED_ROW"
 
   },
 
@@ -527,6 +537,13 @@ const CONFIG = {
 
     SHEET: "Target_REP",
     ENGINE_SHEET: "Target_Engine",
+
+    // 2026-08-06 추가 — Deal Tracker(외부 시트) 캐시. readDealTrackerRawRows_()
+    // (90_TargetEngine.js)가 이제 이 시트를 읽는다 — 외부 openById() 직접 호출은
+    // rebuildDealTrackerEngine_()(전체 재구축, 백그라운드 파이프라인 전용)/
+    // appendNewDealTrackerRows_()(증분 동기화, Generate 클릭 시점 포함)에서만
+    // 발생. 상세: 90_TargetEngine.js DealTracker_Engine 관련 함수 WHY 참고.
+    DEAL_TRACKER_ENGINE_SHEET: "DealTracker_Engine",
 
     // 리포트 축 — CONFIG.ACQ.SEGMENTS(Business Segment 7개) 중 5개를 그대로 사용
     // (Referral/Other는 마케팅 타겟 대상이 아니므로 계속 제외 — 2026-07-30 세그먼트

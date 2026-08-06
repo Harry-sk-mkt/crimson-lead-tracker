@@ -15,9 +15,20 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-06)
+ * - stripLGSuffix_() 추가 — 사용자가 실제 중복 사례 발견: 같은 프로그램인데
+ *   Marketo Program 이름이 " LG"로만 끝나는 변형이 별도 키로 잡혀 매칭이
+ *   갈라짐(예: "...Ivy Love LG" vs "...Ivy Love"). 기존
+ *   stripRegistrationFormSuffix_()가 처리하는 "| Registered for Webinar
+ *   from FB LG Form" 패턴과는 다른 별개 케이스(그 문구 자체가 없이 그냥
+ *   끝에 " LG" 토큰만 붙음) — 일반 규칙으로 처리하기로 사용자 확정
+ *   (마케토 Program 이름이 " LG"로 끝나면 전부 그 접미사를 떼고 매칭).
+ *   aggregateMTATouchRecords_()/aggregateLeadsRecords_()/
+ *   computeEventsDealAggregates_()의 키 추출 단계에 stripRegistrationFormSuffix_()
+ *   바로 다음 단계로 적용.
  * v1.8.0 (2026-07-28)
  * - #Deals/Revenue를 Leads_OPS(Opportunity Won Date/Revenue, 리드 단위)
  *   대신 Deal Tracker 기반으로 전환 (2트랙 아키텍처, CLAUDE.md #7).
@@ -199,7 +210,7 @@ function aggregateMTATouchRecords_(records, allRegistered, p1All, eventDateCandi
 
     if (EVENTS.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.MTA]);
+    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.MTA]));
 
     if (!key || !isEligibleEventProgram_(key)) return;
 
@@ -321,7 +332,7 @@ function aggregateLeadsRecords_(records, newRegistered, nlP1, leadIdToKey) {
 
     if (EVENTS.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.LEADS]);
+    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.LEADS]));
 
     if (!key || !isEligibleEventProgram_(key)) return;
 
@@ -520,7 +531,7 @@ function computeEventsDealAggregates_() {
 
   return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
 
-    const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
+    const key = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
 
     return (key && isEligibleEventProgram_(key)) ? key : null;
 
@@ -546,7 +557,7 @@ function testComputeEventsDealAggregates_() {
   ];
 
   const keyFn = function (row) {
-    const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
+    const key = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
     return (key && isEligibleEventProgram_(key)) ? key : null;
   };
 
@@ -630,6 +641,59 @@ function testStripRegistrationFormSuffix_() {
       "WB-2026-06-KOR-MOFU-Core DIS To Harvard and Stanford"
     ) === "WB-2026-06-KOR-MOFU-Core DIS To Harvard and Stanford" &&
     stripRegistrationFormSuffix_("") === "";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Strip LG Suffix
+ *
+ * WHY
+ * 사용자가 실제 중복 사례 발견(2026-08-06): "WB-2026-05-KOR-MOFU-Core
+ * Profiles HYPS and Ivy Love LG"와 "WB-2026-05-KOR-MOFU-Core Profiles
+ * HYPS and Ivy Love"가 같은 프로그램인데 끝의 " LG" 토큰 하나 때문에
+ * 서로 다른 매칭 키로 갈라짐. stripRegistrationFormSuffix_()가 처리하는
+ * "| Registered for Webinar from FB LG Form" 패턴과는 별개 케이스(그
+ * 문구 자체가 없음) — 마케토 Program 이름이 " LG"로 끝나는 경우 전부
+ * 이 접미사를 떼고 매칭하는 일반 규칙으로 처리하기로 사용자 확정.
+ *
+ * INPUT
+ * programName : string
+ *
+ * OUTPUT
+ * string  (끝의 " LG" 토큰 제거된 이름, 패턴 불일치 시 원문 trim만)
+ *
+ * TEST
+ * testStripLGSuffix 참고
+ * ==========================================================
+ */
+function stripLGSuffix_(programName) {
+
+  const str = String(programName || "").trim();
+
+  return str.replace(/\s+LG$/, "").trim();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — stripLGSuffix_()
+ * ==========================================================
+ */
+function testStripLGSuffix() {
+
+  const pass =
+    stripLGSuffix_(
+      "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love LG"
+    ) === "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love" &&
+    stripLGSuffix_(
+      "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love"
+    ) === "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love" &&
+    stripLGSuffix_("") === "";
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

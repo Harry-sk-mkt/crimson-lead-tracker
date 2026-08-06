@@ -11,7 +11,15 @@
  * 그대로 재사용.
  *
  * Version
- * v1.0.0
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-08-06)
+ * - SEARCH.HIDDEN_COLUMN_NAMES(신규, 70_Search_Config.js v1.5.0) 기준으로
+ *   "Campaign"(Naver 자동 매칭 캠페인명) 컬럼 숨김 처리 추가(사용자 요청) —
+ *   기존 선행 N개(HIDE_COLUMN_COUNT) 숨김과 별개로 이름 기준 개별 숨김.
+ * v1.0.0 (2026-07-24)
+ * - 최초 구현.
  * ==========================================================
  */
 
@@ -153,6 +161,21 @@ function applySearchOPSStyle(sheet) {
     sheet.hideColumns(1, SEARCH.HIDE_COLUMN_COUNT);
 
   }
+
+  /*
+  ==========================================================
+  Hidden Columns By Name (SEARCH.HIDDEN_COLUMN_NAMES — HEADER 중간의
+  특정 컬럼, 위 선행 N개 숨김과 별개)
+  ==========================================================
+  */
+
+  SEARCH.HIDDEN_COLUMN_NAMES.forEach(function (name) {
+
+    if (map[name]) {
+      sheet.hideColumns(map[name]);
+    }
+
+  });
 
   /*
   ==========================================================

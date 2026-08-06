@@ -9,9 +9,18 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.7.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-06)
+ * - "NP1%" → "SNP1%"로 컬럼명 정정(사용자 요청) — applyGroup5Derived_()/
+ *   testApplyGroup5Derived() 참조도 함께 갱신(아래 v1.8.0 로그 텍스트에도
+ *   이미 새 이름으로 소급 반영).
+ * v1.8.0 (2026-08-06)
+ * - applyGroup5Derived_(): "CPL"(Spent÷Leads(Meta)) 계산 라인 제거(컬럼
+ *   자체 삭제, 50_Events_Config.js v1.7.0 참고) — "Success %"(Success÷SF
+ *   Reg.)/"SP1%"(SP1÷SF P1s)/"SNP1%"(SNPL1÷SF NLP1s) 3개 신규 비율 계산
+ *   추가(Match Rate와 동일 패턴, divideGuard_() 0-division 방지).
  * v1.7.0 (2026-07-29)
  * - compareByEventDateBlankFirst_() → compareByEventDateBlankLast_()로
  *   교체 — 빈 Event Date를 최상단이 아닌 최하단으로(전체 OPS 통일, 사용자
@@ -292,25 +301,57 @@ function applyGroup4Computed_(row, engineRow) {
 
 /**
  * ==========================================================
- * Apply Group 5 (Derived — Match Rate/CPL/CPNP1/ROAS)
+ * Apply Group 5 (Derived — Match Rate/Success %/SP1%/SNP1%/CPNP1/ROAS)
  *
  * WHY
  * REP 시트 없이 OPS 빌드 시점에 값으로 계산 (ACQ_REP와 동일 패턴).
  * 0으로 나누는 경우 #DIV/0! 대신 0을 반환 — 기존 실무 시트에서
  * #DIV/0! 14건+ 발견됐던 원인 재발 방지가 이 기능의 존재 이유.
  *
- * ⚠️ 2026-07-24 컬럼명 리네임 반영: "All Registered"→"SF Reg.",
- * "Reg."→"Mkt Reg."(마케토 자체 등록수), "NL P1"→"SF NLP1s"(SF 매칭된
- * New Lead P1 수 — 마케토 자체 집계인 "Mkt NLP1s"와 다른 지표이니
- * CPNP1 분모로 혼동하지 말 것).
+ * Success %/SP1%/SNP1%(2026-08-06 추가)는 Match Rate와 동일한 패턴 —
+ * 수동 관찰값(Success/SP1/SNPL1)을 SF 매칭 분모(SF Reg./SF P1s/SF NLP1s)
+ * 대비 비율로 환산.
  * ==========================================================
  */
 function applyGroup5Derived_(row) {
 
   row["Match Rate"] = divideGuard_(row["SF Reg."], row["Mkt Reg."]);
-  row["CPL"] = divideGuard_(row["Spent"], row["Leads(Meta)"]);
+  row["Success %"] = divideGuard_(row["Success"], row["SF Reg."]);
+  row["SP1%"] = divideGuard_(row["SP1"], row["SF P1s"]);
+  row["SNP1%"] = divideGuard_(row["SNPL1"], row["SF NLP1s"]);
   row["CPNP1"] = divideGuard_(row["Spent"], row["SF NLP1s"]);
   row["ROAS"] = divideGuard_(row["Revenue"], row["Spent"]);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyGroup5Derived_()
+ * ==========================================================
+ */
+function testApplyGroup5Derived() {
+
+  const row = {
+    "SF Reg.": 100, "Mkt Reg.": 50,
+    "Success": 20, "SP1": 10, "SNPL1": 5,
+    "SF P1s": 40, "SF NLP1s": 25,
+    "Spent": 1000, "Revenue": 5000
+  };
+
+  applyGroup5Derived_(row);
+
+  const pass =
+    row["Match Rate"] === 2 &&
+    row["Success %"] === 0.2 &&
+    row["SP1%"] === 0.25 &&
+    row["SNP1%"] === 0.2 &&
+    row["CPNP1"] === 40 &&
+    row["ROAS"] === 5 &&
+    row["CPL"] === undefined;   // CPL 컬럼 삭제됨 (2026-08-06) — 더 이상 계산 안 함
+
+  Logger.log("Result: " + JSON.stringify(row));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

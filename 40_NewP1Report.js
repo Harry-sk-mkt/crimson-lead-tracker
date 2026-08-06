@@ -23,9 +23,58 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.4.0
+ * v1.6.2
  *
  * Change Log
+ * v1.6.2 (2026-08-06)
+ * - **비동기 트리거 방식 → 동기 방식으로 재전환**(30_ACQReport.js v1.14.5와
+ *   동일 이유/패턴, 사용자 확정) — `handleNewP1ReportGenerateEdit_()`가
+ *   다시 try/finally로 동기 호출, `runNewP1ReportGenerateTail()`은 수동
+ *   테스트 진입점으로 격하.
+ * v1.6.1 (2026-08-06)
+ * - **성능 개선 — DealTracker_Engine 캐시 도입**(30_ACQReport.js v1.14.4와
+ *   동일 이유): refreshAndGenerateNewP1Report_()에
+ *   appendNewDealTrackerRows_()(90_TargetEngine.js) 호출 추가 — 신규 딜만
+ *   증분 동기화.
+ * v1.6.0 (2026-08-06)
+ * - **성능 개선 — refreshAndGenerateNewP1Report_()를 Revenue 전용으로 축소**
+ *   (30_ACQReport.js v1.14.3과 동일 이유/패턴): 실측 69초가 걸려 회의 중
+ *   활용이 불가능했음(사용자 확인) — New P1/SAL/IC Booked/IC Complete는
+ *   Import 시에만 바뀌고 이미 백그라운드 파이프라인이 최신 유지 중이라
+ *   Generate 시점 재스캔이 무의미. 신규 `refreshNewP1EngineRevenueOnly_()`/
+ *   `mergeRevenueIntoNewP1EngineRows_()`로 교체 — Leads_OPS 스캔 없이 Deal
+ *   Tracker Won/Revenue만 병합. `testMergeRevenueIntoNewP1EngineRows()` 포함.
+ * v1.5.2 (2026-08-06)
+ * - **버그 수정 — Generate 체크박스가 완료까지 체크된 채 멈춰있음**
+ *   (30_ACQReport.js v1.14.2와 동일 원인/해결, 사용자 확인): 다시
+ *   schedulePipelineTail_("runNewP1ReportGenerateTail")로 설치형 1회성
+ *   트리거에 위임 — handleReportGenerateEdit()가 이미 설치형 트리거로
+ *   실행되는 중이라 이번엔 ScriptApp.newTrigger() 호출이 정상 동작함.
+ * v1.5.1 (2026-08-06)
+ * - **버그 수정 — v1.5.0의 트리거 위임 방식이 실제로는 동작 안 함**(실측
+ *   확인, 30_ACQReport.js v1.14.1과 동일 원인/해결): onEdit() Simple
+ *   Trigger 안에서 `schedulePipelineTail_()`(`ScriptApp.newTrigger()`)
+ *   호출 자체가 권한 오류로 실패 — Simple Trigger는 트리거 설치 자체도
+ *   못 함. 올바른 해결(30_ACQReport.js에 구현)은 트리거 핸들러를 설치형
+ *   (installable) onEdit으로 등록하는 것 — `handleNewP1ReportGenerateEdit_()`는
+ *   다시 동기 try/finally로 되돌리되, `generateNewP1Report_()` 대신 신규
+ *   `refreshAndGenerateNewP1Report_()`(구 `runNewP1ReportGenerateTail()`을
+ *   개명 — 더 이상 트리거 핸들러가 아니므로 `deleteTriggersByHandlerName_()`
+ *   호출 제거)를 호출. **`30_ACQReport.js`의 `runInstallReportGenerateTrigger()`를
+ *   1회 실행해야 실제로 동작함**(NewP1_REP도 같은 설치형 트리거 하나를 공유).
+ * v1.5.0 (2026-08-06, 이 방식은 실패 — 위 v1.5.1 참고)
+ * - **버그 수정 — Generate 시 이전 실행분 서식(배경색/테두리)이 새 범위 밖에
+ *   남음**(사용자 발견, 30_ACQReport.js v1.14.0과 동일 버그): `clearNewP1ReportArea_()`가
+ *   `.clearContent()`만 호출해 값은 지워지지만 서식은 남아있었음 — 이전 실행
+ *   범위(A:M/Target 4컬럼)에 `.clearFormat()`을 추가로 호출.
+ * - **Generate를 설치형 트리거로 위임**(30_ACQReport.js v1.14.0과 동일 패턴,
+ *   사용자 요청 — "트리거 형태로 구현 못하나?"): `handleNewP1ReportGenerateEdit_()`
+ *   (onEdit Simple Trigger)가 `generateNewP1Report_()`를 직접 호출하는 대신
+ *   체크박스를 즉시 리셋하고 `schedulePipelineTail_("runNewP1ReportGenerateTail")`
+ *   로 설치형 1회성 트리거를 예약. 신규 `runNewP1ReportGenerateTail()`(Full
+ *   Authorization)이 `refreshAdSpendCache_()`/`refreshNewP1Engine_()`(Deal
+ *   Tracker openById() 포함)로 캐시를 먼저 갱신한 뒤 `generateNewP1Report_()`
+ *   호출 — Generate 클릭 시점에 Spent/Revenue가 실제로 최신화됨.
  * v1.4.0 (2026-08-04)
  * - **Spent 소스를 Target_Engine 수동 입력 → Ad_Spend_Cache 자동 집계로 전환**
  *   (사용자 확정 — ACQ_REP의 Spent(W열)는 이미 `readAdSpendCacheMap_()`
@@ -587,6 +636,161 @@ function readNewP1EngineRows_(){
 
 /**
  * ==========================================================
+ * Refresh NewP1 Engine — Revenue Only (Generate 클릭 시점 전용, 2026-08-06)
+ *
+ * WHY
+ * 31_ACQSummary.js의 refreshACQSummaryRevenueOnly_()와 동일한 이유·패턴.
+ * NewP1_REP Generate 체크박스가 매번 refreshNewP1Engine_()(Leads_OPS
+ * 3만5천+행 전체 스캔)를 돌렸더니 실측 69초가 걸림(사용자 확인). New P1/
+ * SAL/IC Booked/IC Complete는 Leads/MTA Import 시에만 바뀌고 이미
+ * 백그라운드 파이프라인이 최신 유지 중이라 Generate 시점 재스캔이
+ * 불필요 — Won/Revenue(Deal Tracker)만 Import와 무관하게 바뀔 수 있어
+ * 재조회 가치가 있음. Sort Index는 기존 값 그대로 보존(순서를 바꿀 이유
+ * 없음).
+ *
+ * TEST
+ * mergeRevenueIntoNewP1EngineRows_()의 testMergeRevenueIntoNewP1EngineRows 참고
+ * ==========================================================
+ */
+function refreshNewP1EngineRevenueOnly_(){
+
+  const start = new Date();
+
+  Logger.log(CONFIG.LOG.PREFIX + " NewP1 Engine Revenue-Only Refresh Started");
+
+  const existingRows = readNewP1EngineRows_();
+  const dealWonRevenue = computeNewP1DealWonRevenueFromRows_(readDealTrackerRawRows_());
+
+  const rows = mergeRevenueIntoNewP1EngineRows_(existingRows, dealWonRevenue);
+
+  writeNewP1Engine_(rows);
+
+  const seconds = ((new Date() - start) / 1000).toFixed(2);
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " NewP1 Engine Revenue-Only Refresh Completed : " +
+    rows.length + " rows (" + seconds + "s)"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge Revenue Into NewP1 Engine Rows (순수 함수, 테스트용으로 분리)
+ *
+ * WHY
+ * refreshNewP1EngineRevenueOnly_()의 병합 로직만 떼어내 SpreadsheetApp
+ * 없이 테스트 가능하게 함. New P1/SAL/IC Booked/IC Complete/Sort Index는
+ * existingRows 값을 그대로 보존하고 Won/Revenue만 dealWonRevenue 기준으로
+ * 교체 — 딜이 사라진 키는 0으로, dealWonRevenue에만 있는 신규 키는
+ * (Sort Index 포함) 나머지 필드 0으로 새 행 추가.
+ *
+ * ⚠️ 신규 키의 Sort Index=0은 정렬 우선순위가 부정확할 수 있음(31_ACQSummary.js의
+ * 신규 키 처리와 달리, NewP1_Engine은 sortIndex를 reverseNewP1MonthBlocks_()가
+ * 참조함) — 다음 전체 refreshNewP1Engine_() 실행(백그라운드 파이프라인) 때
+ * 정확한 값으로 자동 교정됨. Generate 직후 화면에 정확한 정렬이 필요하면
+ * 전체 refresh를 기다려야 함(드문 케이스 — Deal Tracker에만 있고 Leads_OPS
+ * 코호트엔 아직 없는 신규 FY|Month|Segment 조합).
+ *
+ * INPUT
+ * existingRows   : Object[]  readNewP1EngineRows_()의 결과
+ * dealWonRevenue : Object    computeNewP1DealWonRevenueFromRows_()의 결과
+ *                             ({ won: {key: count}, revenue: {key: sum} })
+ *
+ * OUTPUT
+ * Object[][]  writeNewP1Engine_()에 그대로 넘길 수 있는 row 배열
+ *
+ * TEST
+ * testMergeRevenueIntoNewP1EngineRows 참고
+ * ==========================================================
+ */
+function mergeRevenueIntoNewP1EngineRows_(existingRows, dealWonRevenue){
+
+  const existingByKey = {};
+
+  existingRows.forEach(function(row){
+    const key = row.fy + "|" + row.month + "|" + row.segment;
+    existingByKey[key] = row;
+  });
+
+  const allKeys = {};
+
+  Object.keys(existingByKey).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(dealWonRevenue.revenue).forEach(function(key){ allKeys[key] = true; });
+
+  return Object.keys(allKeys).map(function(key){
+
+    const parts = key.split("|");
+    const fy = parts[0];
+    const month = parts[1];
+    const segment = parts[2];
+
+    const existing = existingByKey[key] || {
+      sortIndex: 0, newP1: 0, sal: 0, icBooked: 0, icComplete: 0
+    };
+
+    return [
+      "FY" + String(fy).slice(-2),
+      month,
+      segment,
+      existing.sortIndex,
+      existing.newP1,
+      existing.sal,
+      existing.icBooked,
+      existing.icComplete,
+      dealWonRevenue.won[key] || 0,
+      dealWonRevenue.revenue[key] || 0
+    ];
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeRevenueIntoNewP1EngineRows_()
+ * ==========================================================
+ */
+function testMergeRevenueIntoNewP1EngineRows(){
+
+  const existingRows = [
+    { fy: 26, month: "Jul", segment: "Contact", sortIndex: 5, newP1: 20, sal: 10, icBooked: 8, icComplete: 5 },
+    { fy: 26, month: "Jul", segment: "Content", sortIndex: 6, newP1: 2, sal: 1, icBooked: 1, icComplete: 0 }
+  ];
+
+  const dealWonRevenue = {
+    won: { "26|Jul|Contact": 3, "27|Aug|Events": 1 },
+    revenue: { "26|Jul|Contact": 5000, "27|Aug|Events": 1200 }
+    // "26|Jul|Content"는 없음 — Won/Revenue 0으로 리셋
+  };
+
+  const rows = mergeRevenueIntoNewP1EngineRows_(existingRows, dealWonRevenue);
+
+  const byKey = {};
+  rows.forEach(function(row){
+    byKey[Number(String(row[0]).replace("FY", "")) + "|" + row[1] + "|" + row[2]] = row;
+  });
+
+  const pass =
+    rows.length === 3 &&
+    byKey["26|Jul|Contact"][8] === 3 && byKey["26|Jul|Contact"][9] === 5000 &&
+    byKey["26|Jul|Contact"][3] === 5 &&                   // sortIndex 보존
+    byKey["26|Jul|Contact"][4] === 20 &&                  // newP1 보존
+    byKey["26|Jul|Content"][8] === 0 && byKey["26|Jul|Content"][9] === 0 &&
+    byKey["26|Jul|Content"][4] === 2 &&                   // 다른 필드는 보존
+    byKey["27|Aug|Events"][8] === 1 && byKey["27|Aug|Events"][9] === 1200 &&
+    byKey["27|Aug|Events"][4] === 0;                      // 신규 키 나머지 0
+
+  Logger.log("Result: " + JSON.stringify(rows));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Find NewP1 Fiscal Year Range (Leads_OPS Create Date 기준)
  * ==========================================================
  */
@@ -823,14 +1027,14 @@ function clearNewP1ReportArea_(sheet){
     sheet.getRange(
       CONFIG.NEWP1.ROWS.REPORT_DATA_START, 1,
       rowCount, NEWP1_REPORT_HEADERS.length
-    ).clearContent();
+    ).clearContent().clearFormat();
 
     // Target 4컬럼(N열 사용자 수동 영역을 건너뛴 O열부터, 위 NEWP1_TARGET_HEADERS
     // WHY 참고) — A:M과 사이가 떨어져 있어 별도 clear 필요.
     sheet.getRange(
       CONFIG.NEWP1.ROWS.REPORT_DATA_START, CONFIG.NEWP1.TARGET_COLUMNS_START_COL,
       rowCount, NEWP1_TARGET_HEADERS.length
-    ).clearContent();
+    ).clearContent().clearFormat();
 
   }
 
@@ -1027,8 +1231,9 @@ function generateNewP1Report_(){
  *
  * WHY
  * GAS는 전역 함수명이 파일 간 중복되면 나중에 로드된 정의가 조용히
- * 덮어쓰므로, onEdit() 자체는 30_ACQReport.js 하나에만 두고 시트
- * 이름으로 분기해서 이 함수를 호출한다 (여기서 onEdit()을 재정의하지 않음).
+ * 덮어쓰므로, 트리거 핸들러(handleReportGenerateEdit()) 자체는
+ * 30_ACQReport.js 하나에만 두고 시트 이름으로 분기해서 이 함수를 호출한다
+ * (여기서 핸들러를 재정의하지 않음).
  * ==========================================================
  */
 function handleNewP1ReportGenerateEdit_(e, sheet){
@@ -1046,12 +1251,84 @@ function handleNewP1ReportGenerateEdit_(e, sheet){
 
   try {
 
-    generateNewP1Report_();
+    refreshAndGenerateNewP1Report_();
 
   } finally {
 
     sheet.getRange(row, col).setValue(false);
 
   }
+
+}
+
+
+/**
+ * ==========================================================
+ * Manual-run public wrapper (Apps Script 편집기 Run 드롭다운 노출용)
+ *
+ * WHY (2026-08-06 — 비동기 트리거 방식 → 동기 방식으로 재전환)
+ * 30_ACQReport.js의 runACQReportGenerateTail()과 동일 이유 — Apps Script
+ * 시간 기반 1회성 트리거의 예측 불가능한 디스패치 지연(실측 1~2분+)이
+ * DealTracker_Engine 캐시 도입 이후의 빠른 실행 시간(대부분 수 초~1분)보다
+ * 체감상 더 나빠서, handleNewP1ReportGenerateEdit_() 안에서 다시 동기
+ * 호출하도록 전환(사용자 확정). 이 함수는 트리거 핸들러가 아니라 편집기
+ * 수동 테스트 진입점으로만 남김.
+ * ==========================================================
+ */
+function runNewP1ReportGenerateTail(){
+
+  refreshAndGenerateNewP1Report_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh And Generate NewP1 Report (Full Authorization 전용)
+ *
+ * WHY (2026-08-06 — Revenue 전용으로 축소, 성능 버그 수정)
+ * 30_ACQReport.js의 refreshAndGenerateACQReport_()와 동일한 이유/변경.
+ * Ad Spend Cache 전체 갱신 + NewP1_Engine 전체 재계산(refreshNewP1Engine_(),
+ * Leads_OPS 3만5천+행 전체 스캔)을 매번 돌렸더니 실측 69초가 걸려 회의 중
+ * 활용이 불가능했음(사용자 확인). New P1/SAL/IC Booked/IC Complete는
+ * Leads/MTA Import 시에만 바뀌고 이미 백그라운드 파이프라인이 최신
+ * 유지 중이라 Generate 시점 재스캔이 무의미함. Won/Revenue(Deal
+ * Tracker)만 Import와 무관하게 언제든 바뀔 수 있어 재조회 가치가 있음 —
+ * refreshNewP1EngineRevenueOnly_()(이 파일, Leads_OPS 스캔 없이 Deal
+ * Tracker Won/Revenue만 병합)로 교체. Spent는 이번 범위에서 제외 — 기존
+ * 백그라운드 파이프라인(refreshCampaignSpend_())에 계속 맡김.
+ *
+ * refresh 실패해도 Logger에만 기록하고 report 생성은 계속 진행
+ * (08_PipelineAsync.js refreshCampaignSpend_()와 동일한 비필수 처리 원칙).
+ *
+ * 2026-08-06 추가: refreshNewP1EngineRevenueOnly_() 전에
+ * appendNewDealTrackerRows_()(90_TargetEngine.js, 30_ACQReport.js
+ * refreshAndGenerateACQReport_()와 동일 이유)를 먼저 호출 — DealTracker_Engine
+ * 증분 동기화.
+ * ==========================================================
+ */
+function refreshAndGenerateNewP1Report_(){
+
+  try {
+
+    appendNewDealTrackerRows_();
+
+  } catch(err){
+
+    Logger.log(CONFIG.LOG.PREFIX + " refreshAndGenerateNewP1Report_: appendNewDealTrackerRows_ failed - " + err);
+
+  }
+
+  try {
+
+    refreshNewP1EngineRevenueOnly_();
+
+  } catch(err){
+
+    Logger.log(CONFIG.LOG.PREFIX + " refreshAndGenerateNewP1Report_: refreshNewP1EngineRevenueOnly_ failed - " + err);
+
+  }
+
+  generateNewP1Report_();
 
 }

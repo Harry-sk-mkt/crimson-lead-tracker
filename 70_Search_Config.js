@@ -15,9 +15,14 @@
  * (Apps Script 전역 네임스페이스 — 같은 이름 재정의 시 충돌 발생).
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-06)
+ * - HIDDEN_COLUMN_NAMES 추가(사용자 요청) — "Campaign"(Naver Search Ad API
+ *   자동 매칭된 실제 네이버 캠페인 이름, GROUP_3A_AUTO) 컬럼을 기본 숨김
+ *   처리. HIDE_COLUMN_COUNT(선행 N개 연속 숨김)와 달리 HEADER 중간에 있는
+ *   컬럼이라 이름 기준으로 별도 처리(75_Search_Styles.js 참고).
  * v1.4.0 (2026-08-05)
  * - `GROUP_3_MANUAL`에서 "Campaign"/"Impressions"/"Link clicks" 분리 →
  *   신규 `GROUP_3A_AUTO`(Naver Search Ad API 자동 매칭, 사용자 요청).
@@ -300,6 +305,18 @@ const SEARCH = {
   */
 
   HIDE_COLUMN_COUNT: 3,
+
+  /*
+  ==========================================================
+  HIDDEN COLUMN NAMES (2026-08-06 사용자 요청)
+
+  HIDE_COLUMN_COUNT(선행 N개 연속 숨김)와 별개로, HEADER 중간에 있는
+  특정 컬럼을 이름 기준으로 숨김 처리 — 75_Search_Styles.js
+  applySearchOPSStyle()에서 참조.
+  ==========================================================
+  */
+
+  HIDDEN_COLUMN_NAMES: ["Campaign"],
 
   /*
   ==========================================================

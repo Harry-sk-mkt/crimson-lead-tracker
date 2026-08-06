@@ -10,9 +10,14 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-06)
+ * - appendNewMTA()의 appendSheetRecords() 호출에 numberColumns=["Revenue"] 추가 —
+ *   Revenue가 날짜로 자동 오인식되는 것 방지(14_MasterWriter.js writeMTAMaster()에
+ *   먼저 적용된 것과 동일 보호를 증분 append 경로에도 적용, 이 경로가 안 빠지면
+ *   매주 도는 실제 Import에는 보호가 전혀 안 걸리는 상태였음).
  * v1.7.0 (2026-08-05)
  * - **성능 개선(docs/OpenItems.md #18)**: `appendNewLeads()`/`appendNewMTA()`가
  *   `readLeadRaw()`/`readMTARaw()`(Raw 전체 스캔) 대신 신규
@@ -251,7 +256,9 @@ function appendNewMTA(silent){
 
   appendSheetRecords(
     CONFIG.SHEETS.MTA_MASTER,
-    newMaster
+    newMaster,
+    [],              // textColumns 없음 (Master는 Date 객체 그대로 유지)
+    ["Revenue"]       // ← 숫자 서식 강제 (날짜로 자동 오인식 방지)
   );
 
   sortSheetByDate(

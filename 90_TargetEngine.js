@@ -22,9 +22,27 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.23.0
+ * v1.25.0
  *
  * Change Log
+ * v1.25.0 (2026-08-06)
+ * - 신규 `computeWeeksInMonthCountsForFYRange_()` — `generateCalendarWeeksForFY_()`/
+ *   `computeWeeksInMonthCounts_()`를 Start~End FY 여러 해에 걸쳐 합산(사용자
+ *   요청 — ACQ_REP S/T/V 컬럼 "On Track" 하이라이트, 30_ACQReport.js 참고).
+ * v1.24.1 (2026-08-06)
+ * - runRebuildDealTrackerEngine() 추가 — rebuildDealTrackerEngine_()가
+ *   "_"로 끝나 Run 드롭다운에 안 뜨는 문제(DealTracker_Engine 최초 구축은
+ *   사용자가 편집기에서 직접 Run 해야 함). 안 하면 appendNewDealTrackerRows_()
+ *   가 체크포인트 0부터 시작해 Deal Tracker 전체를 신규로 처리하게 됨.
+ * v1.24.0 (2026-08-06)
+ * - **성능 수정 — readDealTrackerRawRows_()가 외부 스프레드시트를 매번
+ *   두 번 열던 버그**: openTargetExternalSheetByGid_() 내부에서 openById()
+ *   1번 + 바로 아래 getSpreadsheetTimeZone()용으로 또 openById() 1번,
+ *   같은 Deal Tracker를 중복으로 열고 있었음(ACQ_REP Generate 실측 51초
+ *   중 상당 부분으로 추정, 사용자 확인). 신규 findSheetByGid_(file, gid)로
+ *   gid 탐색 로직을 분리해 openById() 결과를 재사용하도록 수정 —
+ *   openTargetExternalSheetByGid_()는 기존 시그니처 그대로 이 헬퍼를 감싸는
+ *   래퍼로 유지(다른 호출부 영향 없음).
  * v1.23.0 (2026-07-30)
  * - ACQ_REP/NewP1_REP에 Target 컬럼을 붙이기 위한 공용 조회 함수 신규
  *   (docs/exec-plans/active/2026-07-30-acq-newp1-target-columns.md 참고,
@@ -640,6 +658,67 @@ function computeWeeksInMonthCounts_(weeks){
 
 /**
  * ==========================================================
+ * Compute Weeks In Month Counts For FY Range (2026-08-06 추가)
+ *
+ * WHY
+ * ACQ_REP Generate는 Start FY~End FY 여러 FY에 걸쳐 리포트를 생성할 수
+ * 있어(generateCalendarWeeksForFY_()는 FY 하나만 처리), Start~End 구간의
+ * 모든 FY를 순회하며 computeWeeksInMonthCounts_() 결과를 하나로 합친다
+ * (30_ACQReport.js "On Track" 하이라이트 — Revenue/New P1 Target을 그
+ * 달의 주 수로 나눈 주간 페이스 기준).
+ *
+ * INPUT
+ * startFY, endFY : number  (2자리, 예: 26)
+ *
+ * OUTPUT
+ * { "fy|MONTH": weeksCount }
+ *
+ * TEST
+ * testComputeWeeksInMonthCountsForFYRange 참고
+ * ==========================================================
+ */
+function computeWeeksInMonthCountsForFYRange_(startFY, endFY){
+
+  const counts = {};
+
+  for(let fy = startFY; fy <= endFY; fy++){
+
+    const weeks = generateCalendarWeeksForFY_(fy);
+    const fyCounts = computeWeeksInMonthCounts_(weeks);
+
+    Object.keys(fyCounts).forEach(function(key){
+      counts[key] = fyCounts[key];
+    });
+
+  }
+
+  return counts;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeWeeksInMonthCountsForFYRange_()
+ * ==========================================================
+ */
+function testComputeWeeksInMonthCountsForFYRange(){
+
+  const counts = computeWeeksInMonthCountsForFYRange_(26, 27);
+
+  const pass =
+    counts["26|AUG"] >= 4 && counts["26|AUG"] <= 5 &&
+    counts["27|AUG"] >= 4 && counts["27|AUG"] <= 5 &&
+    counts["26|JUL"] >= 4 && counts["26|JUL"] <= 5;
+
+  Logger.log("Result: " + JSON.stringify(counts));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * TEST — computeWeeksInMonthCounts_()
  * ==========================================================
  */
@@ -906,6 +985,33 @@ function testParseCurrencyValue(){
 function openTargetExternalSheetByGid_(spreadsheetId, gid){
 
   const file = SpreadsheetApp.openById(spreadsheetId);
+
+  return findSheetByGid_(file, gid);
+
+}
+
+
+/**
+ * ==========================================================
+ * Find Sheet By Gid (이미 열려 있는 Spreadsheet 객체 재사용)
+ *
+ * WHY (2026-08-06 추가)
+ * openTargetExternalSheetByGid_()에서 gid 탐색 루프만 떼어냄 —
+ * readDealTrackerRawRows_()가 타임존 조회(getSpreadsheetTimeZone())도
+ * 같은 외부 스프레드시트에서 해야 해서, openById()를 두 번 하지 않고
+ * 이미 연 file 객체를 여기 재사용하기 위함(외부 openById()는 비용이 큰
+ * 호출 — ACQ_REP Generate 실측 51초 중 상당 부분이 이 중복 open으로 추정).
+ *
+ * INPUT
+ * file : Spreadsheet  SpreadsheetApp.openById()의 결과
+ * gid  : number
+ *
+ * OUTPUT
+ * Sheet | null
+ * ==========================================================
+ */
+function findSheetByGid_(file, gid){
+
   const sheets = file.getSheets();
 
   for(let i = 0; i < sheets.length; i++){
@@ -1051,14 +1157,141 @@ function testNormalizeExternalCalendarDate_(){
  */
 function readDealTrackerRawRows_(){
 
+  return readDealTrackerEngineRows_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Transform Deal Tracker Row (순수 함수 — 원본 row → 정규화된 객체)
+ *
+ * WHY
+ * readDealTrackerRawRowsFromExternal_()(전체 재구축)와
+ * appendNewDealTrackerRows_()(증분 동기화) 둘 다 행 하나를 같은 규칙으로
+ * 변환해야 해서 공용으로 뺌. Close Date가 유효한 Date가 아니거나 FY 파생이
+ * 안 되면 null 반환(그 행은 제외).
+ *
+ * INPUT
+ * row : Array  Deal Tracker 시트의 원본 행(getValues() 결과 한 줄)
+ * cols : Object  CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS
+ * sourceTimeZone : string  Deal Tracker 스프레드시트 자체 타임존
+ *
+ * OUTPUT
+ * {closeDate, closeFY, createdDate, createdFY, revenue, leadSource,
+ *  sourceCategory, leadSourceDetail, businessSegment} | null
+ *
+ * TEST
+ * testTransformDealTrackerRow 참고
+ * ==========================================================
+ */
+function transformDealTrackerRow_(row, cols, sourceTimeZone){
+
+  const closeDateRaw = row[cols.CLOSE_DATE - 1];
+
+  if(!(closeDateRaw instanceof Date) || isNaN(closeDateRaw.getTime())) return null;
+
+  const closeDate = normalizeExternalCalendarDate_(closeDateRaw, sourceTimeZone);
+
+  const closeFY = Number(getFiscalYear(closeDate).replace("FY", ""));
+
+  if(!closeFY) return null;
+
+  const createdDateRaw = row[cols.CREATED_DATE - 1];
+  const hasValidCreatedDate = createdDateRaw instanceof Date && !isNaN(createdDateRaw.getTime());
+  const createdDate = hasValidCreatedDate
+    ? normalizeExternalCalendarDate_(createdDateRaw, sourceTimeZone)
+    : null;
+
+  const createdFY = createdDate
+    ? Number(getFiscalYear(createdDate).replace("FY", ""))
+    : null;
+
+  return {
+    closeDate: closeDate,
+    closeFY: closeFY,
+    createdDate: createdDate,
+    createdFY: createdFY || null,
+    revenue: parseCurrencyValue_(row[cols.REVENUE - 1]),
+    leadSource: String(row[cols.LEAD_SOURCE - 1] || "").trim().toLowerCase(),
+    sourceCategory: String(row[cols.SOURCE_CATEGORY - 1] || "").trim(),
+    leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim(),
+    businessSegment: String(row[cols.SEGMENT - 1] || "").trim()
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — transformDealTrackerRow_()
+ * ==========================================================
+ */
+function testTransformDealTrackerRow(){
+
+  const cols = {
+    CLOSE_DATE: 1, CREATED_DATE: 2, REVENUE: 3,
+    LEAD_SOURCE: 4, SOURCE_CATEGORY: 5, SEGMENT: 6, LEAD_SOURCE_DETAIL: 7
+  };
+
+  const validRow = [
+    new Date(2026, 6, 15), new Date(2026, 5, 1), "$1,000",
+    "Paid Search", "Search Ads", "Search", "WB-2026-06-KOR-MOFU-Core Test"
+  ];
+
+  const result = transformDealTrackerRow_(validRow, cols, "Asia/Seoul");
+
+  const noCloseDateRow = [
+    "", new Date(2026, 5, 1), "$1,000", "Paid Search", "Search Ads", "Search", ""
+  ];
+
+  const noCreatedDateRow = [
+    new Date(2026, 6, 15), "", "$500", "Referral", "", "Referral", ""
+  ];
+
+  const pass =
+    result !== null &&
+    result.closeFY === 26 &&
+    result.createdFY === 26 &&
+    result.revenue === 1000 &&
+    result.leadSource === "paid search" &&
+    result.businessSegment === "Search" &&
+    transformDealTrackerRow_(noCloseDateRow, cols, "Asia/Seoul") === null &&
+    transformDealTrackerRow_(noCreatedDateRow, cols, "Asia/Seoul").createdDate === null &&
+    transformDealTrackerRow_(noCreatedDateRow, cols, "Asia/Seoul").createdFY === null;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Deal Tracker Raw Rows From External (전체 재구축 전용, 무거움)
+ *
+ * WHY
+ * 예전 readDealTrackerRawRows_() 본문 그대로 — 외부 Deal Tracker
+ * 스프레드시트를 openById()로 열어 전체를 스캔한다. 이제는
+ * rebuildDealTrackerEngine_()(백그라운드 파이프라인 전용, 전체 재구축으로
+ * 기존 행 수정/재분류까지 반영)에서만 호출됨 — 평소 조회는
+ * readDealTrackerRawRows_() → readDealTrackerEngineRows_()(내부 캐시,
+ * 빠름)를 사용.
+ *
+ * @return {Array<{closeFY:number, createdDate:Date|null, createdFY:number|null, revenue:number, leadSource:string, sourceCategory:string, leadSourceDetail:string, businessSegment:string}>}
+ * ==========================================================
+ */
+function readDealTrackerRawRowsFromExternal_(){
+
   const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
 
-  const sheet = openTargetExternalSheetByGid_(config.SPREADSHEET_ID, config.SHEET_GID);
+  const file = SpreadsheetApp.openById(config.SPREADSHEET_ID);
+  const sheet = findSheetByGid_(file, config.SHEET_GID);
 
   if(!sheet) return [];
 
-  // 타임존 보정 (2026-07-28 실측 버그 발견) — 아래 normalizeExternalCalendarDate_() WHY 참고.
-  const sourceTimeZone = SpreadsheetApp.openById(config.SPREADSHEET_ID).getSpreadsheetTimeZone();
+  // 타임존 보정 (2026-07-28 실측 버그 발견) — normalizeExternalCalendarDate_() WHY 참고.
+  const sourceTimeZone = file.getSpreadsheetTimeZone();
 
   const cols = config.COLUMNS;
   const values = sheet.getDataRange().getValues();
@@ -1067,43 +1300,284 @@ function readDealTrackerRawRows_(){
 
   for(let r = 1; r < values.length; r++){
 
-    const row = values[r];
+    const transformed = transformDealTrackerRow_(values[r], cols, sourceTimeZone);
 
-    const closeDateRaw = row[cols.CLOSE_DATE - 1];
-
-    if(!(closeDateRaw instanceof Date) || isNaN(closeDateRaw.getTime())) continue;
-
-    const closeDate = normalizeExternalCalendarDate_(closeDateRaw, sourceTimeZone);
-
-    const closeFY = Number(getFiscalYear(closeDate).replace("FY", ""));
-
-    if(!closeFY) continue;
-
-    const createdDateRaw = row[cols.CREATED_DATE - 1];
-    const hasValidCreatedDate = createdDateRaw instanceof Date && !isNaN(createdDateRaw.getTime());
-    const createdDate = hasValidCreatedDate
-      ? normalizeExternalCalendarDate_(createdDateRaw, sourceTimeZone)
-      : null;
-
-    const createdFY = createdDate
-      ? Number(getFiscalYear(createdDate).replace("FY", ""))
-      : null;
-
-    rows.push({
-      closeDate: closeDate,
-      closeFY: closeFY,
-      createdDate: createdDate,
-      createdFY: createdFY || null,
-      revenue: parseCurrencyValue_(row[cols.REVENUE - 1]),
-      leadSource: String(row[cols.LEAD_SOURCE - 1] || "").trim().toLowerCase(),
-      sourceCategory: String(row[cols.SOURCE_CATEGORY - 1] || "").trim(),
-      leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim(),
-      businessSegment: String(row[cols.SEGMENT - 1] || "").trim()
-    });
+    if(transformed) rows.push(transformed);
 
   }
 
   return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * DealTracker_Engine — 헤더/읽기/쓰기/증분 동기화/전체 재구축
+ *
+ * WHY (2026-08-06, 사용자 요청 — "딜 트랙커를 직접 불러오지말고 엔진을
+ * 하나 만들자")
+ * readDealTrackerRawRowsFromExternal_()가 매번 외부 스프레드시트를 열고
+ * 전체를 스캔+타임존 변환해서 ACQ_REP/NewP1_REP Generate가 느렸음(실측
+ * 37초). Deal Tracker는 일주일에 많아야 신규 딜 5건 정도만 늘어나고(사용자
+ * 확인), 기존 행이 가끔 수동으로 수정되기도 한다(2026-07-28 전체 딜 Segment
+ * 재분류 실사례) — 그래서 appendNewMTA()/appendNewLeads()와 동일한 이중
+ * 구조로 처리:
+ *   - appendNewDealTrackerRows_() : 체크포인트 이후 신규 행만 증분 동기화
+ *     (Generate 클릭 시점 포함, 빠름 — 신규 딜 몇 건 수준만 처리).
+ *   - rebuildDealTrackerEngine_() : 전체 재구축, 체크포인트 리셋(백그라운드
+ *     파이프라인에 배선 — 08_PipelineAsync.js — 기존 행 수정/재분류까지
+ *     반영하는 정합성 보정 역할, rebuildMTAMaster()와 동일한 위치).
+ * readDealTrackerRawRows_()는 이제 이 캐시(readDealTrackerEngineRows_())만
+ * 읽으므로 기존 8개+ 호출부(Events/BOFU/Content Engine, ACQ/NewP1 등) 전부
+ * 코드 변경 없이 자동으로 빨라짐.
+ * ==========================================================
+ */
+const DEAL_TRACKER_ENGINE_HEADERS = [
+  "Close Date", "Close FY", "Created Date", "Created FY",
+  "Revenue", "Lead Source", "Source Category", "Lead Source Detail", "Business Segment"
+];
+
+
+function dealTrackerRowToArray_(row){
+
+  return [
+    row.closeDate, row.closeFY, row.createdDate, row.createdFY,
+    row.revenue, row.leadSource, row.sourceCategory, row.leadSourceDetail, row.businessSegment
+  ];
+
+}
+
+
+function arrayToDealTrackerRow_(arr){
+
+  return {
+    closeDate: arr[0],
+    closeFY: arr[1],
+    createdDate: (arr[2] instanceof Date && !isNaN(arr[2].getTime())) ? arr[2] : null,
+    createdFY: (arr[3] === "" ? null : arr[3]),
+    revenue: arr[4],
+    leadSource: arr[5],
+    sourceCategory: arr[6],
+    leadSourceDetail: arr[7],
+    businessSegment: arr[8]
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * Write Deal Tracker Engine (전체 덮어쓰기 — rebuildDealTrackerEngine_() 전용)
+ * ==========================================================
+ */
+function writeDealTrackerEngine_(rows){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(CONFIG.TARGET.DEAL_TRACKER_ENGINE_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(CONFIG.TARGET.DEAL_TRACKER_ENGINE_SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, DEAL_TRACKER_ENGINE_HEADERS.length)
+    .setValues([DEAL_TRACKER_ENGINE_HEADERS]);
+
+  if(rows.length > 0){
+
+    sheet.getRange(2, 1, rows.length, DEAL_TRACKER_ENGINE_HEADERS.length)
+      .setValues(rows.map(dealTrackerRowToArray_));
+
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
+ * Append Deal Tracker Engine Rows (증분 추가 — appendNewDealTrackerRows_() 전용)
+ * ==========================================================
+ */
+function appendDealTrackerEngineRows_(rows){
+
+  if(rows.length === 0) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(CONFIG.TARGET.DEAL_TRACKER_ENGINE_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(CONFIG.TARGET.DEAL_TRACKER_ENGINE_SHEET);
+    sheet.getRange(1, 1, 1, DEAL_TRACKER_ENGINE_HEADERS.length)
+      .setValues([DEAL_TRACKER_ENGINE_HEADERS]);
+    sheet.hideSheet();
+  }
+
+  const startRow = Math.max(sheet.getLastRow(), 1) + 1;
+
+  sheet.getRange(startRow, 1, rows.length, DEAL_TRACKER_ENGINE_HEADERS.length)
+    .setValues(rows.map(dealTrackerRowToArray_));
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Deal Tracker Engine Rows (내부 캐시 읽기 — 빠름, 외부 호출 없음)
+ * ==========================================================
+ */
+function readDealTrackerEngineRows_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.TARGET.DEAL_TRACKER_ENGINE_SHEET);
+
+  if(!sheet) return [];
+
+  const values = sheet.getDataRange().getValues();
+
+  if(values.length <= 1) return [];
+
+  const rows = [];
+
+  for(let r = 1; r < values.length; r++){
+    rows.push(arrayToDealTrackerRow_(values[r]));
+  }
+
+  return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * Rebuild Deal Tracker Engine (전체 재구축 — 백그라운드 파이프라인 전용)
+ *
+ * WHY
+ * 기존 행 수정/재분류(2026-07-28 전체 Segment 재분류 실사례)는
+ * appendNewDealTrackerRows_()의 증분 동기화로는 못 잡는다 — 이 함수가
+ * 그 정합성 보정 역할(rebuildMTAMaster()와 동일 위치, 08_PipelineAsync.js
+ * 배선 참고). 전체를 다시 읽어 캐시를 통째로 교체하고 체크포인트도
+ * 현재 Deal Tracker 데이터 행 개수로 리셋.
+ * ==========================================================
+ */
+function rebuildDealTrackerEngine_(){
+
+  const start = new Date();
+
+  Logger.log(CONFIG.LOG.PREFIX + " DealTracker Engine Rebuild Started");
+
+  const rows = readDealTrackerRawRowsFromExternal_();
+
+  writeDealTrackerEngine_(rows);
+
+  const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
+  const file = SpreadsheetApp.openById(config.SPREADSHEET_ID);
+  const sheet = findSheetByGid_(file, config.SHEET_GID);
+  const totalDataRows = sheet ? Math.max(0, sheet.getLastRow() - 1) : 0;
+
+  PropertiesService.getScriptProperties()
+    .setProperty(CONFIG.PROPERTIES.DEAL_TRACKER_LAST_ROW, String(totalDataRows));
+
+  const seconds = ((new Date() - start) / 1000).toFixed(2);
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " DealTracker Engine Rebuild Completed : " +
+    rows.length + " rows (" + seconds + "s)"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Append New Deal Tracker Rows (증분 동기화 — Generate 클릭 시점 포함)
+ *
+ * WHY
+ * 체크포인트(PROPERTIES.DEAL_TRACKER_LAST_ROW) 이후 신규 행만 읽어서
+ * DealTracker_Engine에 추가 — appendNewMTA()/appendNewLeads()
+ * (07_IncrementalMasterBuild.js)와 동일한 관례(0-based 데이터 행 개수를
+ * 체크포인트로 저장). 신규 행이 없으면 외부 시트를 열어 getLastRow()만
+ * 확인하고 즉시 반환(전체 스캔 없음).
+ * ==========================================================
+ */
+function appendNewDealTrackerRows_(){
+
+  const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
+
+  const file = SpreadsheetApp.openById(config.SPREADSHEET_ID);
+  const sheet = findSheetByGid_(file, config.SHEET_GID);
+
+  if(!sheet) return;
+
+  const totalDataRows = Math.max(0, sheet.getLastRow() - 1);
+
+  const lastProcessed = Number(
+    PropertiesService.getScriptProperties().getProperty(CONFIG.PROPERTIES.DEAL_TRACKER_LAST_ROW)
+  ) || 0;
+
+  if(totalDataRows <= lastProcessed){
+
+    Logger.log(CONFIG.LOG.PREFIX + " DealTracker Engine : 0 new rows.");
+    return;
+
+  }
+
+  const sourceTimeZone = file.getSpreadsheetTimeZone();
+
+  const startRow = lastProcessed + 2;   // 데이터 1행 = 시트 2행(헤더 1행)
+  const numRows = totalDataRows - lastProcessed;
+  const lastCol = sheet.getLastColumn();
+
+  const values = sheet.getRange(startRow, 1, numRows, lastCol).getValues();
+
+  const cols = config.COLUMNS;
+  const newRows = [];
+
+  values.forEach(function(row){
+
+    const transformed = transformDealTrackerRow_(row, cols, sourceTimeZone);
+
+    if(transformed) newRows.push(transformed);
+
+  });
+
+  appendDealTrackerEngineRows_(newRows);
+
+  PropertiesService.getScriptProperties()
+    .setProperty(CONFIG.PROPERTIES.DEAL_TRACKER_LAST_ROW, String(totalDataRows));
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " DealTracker Engine : " + newRows.length +
+    " new rows appended (of " + numRows + " new sheet rows scanned)."
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Manual-run public wrapper (Apps Script 편집기 Run 드롭다운 노출용)
+ *
+ * WHY
+ * rebuildDealTrackerEngine_()는 이름 끝에 "_"가 있어 Run 드롭다운에
+ * 노출되지 않는다 — DealTracker_Engine 최초 구축(사용자가 1회 수동
+ * 실행 필요, 안 하면 appendNewDealTrackerRows_()가 체크포인트 0부터
+ * 시작해 Deal Tracker 전체를 "신규"로 인식) 및 이후 수동 재구축용
+ * 공개 진입점.
+ * ==========================================================
+ */
+function runRebuildDealTrackerEngine(){
+
+  rebuildDealTrackerEngine_();
 
 }
 

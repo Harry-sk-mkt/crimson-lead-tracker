@@ -22,9 +22,29 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.11.0
+ * v1.12.1
  *
  * Change Log
+ * v1.12.1 (2026-08-06)
+ * - **버그 수정 — schedulePipelineTail_() 중복 예약으로 인한 "유령 실행"**:
+ *   같은 handlerName으로 짧은 시간 내 여러 번 호출되면(예: Generate
+ *   체크박스 빠른 반복 클릭) 트리거가 계속 쌓이다가 몇 분 뒤 뜬금없이
+ *   재실행되는 문제 실측(사용자 발견 — ACQ_REP Generate 반복 테스트 중
+ *   클릭 안 했는데 2분 뒤 재실행됨). 새 트리거 생성 전에
+ *   deleteTriggersByHandlerName_()로 기존 트리거를 먼저 지우도록 수정 —
+ *   짧은 시간 내 반복 호출은 마지막 1건만 예약됨(디바운스 효과).
+ *   runLeadsPipelineTail()/runMTAPipelineTail() 예약도 이 함수를 공유하므로
+ *   동일하게 안전해짐.
+ * v1.12.0 (2026-08-06)
+ * - 신규 `rebuildDealTrackerEngine_()`(90_TargetEngine.js) 배선 — 두
+ *   파이프라인 테일 모두에 추가. DealTracker_Engine(내부 캐시) 전체
+ *   재구축을 백그라운드에서 주기적으로 수행해, ACQ_REP/NewP1_REP Generate
+ *   시점의 증분 동기화(appendNewDealTrackerRows_())로는 못 잡는 기존 행
+ *   수정/재분류까지 반영(사용자 요청 — "딜 트랙커를 직접 불러오지말고
+ *   엔진을 하나 만들자"). `runLeadsPipelineTail()`엔 `buildLeadsOPS` 다음
+ *   (`refreshACQSummary_`가 이 캐시를 읽으므로 그 전에 배치), `runMTAPipelineTail()`
+ *   엔 `refreshCampaignSpend_` 다음(`syncMTAFunnelToOPS_`가 내부적으로
+ *   `refreshACQSummary_` 등을 호출하므로 그 전에 배치)에 추가.
  * v1.11.0 (2026-08-05)
  * - 신규 `refreshNaverSearchCampaignStats_()` — `refreshNaverSearchAdCampaignStatsCache_()`
  *   (AD_003_NaverSearch.js, Search_OPS Campaign/Impressions/Link clicks 자동화용
@@ -368,7 +388,26 @@ function deleteTriggersByHandlerName_(handlerName){
 }
 
 
+/**
+ * ==========================================================
+ * Schedule Pipeline Tail (설치형 1회성 트리거 예약)
+ *
+ * WHY (2026-08-06 버그 수정 — 중복 예약으로 인한 "유령 실행")
+ * 예전엔 새 트리거를 조건 없이 그냥 create()만 해서, 같은 handlerName으로
+ * 짧은 시간 안에 여러 번 호출되면(예: Generate 체크박스를 빠르게 여러 번
+ * 클릭) 트리거가 쌓였음. 각 트리거는 실행될 때 자기 자신을
+ * deleteTriggersByHandlerName_()로 지우지만, 그 시점에 아직 생성되지 않은
+ * (나중 호출이 만든) 트리거는 못 잡아서 큐에 남았다가 Apps Script 부하로
+ * 지연되며 몇 분 뒤 뜬금없이 재실행되는 문제가 실측됨(ACQ_REP Generate
+ * 반복 클릭 테스트 중 사용자 발견 — Duration/Cloud Logs 확인 결과 정상
+ * 실행이었으나 예상치 못한 시점에 재발동). 새 트리거를 만들기 전에 같은
+ * handlerName의 기존 트리거를 먼저 지워서, 짧은 시간 내 반복 호출은
+ * "가장 마지막 호출 1건만 예약"되도록 함(디바운스와 동일한 효과).
+ * ==========================================================
+ */
 function schedulePipelineTail_(handlerName){
+
+  deleteTriggersByHandlerName_(handlerName);
 
   ScriptApp.newTrigger(handlerName)
     .timeBased()
@@ -846,6 +885,10 @@ function runLeadsPipelineTail(){
       buildLeadsOPS(true);
     }, ["leadsOps"]);
 
+    advancePipelineStage_(
+      type, state, "rebuildDealTrackerEngine_", rebuildDealTrackerEngine_
+    );
+
     advancePipelineStage_(type, state, "refreshACQSummary_", refreshACQSummary_);
     advancePipelineStage_(type, state, "refreshNewP1Engine_", refreshNewP1Engine_);
     advancePipelineStage_(type, state, "refreshEventsEngine_", refreshEventsEngine_);
@@ -952,6 +995,10 @@ function runMTAPipelineTail(){
 
     advancePipelineStage_(
       type, state, "refreshCampaignSpend_", refreshCampaignSpend_, ["campaignSpend"]
+    );
+
+    advancePipelineStage_(
+      type, state, "rebuildDealTrackerEngine_", rebuildDealTrackerEngine_
     );
 
     // Leads_OPS 동기화 + ACQ/NewP1/Events/BOFU/Search/Content Engine 캐시 refresh가

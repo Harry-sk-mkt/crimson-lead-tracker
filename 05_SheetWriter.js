@@ -10,9 +10,14 @@
  * 00 Import / 10 Master Build (Shared Component)
  *
  * Version
- * v4.0.0
+ * v4.1.0
  *
  * Change Log
+ * v4.1.0 (2026-08-06)
+ * - writeSheetRecords()/appendSheetRecords() 둘 다 numberColumns 파라미터 지원
+ *   (신규, optional) — 지정 컬럼에 setNumberFormat("0.00") 강제해 숫자값(예: Revenue)이
+ *   Google Sheets에 의해 날짜로 자동 오인식되는 것 방지. appendSheetRecords()는
+ *   이미 지원 중이었고, writeSheetRecords()에 동일 파라미터를 추가.
  * v4.0.0 (2026-07-21)
  * - Added appendSheetRecords(): 기존 데이터 유지, 뒤에 이어쓰기.
  * - writeSheetRecords()는 기존 그대로 (Full Overwrite, Rebuild 전용).
@@ -28,15 +33,18 @@
  * @param {string} sheetName
  * @param {Object[]} records
  * @param {string[]} [textColumns]
+ * @param {string[]} [numberColumns]
  *
  */
 function writeSheetRecords(
   sheetName,
   records,
-  textColumns
+  textColumns,
+  numberColumns
 ){
 
   textColumns = textColumns || [];
+  numberColumns = numberColumns || [];
 
   const ss =
     CONFIG.SPREADSHEET;
@@ -122,6 +130,24 @@ function writeSheetRecords(
 
   });
 
+  numberColumns.forEach(function(columnName){
+
+    const colIndex =
+      headers.indexOf(columnName);
+
+    if(colIndex === -1){
+      return;
+    }
+
+    sheet.getRange(
+      CONFIG.ROWS.DATA_START,
+      colIndex + 1,
+      values.length,
+      1
+    ).setNumberFormat("0.00");
+
+  });
+
   sheet.getRange(
 
     CONFIG.ROWS.DATA_START,
@@ -165,10 +191,12 @@ function writeSheetRecords(
 function appendSheetRecords(
   sheetName,
   records,
-  textColumns
+  textColumns,
+  numberColumns   // ← 신규 파라미터
 ){
 
   textColumns = textColumns || [];
+  numberColumns = numberColumns || [];
 
   if(records.length === 0){
 
@@ -267,6 +295,20 @@ function appendSheetRecords(
       records.length,
       1
     ).setNumberFormat("@");
+
+  });
+
+  //----------------------------------------------------------
+  // 숫자 서식 강제 (신규 — 날짜로 자동 오인식되는 것 방지)
+  //----------------------------------------------------------
+
+  numberColumns.forEach(function(columnName){
+
+    const colIndex = headers.indexOf(columnName);
+    if(colIndex === -1) return;
+
+    sheet.getRange(startRow, colIndex + 1, records.length, 1)
+      .setNumberFormat("0.00");
 
   });
 

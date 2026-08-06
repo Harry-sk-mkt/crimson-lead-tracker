@@ -12,9 +12,30 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-08-06)
+ * - **성능 개선 + F/J/S/T/V 하이라이트 재설계**(사용자 요청):
+ *   (1) 배경색 적용을 "이전 실행 초기화 2번 + 행별 개별 setBackground()
+ *       반복"에서 "JS 배열로 미리 계산 후 setBackgrounds() 3번"으로 전환
+ *       (신규 buildACQReportBackgrounds_()) — 91행 기준 십수 초 걸리던
+ *       걸 수 초 이내로 단축 예상.
+ *   (2) F(All P1%)/J(New P1%): 중앙값 강조(highlightAboveMedian_) →
+ *       세그먼트별 상위 25%(0 제외) 조건부 서식(신규
+ *       applyACQSegmentPercentileHighlightRules_()/
+ *       buildSegmentPercentileHighlightFormula_())로 교체. H(New Leads%)는
+ *       기존 중앙값 강조 그대로 유지.
+ *   (3) S(Revenue Target)/T(Revenue Target%)/V(New P1 Target%): 고정 100%
+ *       기준(highlightAtOrAboveThreshold_) → "On Track"(Target÷그 달의
+ *       주 수 페이스 대비 실적, 90_TargetEngine.js
+ *       computeWeeksInMonthCountsForFYRange_()) 기준으로 교체 —
+ *       generateACQReport_()가 onTrackRows로 계산해서
+ *       applyACQReportStyles_()에 새 3번째 인자로 전달.
+ *   (4) Revenue(N) 서식을 `"#,##0"` → `"$#,##0.00"`로 변경(사용자 요청).
+ *   색상은 전부 #01ef18(Events_OPS TOP25_HIGLIGHT와 동일 색). 헤더 Note
+ *   (S/T/V)도 새 기준으로 갱신. testBuildACQReportBackgrounds()/
+ *   testBuildSegmentPercentileHighlightFormula() 신규.
  * v1.9.0 (2026-08-04)
  * - **서식 조정(사용자 요청)**: Revenue Target(S)/Spent(W)를 `"#,##0"` →
  *   `"$#,##0.00"`(통화 표시, 소수점 2자리)로 변경. New P1 Target(U,
@@ -75,12 +96,15 @@
  * INPUT
  * sheet : Sheet  (ACQ_REP 시트 객체)
  * rowCount : Number  (Report Area에 쓰인 데이터 행 수)
+ * onTrackRows : Array<[boolean,boolean,boolean]>  (선택, 2026-08-06 추가)
+ *   행별 [S On Track, T On Track, V On Track] — generateACQReport_()가
+ *   계산해서 넘김. 없으면(구버전 호출 등) On Track 강조를 건너뜀.
  *
  * SIDE EFFECT
  * ACQ_REP 시트의 헤더~데이터 영역(A4:N) 셀 서식/테두리/배경 변경.
  * ==========================================================
  */
-function applyACQReportStyles_(sheet, rowCount){
+function applyACQReportStyles_(sheet, rowCount, onTrackRows){
 
   const startRow = CONFIG.ACQ.ROWS.REPORT_DATA_START;
   const headerRow = CONFIG.ACQ.ROWS.REPORT_HEADER;
@@ -90,23 +114,10 @@ function applyACQReportStyles_(sheet, rowCount){
   const spentCol = CONFIG.ACQ.SPENT_COLUMN;                    // W열(23, 2026-07-30 추가, 2026-07-31 Meta+Naver Search 합산으로 확장)
 
   //----------------------------------------------------------
-  // 배경색 우선 초기화 (이전 실행의 줄무늬/강조가 남지 않도록)
-  // A:N / Target 4컬럼(S:V) / Spent(W) 사이에 숨김 Engine 영역(O:R)과
-  // 사용자 수동 영역(U:AF)이 껴 있어 range를 분리한다.
-  //----------------------------------------------------------
-
-  if(rowCount > 0){
-
-    sheet.getRange(startRow, 1, rowCount, dataCols).setBackground(null);
-    sheet.getRange(startRow, targetStartCol, rowCount, targetCols).setBackground(null);
-    sheet.getRange(startRow, spentCol, rowCount, 1).setBackground(null);
-
-  }
-
-  //----------------------------------------------------------
   // % 컬럼: All P1%(6) / New Leads%(8) / New P1%(10) /
   //   Revenue Target%(20) / New P1 Target%(22, 2026-07-30 추가)
-  // Revenue 컬럼: 14 — 천단위 콤마 / Revenue Target(targetStartCol)/
+  // Revenue 컬럼: 14 — $ 표시 + 소수점 2자리(2026-08-06 사용자 요청,
+  //   기존 "#,##0"에서 변경) / Revenue Target(targetStartCol)/
   //   Spent(spentCol)도 동일 (2026-07-30 추가)
   //----------------------------------------------------------
 
@@ -121,11 +132,8 @@ function applyACQReportStyles_(sheet, rowCount){
 
     });
 
-    sheet.getRange(startRow, 14, rowCount, 1)
-      .setNumberFormat("#,##0");
-
-    // Revenue Target(S)/Spent(W) — $ 표시 + 소수점 2자리(2026-08-04 사용자 요청).
-    [targetStartCol, spentCol].forEach(function(col){
+    // Revenue(N)/Revenue Target(S)/Spent(W) — $ 표시 + 소수점 2자리.
+    [14, targetStartCol, spentCol].forEach(function(col){
 
       sheet.getRange(startRow, col, rowCount, 1)
         .setNumberFormat("$#,##0.00");
@@ -138,44 +146,40 @@ function applyACQReportStyles_(sheet, rowCount){
       .setNumberFormat("#,##0");
 
     //----------------------------------------------------------
-    // 월 블록 단위 배경색 (같은 달의 세그먼트끼리는 같은 색,
-    // 월이 바뀌면 색이 번갈아가며 바뀜 — 월 구분을 시각적으로 명확히)
+    // 배경색 — 월 블록 줄무늬(전체) + On Track 강조(S/T/V, 2026-08-06)를
+    // 한 번에 배열로 계산해서 setBackgrounds() 3번(A:N/Target 4컬럼/Spent)
+    // 으로 일괄 적용 — 예전엔 이전 실행 배경 초기화 2번 + 행별 개별
+    // setBackground() 반복이라 91행 기준 십수 초가 걸렸음(사용자 실측
+    // 지적). buildACQReportBackgrounds_() 참고.
     //----------------------------------------------------------
 
-    const segmentsPerMonth = CONFIG.ACQ.SEGMENTS.length;
+    const backgrounds = buildACQReportBackgrounds_(rowCount, dataCols, targetCols, onTrackRows);
 
-    for(let i = 0; i < rowCount; i++){
+    sheet.getRange(startRow, 1, rowCount, dataCols)
+      .setBackgrounds(backgrounds.dataBackgrounds);
 
-      const monthBlockIndex = Math.floor(i / segmentsPerMonth);
-      const isEvenBlock = (monthBlockIndex % 2 === 1);
+    sheet.getRange(startRow, targetStartCol, rowCount, targetCols)
+      .setBackgrounds(backgrounds.targetBackgrounds);
 
-      if(isEvenBlock){
-
-        sheet.getRange(startRow + i, 1, 1, dataCols).setBackground("#F3F3F3");
-        sheet.getRange(startRow + i, targetStartCol, 1, targetCols).setBackground("#F3F3F3");
-        sheet.getRange(startRow + i, spentCol, 1, 1).setBackground("#F3F3F3");
-
-      }
-
-    }
+    sheet.getRange(startRow, spentCol, rowCount, 1)
+      .setBackgrounds(backgrounds.spentBackgrounds);
 
     //----------------------------------------------------------
-    // 중앙값 이상 강조 — F, H, J
+    // 중앙값 이상 강조 — H(New Leads %)만 유지. F/J는 2026-08-06부터
+    // applyACQSegmentPercentileHighlightRules_()(세그먼트별 상위 25%,
+    // 0 제외, 조건부 서식)로 교체됨(사용자 요청).
     //----------------------------------------------------------
 
-    highlightAboveMedian_(sheet, startRow, rowCount, 6);   // All P1 %
     highlightAboveMedian_(sheet, startRow, rowCount, 8);   // New Leads %
-    highlightAboveMedian_(sheet, startRow, rowCount, 10);  // New P1 %
-
-    //----------------------------------------------------------
-    // Target 달성(100% 이상) 강조 — Revenue Target%(20) / New P1 Target%(22)
-    // 2026-07-30 추가 (중앙값 기준이 아니라 100% 고정 기준이라 별도 함수)
-    //----------------------------------------------------------
-
-    highlightAtOrAboveThreshold_(sheet, startRow, rowCount, targetStartCol + 1, 1);
-    highlightAtOrAboveThreshold_(sheet, startRow, rowCount, targetStartCol + 3, 1);
 
   }
+
+  //----------------------------------------------------------
+  // 세그먼트별 상위 25% 강조 — F(All P1%)/J(New P1%), 조건부 서식
+  // (rowCount === 0이어도 항상 호출 — 이전 실행 규칙을 지우기 위해)
+  //----------------------------------------------------------
+
+  applyACQSegmentPercentileHighlightRules_(sheet, startRow, rowCount);
 
   //----------------------------------------------------------
   // 볼드 처리 — A, B, C, F, H, J, N (헤더 + 데이터 전체)
@@ -260,10 +264,10 @@ function annotateACQReportMetricNotes_(sheet, headerRow){
   const t = CONFIG.ACQ.TARGET_COLUMNS_START_COL;
 
   const targetNotes = {};
-  targetNotes[t] = "Revenue Target — 월별 회사 전체 Revenue Target × 세그먼트 Deal Share(Target_Engine). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. O:R(숨김 Engine)/U:AF(사용자 수동 영역)를 피해 이 위치에 배치.";
-  targetNotes[t + 1] = "Revenue Target% — Revenue(14) ÷ Revenue Target. 100% 이상이면 초록 하이라이트.";
+  targetNotes[t] = "Revenue Target — 월별 회사 전체 Revenue Target × 세그먼트 Deal Share(Target_Engine). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. O:R(숨김 Engine)/U:AF(사용자 수동 영역)를 피해 이 위치에 배치. On Track(Revenue(N) > Revenue Target ÷ 그 달의 주 수)이면 초록 하이라이트(2026-08-06).";
+  targetNotes[t + 1] = "Revenue Target% — Revenue(14) ÷ Revenue Target. On Track(Revenue(N) > Revenue Target ÷ 그 달의 주 수)이면 초록 하이라이트(2026-08-06 — 기존 100% 고정 기준에서 주간 페이스 기준으로 변경).";
   targetNotes[t + 2] = "New P1 Target — Target_Engine Block D(New P1 Target). Target_Engine이 마지막으로 Generate한 FY 1개만 값이 채워짐 — 그 외 FY/Referral/Other는 공란. NewP1_REP의 New P1 Target과 같은 값(같은 Business Segment 컬럼 소스, docs/ACQReportDesign.md \"오해 방지\" 섹션 참고).";
-  targetNotes[t + 3] = "New P1 Target% — New P1(9) ÷ New P1 Target. 100% 이상이면 초록 하이라이트.";
+  targetNotes[t + 3] = "New P1 Target% — New P1(9) ÷ New P1 Target. On Track(New P1(9) > New P1 Target ÷ 그 달의 주 수)이면 초록 하이라이트(2026-08-06 — 기존 100% 고정 기준에서 주간 페이스 기준으로 변경).";
 
   Object.keys(targetNotes).forEach(function(col){
 
@@ -427,6 +431,218 @@ function testComputeMedian(){
   Logger.log("case1 (홀수) : " + case1 + " (expected 2)");
   Logger.log("case2 (짝수) : " + case2 + " (expected 2.5)");
   Logger.log("case3 (빈배열) : " + case3 + " (expected 0)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Build ACQ Report Backgrounds (순수 함수 — 배경색 2D 배열 계산)
+ *
+ * WHY (2026-08-06, 성능 개선 + On Track 강조 추가)
+ * 예전엔 이전 실행 배경을 setBackground(null)로 초기화한 뒤, 월 블록
+ * 줄무늬를 행마다 개별 setBackground() 호출로 입혔음 — 91행 기준 최대
+ * 273번의 개별 API 호출이 쌓여 십수 초가 걸림(사용자 실측 지적). 이제
+ * 줄무늬 + On Track 강조(S/T/V) 둘 다 JS 배열로 미리 계산해서
+ * applyACQReportStyles_()가 setBackgrounds() 3번(A:N/Target 4컬럼/Spent)
+ * 으로 한 번에 쓴다 — 이전 실행 배경 초기화도 별도 필요 없음(매번 전체
+ * rowCount만큼 새로 계산해서 덮어쓰므로).
+ *
+ * INPUT
+ * rowCount : Number
+ * dataCols : Number  (A:N 컬럼 수, 14)
+ * targetCols : Number  (Target 4컬럼 수)
+ * onTrackRows : Array<[boolean,boolean,boolean]> | undefined
+ *   행별 [S On Track, T On Track, V On Track] — target 배열의 0/1/3번째
+ *   컬럼(S/T/V)에 매핑, 2번째(U, New P1 Target 원본값)는 항상 줄무늬만.
+ *
+ * OUTPUT
+ * { dataBackgrounds, targetBackgrounds, spentBackgrounds }  각 setBackgrounds()용 2D 배열
+ *
+ * TEST
+ * testBuildACQReportBackgrounds 참고
+ * ==========================================================
+ */
+function buildACQReportBackgrounds_(rowCount, dataCols, targetCols, onTrackRows){
+
+  const segmentsPerMonth = CONFIG.ACQ.SEGMENTS.length;
+  const ON_TRACK_COLOR = "#01ef18";
+  const STRIPE_COLOR = "#F3F3F3";
+
+  const dataBackgrounds = [];
+  const targetBackgrounds = [];
+  const spentBackgrounds = [];
+
+  for(let i = 0; i < rowCount; i++){
+
+    const monthBlockIndex = Math.floor(i / segmentsPerMonth);
+    const stripe = (monthBlockIndex % 2 === 1) ? STRIPE_COLOR : null;
+
+    dataBackgrounds.push(new Array(dataCols).fill(stripe));
+
+    const targetRow = new Array(targetCols).fill(stripe);
+
+    const onTrack = onTrackRows && onTrackRows[i];
+
+    if(onTrack){
+
+      if(onTrack[0]) targetRow[0] = ON_TRACK_COLOR;   // S — Revenue Target
+      if(onTrack[1]) targetRow[1] = ON_TRACK_COLOR;   // T — Revenue Target%
+      if(onTrack[2]) targetRow[3] = ON_TRACK_COLOR;   // V — New P1 Target%
+
+    }
+
+    targetBackgrounds.push(targetRow);
+
+    spentBackgrounds.push([stripe]);
+
+  }
+
+  return {
+    dataBackgrounds: dataBackgrounds,
+    targetBackgrounds: targetBackgrounds,
+    spentBackgrounds: spentBackgrounds
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildACQReportBackgrounds_()
+ * ==========================================================
+ */
+function testBuildACQReportBackgrounds(){
+
+  // segmentsPerMonth = CONFIG.ACQ.SEGMENTS.length에 의존 — 실제 설정값 사용.
+  const segmentsPerMonth = CONFIG.ACQ.SEGMENTS.length;
+  const rowCount = segmentsPerMonth * 2;   // 월 블록 2개(짝/홀 각 1개)
+
+  const onTrackRows = [];
+  for(let i = 0; i < rowCount; i++) onTrackRows.push([false, false, false]);
+  onTrackRows[0] = [true, true, false];               // 첫 블록(줄무늬 없음) 첫 행 — S/T만 On Track
+  onTrackRows[segmentsPerMonth] = [false, false, true]; // 둘째 블록(줄무늬 있음) 첫 행 — V만 On Track
+
+  const result = buildACQReportBackgrounds_(rowCount, 14, 4, onTrackRows);
+
+  const pass =
+    result.dataBackgrounds.length === rowCount &&
+    result.dataBackgrounds[0][0] === null &&                    // 첫 블록 줄무늬 없음
+    result.dataBackgrounds[segmentsPerMonth][0] === "#F3F3F3" && // 둘째 블록 줄무늬
+    result.targetBackgrounds[0][0] === "#01ef18" &&              // S On Track
+    result.targetBackgrounds[0][1] === "#01ef18" &&              // T On Track
+    result.targetBackgrounds[0][2] === null &&                   // U는 강조 대상 아님
+    result.targetBackgrounds[0][3] === null &&                   // V 아님(첫 행)
+    result.targetBackgrounds[segmentsPerMonth][3] === "#01ef18" && // V On Track(둘째 블록)
+    result.targetBackgrounds[segmentsPerMonth][0] === "#F3F3F3" && // S는 줄무늬만(On Track 아님)
+    result.spentBackgrounds[segmentsPerMonth][0] === "#F3F3F3";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply ACQ Segment Percentile Highlight Rules (F/J — 세그먼트별 상위 25%)
+ *
+ * WHY (2026-08-06 사용자 요청)
+ * All P1%(F)/New P1%(J)에서 "세그먼트 안에서" 값이 상위 25%(0 제외,
+ * PERCENTILE 0.75 이상)인 셀을 강조 — 세그먼트마다 규모가 달라 전체
+ * 컬럼 기준 퍼센타일은 의미가 없어서, C열(Segment)이 같은 행끼리만 묶어
+ * 계산한다(50_Events_Config.js/55_Events_Styles.js의 TOP25_HIGHLIGHT와
+ * 같은 취지, 세그먼트 그룹핑만 추가). 조건부 서식(수식 기반)이라 매
+ * Generate마다 sheet.setConditionalFormatRules()로 전체 교체 — 이전
+ * 실행 규칙이 남지 않음.
+ *
+ * INPUT
+ * sheet : Sheet
+ * startRow : Number
+ * rowCount : Number
+ * ==========================================================
+ */
+function applyACQSegmentPercentileHighlightRules_(sheet, startRow, rowCount){
+
+  if(rowCount === 0){
+    sheet.setConditionalFormatRules([]);
+    return;
+  }
+
+  const lastRow = startRow + rowCount - 1;
+  const segmentCol = "C";
+  const percentile = 0.75;
+  const color = "#01ef18";
+
+  const rules = [6, 10].map(function(col){   // F(All P1%), J(New P1%)
+
+    const colLetter = columnIndexToLetter_(col);
+
+    const formula = buildSegmentPercentileHighlightFormula_(
+      colLetter, segmentCol, startRow, lastRow, percentile
+    );
+
+    return SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(formula)
+      .setBackground(color)
+      .setRanges([sheet.getRange(startRow, col, rowCount, 1)])
+      .build();
+
+  });
+
+  sheet.setConditionalFormatRules(rules);
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Segment Percentile Highlight Formula (순수 함수, 테스트용으로 분리)
+ *
+ * WHY
+ * 같은 세그먼트(Segment 컬럼) 안에서만, 0을 제외한 값들의 상위 25%
+ * (PERCENTILE 0.75 이상)인 셀을 강조하는 조건부 서식 커스텀 수식을
+ * 만든다. 55_Events_Styles.js buildPercentileHighlightFormula_()와
+ * 동일한 앵커/절대참조 패턴에 FILTER의 세그먼트 일치 조건만 추가.
+ *
+ * INPUT
+ * colLetter : string  (예: "F")
+ * segmentColLetter : string  (예: "C")
+ * dataStartRow : number
+ * lastRow : number
+ * percentile : number  (0~1)
+ *
+ * OUTPUT
+ * string
+ *
+ * TEST
+ * testBuildSegmentPercentileHighlightFormula 참고
+ * ==========================================================
+ */
+function buildSegmentPercentileHighlightFormula_(colLetter, segmentColLetter, dataStartRow, lastRow, percentile){
+
+  const anchor = colLetter + dataStartRow;
+  const segAnchor = segmentColLetter + dataStartRow;
+  const range = "$" + colLetter + "$" + dataStartRow + ":$" + colLetter + "$" + lastRow;
+  const segRange = "$" + segmentColLetter + "$" + dataStartRow + ":$" + segmentColLetter + "$" + lastRow;
+
+  return "=AND(" + anchor + ">0," + anchor + ">=PERCENTILE(FILTER(" +
+    range + "," + segRange + "=" + segAnchor + "," + range + ">0)," + percentile + "))";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildSegmentPercentileHighlightFormula_()
+ * ==========================================================
+ */
+function testBuildSegmentPercentileHighlightFormula(){
+
+  const pass =
+    buildSegmentPercentileHighlightFormula_("F", "C", 5, 95, 0.75) ===
+      "=AND(F5>0,F5>=PERCENTILE(FILTER($F$5:$F$95,$C$5:$C$95=C5,$F$5:$F$95>0),0.75))";
+
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

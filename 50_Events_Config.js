@@ -12,9 +12,40 @@
  * OPS.SHEET.OPS(Leads_OPS)를 그대로 참조 — 여기서 재정의하지 않는다.
  *
  * Version
- * v1.6.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-06)
+ * - TOP25_HIGHLIGHT 추가 — SF P1s/SF NLP1s/SP1%/SNP1% 4개 컬럼에서 값이
+ *   상위 25%(PERCENTILE 0.75 이상, 컬럼별 독립 계산)인 셀에 배경색
+ *   #01ef18 강조(사용자 요청). 실제 조건부 서식 규칙 생성은
+ *   55_Events_Styles.js applyTop25HighlightRules_() 참고.
+ * v1.7.1 (2026-08-06)
+ * - "NP1%" → "SNP1%"로 컬럼명 정정(사용자 요청, v1.7.0에서 만든 지 얼마
+ *   안 된 컬럼이라 아래 v1.7.0 로그 텍스트에도 이미 새 이름으로 소급 반영).
+ * v1.7.0 (2026-08-06)
+ * - 사용자 지정 헤더 재구성(실무 사용 중 필요성 대두, 2026-08-06 확정):
+ *   (1) 신규 "EV IC REQ."(GROUP_2_MANUAL, 수동입력) 추가 — Salesforce는
+ *       코호트 기준이라 "이 이벤트에서 신청된 IC 총계"를 직접 볼 수 없어,
+ *       Ops가 관찰한 실제 총계를 수동 입력하는 컬럼(SF 계산값 "IC REQ."
+ *       바로 앞에 배치, 헤더 색상은 Marketo그룹(보라)으로 사용자 확정 —
+ *       IC REQ.의 SF그룹(파랑)과는 구분).
+ *   (2) "Mkt P1s"/"Mkt NLP1s"(GROUP_2_MANUAL) 완전 삭제 — 실무상 더 이상
+ *       안 씀(사용자 확인).
+ *   (3) "LP CVR"/"LG CVR"(GROUP_3_MANUAL) 삭제, "All CVR"은 이름만 "CVR"로
+ *       변경(값/의미 동일, 여전히 수동입력) — 세 CVR 대신 단일 CVR로 단순화.
+ *   (4) "Leads(Meta)"(GROUP_3_MANUAL) → "Results"로 이름만 변경(값/의미 동일).
+ *   (5) "CPL"(GROUP_5_DERIVED) 완전 삭제 — Match Rate와 달리 숨김 유지 없이
+ *       공식/컬럼 자체를 제거(사용자 확정, 53_Events_Merge.js
+ *       applyGroup5Derived_()에서 계산 라인도 제거).
+ *   (6) 신규 계산식 컬럼 3개(GROUP_5_DERIVED) 추가 — "Success %"(Success÷SF
+ *       Reg., Success 바로 뒤), "SP1%"(SP1÷SF P1s, SP1 바로 뒤), "SNP1%"
+ *       (SNPL1÷SF NLP1s, SNPL1 바로 뒤). Match Rate와 동일하게 SF 매칭
+ *       분모 대비 수동 관찰값(Success/SP1/SNPL1)의 비율 — divideGuard_()로
+ *       0-division 방지(53_Events_Merge.js applyGroup5Derived_()).
+ *   HEADER 전체 순서 재배치, HEADER_COLOR_GROUPS도 위 변경사항 반영.
+ *   mergeEventsOPS_()가 매 빌드마다 컬럼명 기준으로 전체 재작성하는
+ *   구조라(53_Events_Merge.js) 순서 변경 자체는 데이터 유실 없이 안전.
  * v1.6.0 (2026-07-24)
  * - HEADER_COLORS 조정 (사용자 요청): SF → sky blue(#0369a1), Marketo →
  *   purple(#6b21a8), Meta → Meta 브랜드 블루(#1877F2). DERIVED는 유지.
@@ -201,8 +232,7 @@ const EVENTS = {
   GROUP_2_MANUAL: [
 
     "Mkt Reg.",
-    "Mkt P1s",
-    "Mkt NLP1s",
+    "EV IC REQ.",
     "Success",
     "SP1",
     "SNPL1"
@@ -211,11 +241,9 @@ const EVENTS = {
 
   GROUP_3_MANUAL: [
 
-    "LP CVR",
-    "LG CVR",
-    "All CVR",
+    "CVR",
     "Clicks",
-    "Leads(Meta)",
+    "Results",
     "Spent"
 
   ],
@@ -237,7 +265,9 @@ const EVENTS = {
   GROUP_5_DERIVED: [
 
     "Match Rate",
-    "CPL",
+    "Success %",
+    "SP1%",
+    "SNP1%",
     "CPNP1",
     "ROAS"
 
@@ -252,7 +282,7 @@ const EVENTS = {
 
   /*
   ==========================================================
-  OUTPUT HEADER (2026-07-24 사용자 지정 순서 — 실무 사용하며 바뀔 수 있음)
+  OUTPUT HEADER (2026-08-06 사용자 지정 순서 — 실무 사용하며 바뀔 수 있음)
 
   Final Events_OPS column order. A~D열(Lead Source Detail/Match Rate/
   Target Market/Division)은 HIDE_COLUMN_COUNT만큼 기본 숨김 처리.
@@ -276,30 +306,29 @@ const EVENTS = {
     "Speaker",
 
     "SF Reg.",
+    "Mkt Reg.",
     "SF NL",
     "SF P1s",
     "SF NLP1s",
+    "Success",
+    "Success %",
+    "SP1",
+    "SP1%",
+    "SNPL1",
+    "SNP1%",
+
+    "EV IC REQ.",
     "IC REQ.",
     "IC Bked",
     "IC Complete",
     "#Deals",
     "Revenue",
 
-    "Mkt Reg.",
-    "Mkt P1s",
-    "Mkt NLP1s",
-    "Success",
-    "SP1",
-    "SNPL1",
-
-    "LP CVR",
-    "LG CVR",
-    "All CVR",
-    "Clicks",
-    "Leads(Meta)",
+    "CVR",
     "Spent",
+    "Clicks",
+    "Results",
 
-    "CPL",
     "CPNP1",
     "ROAS",
 
@@ -333,7 +362,7 @@ const EVENTS = {
     MARKETO: [
       "Lead Source Detail", "Target Market", "Division", "EventType", "PIC",
       "Event Date", "Time", "Marketo Campaign name", "Speaker", "Notes",
-      "Mkt Reg.", "Mkt P1s", "Mkt NLP1s", "Success", "SP1", "SNPL1",
+      "Mkt Reg.", "Success", "SP1", "SNPL1", "EV IC REQ.",
       "FY", "Month"
     ],
 
@@ -343,11 +372,11 @@ const EVENTS = {
     ],
 
     META: [
-      "LP CVR", "LG CVR", "All CVR", "Clicks", "Leads(Meta)", "Spent"
+      "CVR", "Clicks", "Results", "Spent"
     ],
 
     DERIVED: [
-      "Match Rate", "CPL", "CPNP1", "ROAS"
+      "Match Rate", "Success %", "SP1%", "SNP1%", "CPNP1", "ROAS"
     ]
 
   },
@@ -358,6 +387,25 @@ const EVENTS = {
     SF: "#0369a1",
     META: "#1877F2",
     DERIVED: "#434343"
+
+  },
+
+  /*
+  ==========================================================
+  TOP 25% HIGHLIGHT (2026-08-06 사용자 요청)
+
+  지정된 컬럼에서 값이 상위 25%(해당 컬럼 자체 분포 기준, PERCENTILE 0.75
+  이상)인 셀에 배경색 강조 — 55_Events_Styles.js
+  applyTop25HighlightRules_()에서 참조. 컬럼마다 독립적으로 계산(하나의
+  이벤트가 4개 중 일부만 상위 25%에 들 수 있음).
+  ==========================================================
+  */
+
+  TOP25_HIGHLIGHT: {
+
+    COLUMNS: ["SF P1s", "SF NLP1s", "SP1%", "SNP1%"],
+    COLOR: "#01ef18",
+    PERCENTILE: 0.75
 
   }
 

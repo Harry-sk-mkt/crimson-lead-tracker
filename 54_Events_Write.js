@@ -8,18 +8,24 @@
  * data), mirrors 23_OPS_Write.js.
  *
  * Version
- * v1.0.0
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-08-06)
+ * - 헤더 재구성 반영(50_Events_Config.js v1.7.0): EVENTS_SUBTOTAL_COLUMNS의
+ *   "Leads(Meta)" → "Results"로 리네임(같은 컬럼, 이름만 변경). GROUP_2_MANUAL
+ *   신규 "EV IC REQ."(개수 컬럼)는 concat으로 자동 포함됨(코드 변경 불필요).
  * ==========================================================
  */
 
 /**
  * SUBTOTAL(109, ...) 대상 컬럼 — 개수/금액 성격의 Group2/3/4만.
- * Group1(텍스트), Group3의 %컬럼(LP CVR 등), Group5(비율), FY/Month는
+ * Group1(텍스트), Group3의 %컬럼(CVR), Group5(비율), FY/Month는
  * 합계 의미가 없어 제외.
  */
 const EVENTS_SUBTOTAL_COLUMNS =
   EVENTS.GROUP_2_MANUAL
-    .concat(["Clicks", "Leads(Meta)", "Spent"])
+    .concat(["Clicks", "Results", "Spent"])
     .concat(EVENTS.GROUP_4_COMPUTED);
 
 

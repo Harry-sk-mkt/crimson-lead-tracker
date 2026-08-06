@@ -17,9 +17,103 @@
  * 20 Reporting
  *
  * Version
- * v1.13.0
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-08-06)
+ * - **F/J/S/T/V 컬럼 하이라이트 재설계**(사용자 요청): F(All P1%)/J(New P1%)는
+ *   세그먼트별 상위 25%(0 제외) 조건부 서식(32_ACQReportStyles.js
+ *   applyACQSegmentPercentileHighlightRules_() 신규)로, S(Revenue Target)/
+ *   T(Revenue Target%)/V(New P1 Target%)는 "On Track"(주간 페이스 —
+ *   Target÷그 달의 주 수 대비 실적) 하이라이트로 교체(색상 전부 #01ef18).
+ *   On Track 판정은 90_TargetEngine.js computeWeeksInMonthCountsForFYRange_()
+ *   (신규)로 구한 월별 주 수 기준 — S/T는 Revenue(N), V는 New P1(I) 실적과
+ *   비교(사용자 확정). generateACQReport_()에서 onTrackRows 배열로 계산해
+ *   applyACQReportStyles_(sheet, rowCount, onTrackRows)에 전달(시그니처
+ *   확장, 기존 2-인자 호출부는 이 파일 안에 이것 하나뿐이라 영향 없음).
+ * v1.14.5 (2026-08-06)
+ * - **비동기 트리거 방식 → 동기 방식으로 재전환**(사용자 확정): Apps Script
+ *   시간 기반 1회성 트리거(schedulePipelineTail_())가 "1초 후 실행"을
+ *   요청해도 실제로는 1~2분+ 지연될 수 있음이 실측 확인됨(중복 예약 버그
+ *   수정(08_PipelineAsync.js v1.12.1) 이후에도 재현 — 플랫폼 자체의
+ *   디스패치 지연으로 판명). DealTracker_Engine 캐시 도입(v1.14.4)으로
+ *   refreshAndGenerateACQReport_() 자체가 충분히 빨라져서(대부분 수 초~1분),
+ *   예측 불가능한 트리거 지연보다 동기 실행이 체감상 나음. `handleACQReportGenerateEdit_()`
+ *   가 다시 try/finally로 동기 호출, `runACQReportGenerateTail()`은 트리거
+ *   핸들러가 아닌 수동 테스트 진입점으로 격하.
+ * v1.14.4 (2026-08-06)
+ * - **성능 개선 — DealTracker_Engine 캐시 도입**(사용자 요청 — "딜 트랙커를
+ *   직접 불러오지말고 엔진을 하나 만들자"): refreshACQSummaryRevenueOnly_()
+ *   여전히 37초가 걸렸는데(외부 openById() 자체 비용 + Deal Tracker 전체
+ *   행마다 Utilities.formatDate() 호출), readDealTrackerRawRows_()가 이제
+ *   내부 캐시(90_TargetEngine.js DealTracker_Engine)만 읽도록 전환됨에
+ *   따라 refreshAndGenerateACQReport_()에 appendNewDealTrackerRows_()
+ *   (신규 딜만 증분 동기화, 일주일에 몇 건 수준이라 빠름)를 먼저 호출하도록
+ *   추가 — Revenue는 이 클릭 시점까지 여전히 최신, 속도는 캐시 읽기 수준.
+ * v1.14.3 (2026-08-06)
+ * - **성능 개선 — refreshAndGenerateACQReport_()를 Revenue 전용으로 축소**:
+ *   v1.14.2까지도 여전히 refreshAdSpendCache_()(외부 API)+refreshACQSummary_()
+ *   (MTA_Master 8만+행/Leads_OPS 3만5천+행 전체 스캔)를 백그라운드에서
+ *   실행했는데, 실측 211초가 걸려 회의 중 활용이 불가능했음(사용자 확인,
+ *   Cloud Logs). All Leads/New P1/SAL/IC Booked/IC Complete는 Leads/MTA
+ *   Import 시에만 바뀌고 이미 백그라운드 파이프라인이 최신 유지 중이라
+ *   Generate 시점 재스캔이 무의미하다는 걸 확인 — Revenue(Deal Tracker)만
+ *   Import와 무관하게 바뀔 수 있어 재조회 가치가 있음(사용자 확정, Spent는
+ *   이번 범위에서 제외). `refreshACQSummaryRevenueOnly_()`(31_ACQSummary.js
+ *   v1.3.0)로 교체 — MTA_Master/Leads_OPS 스캔 없이 Deal Tracker Revenue만
+ *   병합, Deal Tracker 읽기 시간 수준(수 초)으로 단축 예상.
+ * v1.14.2 (2026-08-06)
+ * - **버그 수정 — Generate 체크박스가 완료까지(70초+) 체크된 채 멈춰있음**
+ *   (사용자 확인, Cloud Logs Duration 70.223s): v1.14.1에서
+ *   refreshAndGenerateACQReport_()를 handleACQReportGenerateEdit_() 안에서
+ *   동기 호출하도록 바꿨는데, refreshAdSpendCache_()(외부 API)/
+ *   refreshACQSummary_()(MTA_Master/Leads_OPS 전체 스캔)가 원래 무거운
+ *   작업이라 체크박스가 그 시간만큼 멈춰있는 것처럼 보였음. 다시
+ *   schedulePipelineTail_("runACQReportGenerateTail")로 설치형 1회성
+ *   트리거에 위임하도록 변경(체크박스는 즉시 리셋) — 이번엔
+ *   handleReportGenerateEdit()가 이미 설치형 트리거(Full Authorization)로
+ *   실행되는 중이라, v1.14.0에서 Simple Trigger 안에서 시도했다 실패했던
+ *   것과 달리 `ScriptApp.newTrigger()` 호출이 정상 동작함.
+ * v1.14.1 (2026-08-06)
+ * - **버그 수정 — v1.14.0의 트리거 위임 방식이 실제로는 동작 안 함(실측
+ *   확인)**: `onEdit()` Simple Trigger 안에서 `schedulePipelineTail_()`
+ *   (`ScriptApp.newTrigger()` 호출)를 호출하는 것 자체가 "Specified
+ *   permissions are not sufficient to call ScriptApp.newTrigger" 에러로
+ *   실패 — Simple Trigger는 외부 스프레드시트/API 호출뿐 아니라 **트리거
+ *   설치 자체도** 제한된 권한 밖이라 못 함. **올바른 해결**: 스케줄링이
+ *   아니라 `onEdit(e)` 함수 자체를 `handleReportGenerateEdit(e)`로 개명해
+ *   GAS가 더 이상 이걸 Simple Trigger로 자동 인식하지 않게 하고, 신규
+ *   `runInstallReportGenerateTrigger()`(1회성 수동 Run)로 이 함수를
+ *   **설치형(Installable) onEdit 트리거**로 등록 — 설치형 트리거는 등록한
+ *   사용자의 Full Authorization으로 실행되므로 그 안에서 refresh를 직접
+ *   동기 호출해도 문제없음. `handleACQReportGenerateEdit_()`는 다시 동기
+ *   try/finally로 되돌리되, `generateACQReport_()` 대신 신규
+ *   `refreshAndGenerateACQReport_()`(구 `runACQReportGenerateTail()`을
+ *   개명 — 더 이상 트리거 핸들러가 아니라 일반 헬퍼라 `deleteTriggersByHandlerName_()`
+ *   호출 제거)를 호출. **사용자가 `runInstallReportGenerateTrigger()`를
+ *   Apps Script 편집기에서 1회 실행해야 실제로 동작함.**
+ * v1.14.0 (2026-08-06, 이 방식은 실패 — 위 v1.14.1 참고)
+ * - **버그 수정 — Generate 시 이전 실행분 서식(배경색/테두리)이 새 범위 밖에
+ *   남음**: 새 Generate가 이전보다 행 수가 적으면(예: 기간을 좁혀서 재생성),
+ *   `.clearContent()`만 호출해 값은 지워지지만 배경색/테두리는 남아있었음
+ *   (사용자 발견 — "A5: 데이터 들어가는 영역의 서식이 generate를 할 때
+ *   여전히 남아있어"). 이전 실행 범위(A:N/Target 4컬럼/Spent)에
+ *   `.clearFormat()`을 추가로 호출해 서식까지 완전히 초기화 —
+ *   `applyACQReportStyles_()`가 새 행 수만큼만 다시 서식을 입히므로, 그
+ *   범위를 벗어난 행은 이제 완전히 빈 상태로 남음.
+ * - **Generate를 설치형 트리거로 위임(사용자 요청 — "트리거 형태로 구현
+ *   못하나?")**: `handleACQReportGenerateEdit_()`(onEdit Simple Trigger)가
+ *   `generateACQReport_()`를 직접 호출하는 대신, 체크박스를 즉시 리셋하고
+ *   `schedulePipelineTail_("runACQReportGenerateTail")`
+ *   (08_PipelineAsync.js 기존 인프라 재사용)로 설치형 1회성 트리거를
+ *   예약하도록 변경. 신규 `runACQReportGenerateTail()`(Full Authorization)이
+ *   `refreshAdSpendCache_()`/`refreshACQSummary_()`(Deal Tracker
+ *   openById() 포함 — Simple Trigger에선 불가능했던 호출)로 캐시를 살아있는
+ *   값으로 먼저 갱신한 뒤 `generateACQReport_()` 호출 — Generate 클릭 시점에
+ *   Spent/Revenue가 실제로 최신화됨(기존엔 마지막 백그라운드 Import 시점
+ *   캐시만 읽었음). 두 refresh 모두 실패해도 Logger에만 기록하고 report
+ *   생성은 계속 진행(runLeadsPipelineTail()의 refreshCampaignSpend_()와
+ *   동일한 비필수 처리 원칙).
  * v1.13.0 (2026-07-31)
  * - **W열 헤더 "Meta Spent" → "Spent", 데이터 소스를 합산 캐시로 교체** —
  *   Naver Search Ad API 파이프라인(AD_003_NaverSearch.js) 검증 완료 후 사용자가
@@ -256,17 +350,30 @@ function findFiscalYearRange_(){
 
 /**
  * ==========================================================
- * onEdit Simple Trigger
+ * Report Generate Edit Handler — 설치형(Installable) onEdit 트리거 전용
  *
- * WHY (2026-07-22 변경)
- * NewP1_REP도 같은 방식(Generate 체크박스 + onEdit)을 쓰게 되면서,
- * GAS는 파일마다 onEdit()을 따로 둬도 마지막에 로드된 정의가 나머지를
- * 조용히 덮어쓰므로(전역 함수명 중복) onEdit() 자체는 이 파일 하나에만
- * 두고 시트 이름으로 분기해서 각 리포트 전용 핸들러를 호출한다.
- * ACQ_REP 쪽 동작(handleACQReportGenerateEdit_)은 기존 로직 그대로 이동.
+ * WHY (2026-08-06 — 버그 수정, 설치형 트리거로 전환)
+ * 원래 이름 그대로 `onEdit(e)`였을 땐 GAS가 자동으로 Simple Trigger로
+ * 인식해서 실행했는데, Simple Trigger는 제한된 권한이라 그 안에서
+ * `ScriptApp.newTrigger()` 호출조차 막힘("Specified permissions are not
+ * sufficient to call ScriptApp.newTrigger" — 실측 확인, 시도했던 "체크박스
+ * 클릭 시 설치형 트리거를 예약" 방식 자체가 애초에 Simple Trigger 안에서는
+ * 불가능했음이 드러남). 올바른 해결책은 스케줄링이 아니라 **이 함수 자체를
+ * 설치형 onEdit 트리거로 등록**하는 것 — 설치형 트리거는 등록한 사용자의
+ * Full Authorization으로 실행되므로, 그 안에서 Ad Spend Cache/Deal Tracker
+ * 처럼 외부 접근이 필요한 refresh를 직접 동기 호출해도 문제없음. 함수 이름을
+ * `onEdit`에서 바꿔서 GAS가 이걸 Simple Trigger로 자동 실행하지 않도록 하고
+ * (자동 실행되면 이 함수도 똑같이 권한 오류가 남), `runInstallReportGenerateTrigger()`
+ * (사용자가 Apps Script 편집기에서 1회 직접 Run — 이 실행 자체가 Full
+ * Authorization이라 트리거 설치 가능)로 설치형 트리거에 등록해야 실제로 동작함.
+ *
+ * NewP1_REP도 같은 방식(Generate 체크박스 + 이 트리거)을 쓰므로, GAS가
+ * 파일마다 트리거 핸들러를 따로 두면 안 되는 문제(전역 함수명 중복 시 마지막
+ * 정의가 조용히 덮어씀)와 무관하게 이 함수 하나만 시트 이름으로 분기해서
+ * 각 리포트 전용 핸들러를 호출한다.
  * ==========================================================
  */
-function onEdit(e){
+function handleReportGenerateEdit(e){
 
   if(!e || !e.range) return;
 
@@ -288,8 +395,33 @@ function onEdit(e){
 
 /**
  * ==========================================================
+ * Install Report Generate Trigger (1회성 수동 실행 전용)
+ *
+ * WHY
+ * handleReportGenerateEdit()가 Full Authorization으로 실행되려면 설치형
+ * (Installable) onEdit 트리거로 등록돼야 한다 — Apps Script 편집기에서
+ * 이 함수를 직접 Run하면 그 실행 자체가 Full Authorization이라 트리거
+ * 설치가 가능함. 이미 등록된 동일 핸들러 트리거가 있으면 먼저 지우고
+ * 다시 등록해 중복 설치를 방지(재실행해도 안전).
+ * ==========================================================
+ */
+function runInstallReportGenerateTrigger(){
+
+  deleteTriggersByHandlerName_("handleReportGenerateEdit");
+
+  ScriptApp.newTrigger("handleReportGenerateEdit")
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onEdit()
+    .create();
+
+  Logger.log(CONFIG.LOG.PREFIX + " Report Generate installable onEdit trigger installed.");
+
+}
+
+
+/**
+ * ==========================================================
  * Handle ACQ_REP Generate Checkbox Edit
- * (2026-07-21 원래 onEdit() 본문 그대로 — 동작 변경 없음)
  * ==========================================================
  */
 function handleACQReportGenerateEdit_(e, sheet){
@@ -307,13 +439,96 @@ function handleACQReportGenerateEdit_(e, sheet){
 
   try {
 
-    generateACQReport_();
+    refreshAndGenerateACQReport_();
 
   } finally {
 
     sheet.getRange(row, col).setValue(false);
 
   }
+
+}
+
+
+/**
+ * ==========================================================
+ * Manual-run public wrapper (Apps Script 편집기 Run 드롭다운 노출용)
+ *
+ * WHY (2026-08-06 — 비동기 트리거 방식 → 동기 방식으로 재전환)
+ * v1.14.2~v1.14.4에선 이 함수를 schedulePipelineTail_()로 예약하는 설치형
+ * 1회성 트리거의 핸들러로 썼으나, Apps Script의 시간 기반 1회성 트리거는
+ * "1초 후 실행"을 요청해도 정확한 시점을 보장하지 않고 실제로는 1~2분+
+ * 지연될 수 있음이 실측 확인됨(사용자 발견 — 중복 예약 버그(v1.12.1,
+ * 08_PipelineAsync.js)를 고친 뒤에도 지연이 재현됨 → 플랫폼 자체의
+ * 디스패치 지연으로 판명). DealTracker_Engine 캐시 도입(v1.14.4)으로
+ * refreshAndGenerateACQReport_() 자체가 이제 충분히 빨라져서(대부분 수 초
+ * ~1분), 예측 불가능한 트리거 디스패치 지연을 감수하는 것보다 다시
+ * handleACQReportGenerateEdit_() 안에서 동기 호출하는 게 전체 체감
+ * 반응성이 낫다고 판단(사용자 확정). 이 함수는 이제 트리거 핸들러가
+ * 아니라 편집기에서 직접 Run하는 수동 테스트 진입점으로만 남김.
+ * ==========================================================
+ */
+function runACQReportGenerateTail(){
+
+  refreshAndGenerateACQReport_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh And Generate ACQ Report (Full Authorization 전용)
+ *
+ * WHY (2026-08-06 — Revenue 전용으로 축소, 성능 버그 수정)
+ * v1.14.2까지는 Ad Spend Cache 전체 갱신(refreshAdSpendCache_(), 외부 API)
+ * + ACQ_Summary 전체 재계산(refreshACQSummary_(), MTA_Master 8만+행/
+ * Leads_OPS 3만5천+행 전체 스캔)을 매번 돌렸는데, 실측 211초가 걸려 회의
+ * 중 활용이 불가능했음(사용자 확인). 조사 결과: All Leads/New P1/SAL/IC
+ * Booked/IC Complete는 Leads/MTA Import 시에만 바뀌고, 그 Import는 이미
+ * 08_PipelineAsync.js 백그라운드 파이프라인이 refreshACQSummary_()를
+ * 자동으로 돌려 최신 유지 중이라 Generate 시점 재스캔이 무의미함. Revenue
+ * (Deal Tracker)만 Import와 무관하게 언제든 바뀔 수 있어 재조회 가치가
+ * 있음(사용자 확정) — refreshACQSummaryRevenueOnly_()(31_ACQSummary.js
+ * v1.3.0, MTA_Master/Leads_OPS 스캔 없이 Deal Tracker Revenue만 병합)로
+ * 교체. Spent는 이번 범위에서 제외 — 기존 백그라운드 파이프라인
+ * (refreshCampaignSpend_())에 계속 맡김.
+ *
+ * refresh 실패해도 Logger에만 기록하고 report 생성은 계속 진행
+ * (08_PipelineAsync.js refreshCampaignSpend_()와 동일한 비필수 처리 원칙 —
+ * Deal Tracker 갱신 실패로 Report 생성 자체가 막히면 안 됨).
+ *
+ * 2026-08-06 추가: refreshACQSummaryRevenueOnly_() 전에
+ * appendNewDealTrackerRows_()(90_TargetEngine.js)를 먼저 호출 —
+ * DealTracker_Engine(내부 캐시)에 체크포인트 이후 신규 딜만 증분
+ * 동기화해서, Revenue가 이 클릭 시점까지 실제로 최신화되도록 함(신규
+ * 딜은 일주일에 몇 건 수준이라 빠름 — 사용자 확인). readDealTrackerRawRows_()
+ * 가 이제 이 캐시만 읽으므로(외부 openById() 직접 호출 없음) 이 순서가
+ * 중요함.
+ * ==========================================================
+ */
+function refreshAndGenerateACQReport_(){
+
+  try {
+
+    appendNewDealTrackerRows_();
+
+  } catch(err){
+
+    Logger.log(CONFIG.LOG.PREFIX + " refreshAndGenerateACQReport_: appendNewDealTrackerRows_ failed - " + err);
+
+  }
+
+  try {
+
+    refreshACQSummaryRevenueOnly_();
+
+  } catch(err){
+
+    Logger.log(CONFIG.LOG.PREFIX + " refreshAndGenerateACQReport_: refreshACQSummaryRevenueOnly_ failed - " + err);
+
+  }
+
+  generateACQReport_();
 
 }
 
@@ -416,6 +631,10 @@ function generateACQReport_(){
   // 2026-07-30-campaign-spend-integration.md
   const spendMap = readAdSpendCacheMap_();
 
+  // "On Track" 판정용 월별 주 수(90_TargetEngine.js) — Revenue/New P1 Target을
+  // 그 달의 주 수로 나눈 주간 페이스와 실적을 비교(사용자 요청, 2026-08-06).
+  const weeksInMonthCounts = computeWeeksInMonthCountsForFYRange_(startFY, endFY);
+
   //----------------------------------------------------------
   // 5. Report Area 작성
   //----------------------------------------------------------
@@ -423,6 +642,7 @@ function generateACQReport_(){
   const outputRows = [];
   const targetOutputRows = [];
   const spentOutputRows = [];
+  const onTrackRows = [];
 
   reversedTargetRows.forEach(function(row){
 
@@ -469,6 +689,21 @@ function generateACQReport_(){
     const hasSpend = spendMap.hasOwnProperty(key);
     spentOutputRows.push([hasSpend ? spendMap[key] : ""]);
 
+    // "On Track" 판정(사용자 요청, 2026-08-06) — 주간 페이스(Target ÷ 그 달의
+    // 주 수)보다 실적이 크면 색칠 대상. S(Revenue Target)/T(Revenue Target%)는
+    // Revenue(N) 기준, V(New P1 Target%)는 New P1(I) 기준(사용자 확정).
+    const weeksInMonth = weeksInMonthCounts[row.fy + "|" + row.month] || 0;
+
+    const revenueOnTrack =
+      (hasRevenueTarget && revenueTarget > 0 && weeksInMonth > 0) &&
+      (s.revenue > (revenueTarget / weeksInMonth));
+
+    const newP1OnTrack =
+      (hasNewP1Target && newP1Target > 0 && weeksInMonth > 0) &&
+      (s.newP1 > (newP1Target / weeksInMonth));
+
+    onTrackRows.push([revenueOnTrack, revenueOnTrack, newP1OnTrack]);   // S, T, V
+
   });
 
   // Target 컬럼 헤더(TARGET_COLUMNS_START_COL부터) — 기존 A:N과 달리 시트에
@@ -493,17 +728,17 @@ function generateACQReport_(){
     sheet.getRange(
       CONFIG.ACQ.ROWS.REPORT_DATA_START, 1,
       clearRowCount, CONFIG.ACQ.REPORT_DATA_COLUMNS
-    ).clearContent();
+    ).clearContent().clearFormat();
 
     sheet.getRange(
       CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.TARGET_COLUMNS_START_COL,
       clearRowCount, CONFIG.ACQ.TARGET_COLUMNS_COUNT
-    ).clearContent();
+    ).clearContent().clearFormat();
 
     sheet.getRange(
       CONFIG.ACQ.ROWS.REPORT_DATA_START, CONFIG.ACQ.SPENT_COLUMN,
       clearRowCount, 1
-    ).clearContent();
+    ).clearContent().clearFormat();
 
   }
 
@@ -524,7 +759,7 @@ function generateACQReport_(){
       spentOutputRows.length, 1
     ).setValues(spentOutputRows);
 
-    applyACQReportStyles_(sheet, outputRows.length);
+    applyACQReportStyles_(sheet, outputRows.length, onTrackRows);
 
   }
 
