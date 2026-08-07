@@ -21,9 +21,14 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.17.0
+ * v1.18.0
  *
  * Change Log
+ * v1.18.0 (2026-08-08)
+ * - `FX.RATES`(KRW/AUD/USD→NZD) 신규 — FY_REP Marketing 섹션(`perfTrackerByFY`)의
+ *   AUD/USD 표기 플랫폼 지출을 NZD로 환산하기 위함. 기존 `KRW_TO_NZD_FORMULA`는
+ *   그대로 유지(하위호환), 신규 `fetchFxRateToNzd_()`(AD_004_SpendCache.js)가
+ *   이 RATES를 소비. 상세: docs/exec-plans/active/2026-08-07-fy-rep-implementation.md
  * v1.17.0 (2026-08-06)
  * - **`KAKAO_CHANNEL.SYNC_COLUMNS`에 `"Message Ad ID"` 컬럼 신규 추가(맨 앞,
  *   숨김 예정)**. 카카오모먼트 API 동기화(`AD_006_KakaoMoments.js`
@@ -508,7 +513,17 @@ const AD = {
   FX: {
 
     RATE_CACHE_SHEET: "FX_Rate_Cache",
-    KRW_TO_NZD_FORMULA: '=GOOGLEFINANCE("CURRENCY:KRWNZD")'
+    KRW_TO_NZD_FORMULA: '=GOOGLEFINANCE("CURRENCY:KRWNZD")',
+
+    // FYREP Marketing 섹션(2026-08-08)에서 AUD/USD 표기 플랫폼 지출도 NZD로
+    // 환산하기 위해 추가. 위 KRW_TO_NZD_FORMULA(A1셀)는 기존 fetchKrwToNzdRate_()가
+    // 하위호환으로 계속 그대로 씀 — 아래 RATES는 신규 fetchFxRateToNzd_()가
+    // 통화코드별로 캐시 시트의 별도 행(같은 A열)에 수식을 심어 읽는 용도.
+    RATES: {
+      KRW: { CELL_ROW: 1, FORMULA: '=GOOGLEFINANCE("CURRENCY:KRWNZD")' },
+      AUD: { CELL_ROW: 2, FORMULA: '=GOOGLEFINANCE("CURRENCY:AUDNZD")' },
+      USD: { CELL_ROW: 3, FORMULA: '=GOOGLEFINANCE("CURRENCY:USDNZD")' }
+    }
 
   }
 

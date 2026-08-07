@@ -9,9 +9,37 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.29.0
+ * v1.34.0
  *
  * Change Log
+ * v1.34.0 (2026-08-08)
+ * - `CONFIG.FYREP.FYS`를 하드코딩 `[24,25,26]`에서
+ *   `computeFYRepDefaultFYList_(24)`(FYREP_001_Engine.js 신규) 호출로
+ *   교체(사용자 요청 — "27도 추가해줘. 이후 년도도 자동으로 추가되게
+ *   하자") — startFY(24)부터 오늘이 속한 FY까지 자동 계산, 매년 8월
+ *   수동으로 배열을 늘려줄 필요 없어짐.
+ * v1.33.0 (2026-08-08)
+ * - `CONFIG.FYREP.CONTROL.GENERATE`(A3:B3) 신규 — Generate 체크박스(사용자
+ *   요청). Simple Trigger 권한 제약(Target_REP 선례, docs/OpenItems.md #11)
+ *   때문에 설치형 트리거로 구현 — 상세는 FYREP_002_Report.js
+ *   `onFYReportEdit_()`/`runInstallFYReportGenerateTrigger()` 참고.
+ * v1.32.0 (2026-08-08)
+ * - `CONFIG.FYREP.CONTROL` 구조 재설계(3차 피드백) — FY_RANGE(A1:B2, Start/End
+ *   FY 드롭다운)와 SECTIONS(C1:F2 체크박스 + C1:E3 지표 드롭다운, Revenue만
+ *   Actual 고정)로 분리. 세그먼트/채널이 컬럼, Month가 행, FY 범위만큼 블록이
+ *   세로로 반복되는 최종 레이아웃(사용자 확정, 2026-08-08). 상세:
+ *   docs/exec-plans/active/2026-08-07-fy-rep-implementation.md
+ * v1.31.0 (2026-08-08)
+ * - `CONFIG.FYREP.CONTROL`/`REPORT_START_ROW` 신규 — 사용자 피드백("세로로
+ *   너무 길고 범위가 넓다")으로 Report/Write 레이어를 Control Area
+ *   체크박스 4개(섹션 선택) + FY=컬럼/Month=행 피벗 레이아웃으로 재설계.
+ *   상세: docs/exec-plans/active/2026-08-07-fy-rep-implementation.md
+ * v1.30.0 (2026-08-08)
+ * - `CONFIG.FYREP.QUARTERLY_SUMMARY` 신규 — Revenue 섹션의 회사 전체 월별
+ *   Revenue Target 컬럼 위치(실측 확인: B열=월 라벨, C열=Revenue Target,
+ *   3개 탭 전부 동일). `CONFIG.FYREP.REVENUE_TARGET_IS_ESTIMATED` 옆에
+ *   배분 범위 결정(7세그먼트+Upsell 전체, 사용자 확정) 주석 추가. 상세:
+ *   docs/exec-plans/active/2026-08-07-fy-rep-implementation.md
  * v1.29.0 (2026-08-07)
  * - `CONFIG.FYREP` 신규 — FY24/25/26 Marketing/ACQ/Pipeline/Revenue 비교
  *   리포트(신규 시트 `FY_REP`) 설정. 외부 스프레드시트(`perfTrackerByFY`,
@@ -841,10 +869,54 @@ const CONFIG = {
 
     SHEET: "FY_REP",
 
+    // Control Area — 2026-08-08 세 차례 사용자 피드백을 거쳐 확정된 최종 레이아웃.
+    // (1) "범위가 너무 넓다" → 섹션 체크박스로 선택 생성. (2) "세로로 길다" →
+    // FY×Month×Segment 플랫 나열 폐기, FY=컬럼 피벗 시도했다가 재차 피드백.
+    // (3) "세그먼트가 컬럼을 차지하고, FY는 블록(세로 반복), 지표는 드롭다운
+    // 선택"으로 최종 확정 — 세그먼트/채널을 컬럼으로, Month를 행으로, FY
+    // 범위(Start~End)만큼 블록을 세로로 반복, 섹션마다 지표 1개를 드롭다운으로
+    // 골라 표시(Revenue만 Actual 고정 — Target/Target%는 추정치라 사용자가
+    // 제외 확정).
+    CONTROL: {
+
+      // A1:B2 — FY 범위(NewP1_REP의 Start/End FY 패턴과 동일 사상)
+      FY_RANGE: {
+        START_ROW: 1, END_ROW: 2,
+        LABEL_COL: 1, VALUE_COL: 2
+      },
+
+      // C1:F2 — 섹션 라벨/체크박스(오른쪽으로 밀림, 사용자 확정)
+      SECTIONS: {
+        LABEL_ROW: 1,
+        CHECKBOX_ROW: 2,
+        METRIC_ROW: 3, // Marketing/ACQ/Pipeline 지표 드롭다운(Revenue는 없음 — Actual 고정)
+        COLUMNS: { MARKETING: 3, ACQ: 4, PIPELINE: 5, REVENUE: 6 } // C, D, E, F
+      },
+
+      // A3:B3 — Generate 체크박스(사용자 요청, 2026-08-08). Target_REP이
+      // 겪었던 것과 동일한 문제(일반 onEdit Simple Trigger는 권한 부족으로
+      // SpreadsheetApp.openById() 호출 불가 — Marketing 섹션이 perfTrackerByFY
+      // 외부 시트를 정확히 이 방식으로 읾)를 피하기 위해, **설치형 트리거**
+      // (Installable Trigger, 08_PipelineAsync.js의 백그라운드 파이프라인과
+      // 동일한 완전 권한 방식)로 구현 — 사용자가 `runInstallFYReportGenerateTrigger()`
+      // (FYREP_002_Report.js)를 최초 1회만 직접 Run하면 이후엔 체크박스만으로
+      // 동작. `docs/OpenItems.md` #11 참고.
+      GENERATE: {
+        ROW: 3,
+        LABEL_COL: 1,
+        CHECKBOX_COL: 2
+      }
+
+    },
+
+    REPORT_START_ROW: 4,
+
     // 비교 대상 FY(오래된 순) — 우리 시스템 기준 FY(getFiscalYear() 컨벤션:
-    // 8월 시작). 새 FY가 생기면 이 배열만 늘리면 됨(코드는 FYS를 순회하는
-    // 구조로 작성).
-    FYS: [24, 25, 26],
+    // 8월 시작). startFY(24)부터 오늘이 속한 FY까지 자동 계산(사용자 요청,
+    // 2026-08-08 — "이후 년도도 자동으로 추가되게 하자") — 매년 8월 수동으로
+    // 늘려줄 필요 없음. `computeFYRepDefaultFYList_()`(FYREP_001_Engine.js)가
+    // 매 실행마다 다시 계산(Apps Script는 실행마다 전체 스크립트를 새로 로드).
+    FYS: computeFYRepDefaultFYList_(24),
 
     // Marketing 섹션 — 사용자가 새로 만든 통합 트래커. 3개 탭(FY24/FY25/FY26)
     // 모두 "0. Weekly"(레거시) 원본과 값 일치 실측 확인(2026-08-07, Facebook
@@ -900,6 +972,21 @@ const CONFIG = {
 
     },
 
+    // Quarterly Summary(회사 전체 월별 Target/Actual, 플랫폼 블록 위쪽 —
+    // MARKETING_SOURCE.TABS와 같은 탭, 같은 스프레드시트) — Revenue 섹션의
+    // 회사 전체 Target 원천. 실측 확인(2026-08-08,
+    // runInspectFYRepQuarterlySummaryColumns() 로그 — 컬럼 문자를 직접
+    // 찍어서 확인, 파이프 join 텍스트 육안 카운팅은 오독 위험이 있어 폐기).
+    // B열=월/분기 라벨("AUGUST"/"August 2026"/"Q1"/"YTD" 등 섞여 있음 —
+    // 월 이름으로 시작하는 라벨만 골라 쓸 것), **C열=Revenue Target은 3개
+    // 탭(FY24/25/26) 전부 동일** — FY26이 F열(Revenue Actual) 뒤에
+    // "% Revenue" 컬럼을 추가로 끼워 넣어 그 뒤(ROAS Actual 이후) 컬럼들은
+    // FY24/25보다 한 칸씩 밀렸지만, C열 앞쪽(Revenue Target)은 영향 없음.
+    QUARTERLY_SUMMARY: {
+      MONTH_LABEL_COL: 2,   // B
+      REVENUE_TARGET_COL: 3 // C
+    },
+
     // ACQ/Pipeline 섹션(Actual) — Leads_OPS/Deal Tracker 재사용, 별도 시트 없음
     // (NewP1_REP/Target_REP과 동일 소스, OPS.HEADER/CONFIG.TARGET.EXTERNAL.DEAL_TRACKER
     // 그대로 재사용 — 이 블록엔 FY_REP 전용 설정만).
@@ -916,6 +1003,14 @@ const CONFIG = {
     // Deal Tracker 딜 비중으로 추정한다. 추정치라는 걸 리포트에 라벨링할 것
     // (정확한 문구는 Report/Styles 작성 시 확정) — 절대 "실제 세그먼트별
     // 목표였다"처럼 보이면 안 됨(사용자 확정 사항).
+    //
+    // **배분 범위(2026-08-08 사용자 확정)**: 7개 세그먼트(Referral/Other 포함)
+    // + Upsell 전체에 다 배분한다 — Target_Engine의 기존 5개 마케팅 세그먼트
+    // 전용 Deal Share(EXCLUDE_LEAD_SOURCES로 Upsell/Referral을 분모·분자에서
+    // 아예 제외)와 달리, FY_REP은 Upsell/Referral도 포함한 전체 딜 비중
+    // 기준으로 비율을 계산 — `computeFYRepDealShareRatiosForFY_()`
+    // (FYREP_001_Engine.js)가 `computeDealShareRatiosFromDealRows_()`
+    // (90_TargetEngine.js)와 별개로 이 배분 방식을 구현.
     REVENUE_TARGET_IS_ESTIMATED: true
 
   },

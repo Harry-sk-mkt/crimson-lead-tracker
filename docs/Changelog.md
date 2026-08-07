@@ -1,3 +1,43 @@
+# Changelog — 2026-08-08
+
+## FY_REP(FY24~27 Marketing/ACQ/Pipeline/Revenue 비교 리포트) 구현 — Report/Write 레이어 완성, 실 시트 검증 대기
+
+- **FX 유틸 일반화**: `fetchFxRateToNzd_(currencyCode)`(AD_004_SpendCache.js v1.3.0) 신규 —
+  기존 `fetchKrwToNzdRate_()`(KRW 전용)를 건드리지 않고 KRW/AUD/USD 임의 통화를 지원하도록
+  확장. `AD.FX.RATES`(AD_001_Config.js v1.18.0) 신규.
+- **FYREP_001_Engine.js 신규** — Marketing(perfTrackerByFY 외부 시트 플랫폼 블록 파싱,
+  채널 동적 스캔, NZD 환산)/ACQ(New Leads/New P1/SAL)/Pipeline(IC Booked/Completed/Deals)/
+  Revenue(회사 전체 Target × 딜 비중 추정 + Deal Tracker Close Date 기준 Actual) 4개 섹션
+  Engine 전부 구현. 실측 중 발견: Spent 통화 판정은 플랫폼명이 아니라 라벨 자체의 "(NZD)"
+  표기를 우선해야 FY24/25/26 전체가 정확(당초 가정과 다름). Revenue Actual은 처음 Created
+  Date 코호트로 구현했다가 사용자 피드백("ACQ_REP처럼 그 달에 얼마 했는지를 봐야 한다")으로
+  Close Date 기준 그 달 실제 발생액으로 전환.
+- **FYREP_002_Report.js/FYREP_003_Styles.js 신규** — Report/Write 레이어를 사용자 피드백에
+  따라 여러 차례 재설계 끝에 최종 확정:
+  - Control Area: A1:B2 FY 범위(Start/End 드롭다운), C1:F2 섹션 체크박스(Marketing/ACQ/
+    Pipeline/Revenue), C3:E3 지표 드롭다운(Revenue만 Actual 고정), A3:B3 Generate 체크박스.
+  - Generate는 설치형 트리거(`onFYReportEdit_`/`runInstallFYReportGenerateTrigger()`)로 구현
+    — 일반 onEdit Simple Trigger는 Marketing 섹션의 외부 시트 열기(`openById`)가 권한 부족으로
+    실패하는 게 Target_REP 선례로 이미 확인돼 있어 처음부터 설치형으로 감.
+  - 레이아웃: 세그먼트/채널이 컬럼, Month가 행, FY 범위만큼 블록이 세로로 반복(최신 FY가
+    위로), 섹션당 지표 1개(드롭다운 선택). 모든 블록에 Total 행(컬럼 합계) + Sum 컬럼(행
+    합계) + 전체 테두리. Revenue는 Sum이 그 달 회사 전체 Target을 넘으면 `#01EF18` 하이라이트.
+  - Marketing 채널 표시명 매핑/제외 목록 추가(원본 채널명이 길어 컬럼 너비가 불안정했던 문제
+    해소, "Others" 등 노이즈성 채널 제거).
+  - `CONFIG.FYREP.FYS`를 하드코딩 `[24,25,26]`에서 `computeFYRepDefaultFYList_(24)` 호출로
+    교체 — startFY부터 오늘이 속한 FY까지 자동 계산, 매년 8월 수동으로 배열을 늘려줄 필요 없음.
+- **실측 버그 2건 발견·수정**: (1) Control Area 체크박스 기본값이 `isNew`(시트 자체가 새로
+  생성됐을 때)에만 채워져, 기존 시트에 새 레이아웃을 얹을 때 체크박스가 전부 빈 값으로 남아
+  섹션 0개가 생성되던 문제. (2) 정수 카운트 지표(New Leads/New P1/SAL 등)의 숫자 서식이
+  `null`이라, Revenue(통화 서식) 실행 직후 재실행하면 이전 서식("$")이 Total 행에 남아있던
+  문제 — 전 지표에 명시적 서식("#,##0" 등) 지정 + Styles 레이어가 조건 없이 항상 재적용하도록
+  수정.
+- **미해결(다음 세션)**: 실 시트에서 `setupFYReport()`→`runGenerateFYReport()`(또는 B3
+  체크박스) 최종 검증 대기 — 완료로 간주하지 말 것. "Content Performance"가 Marketing
+  채널로 잡히는 게 perfTrackerByFY 원본의 장식용 헤더 행이 스캔 로직에 블록으로 오인식된
+  것으로 추정(실제 데이터 없는 빈 컬럼일 가능성) — 사용자가 삭제 대신 개명 요청해 그대로
+  두었으나 스캔 로직 수정 여부는 미정. 상세 진행 기록: `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md`.
+
 # Changelog — 2026-08-07
 
 ## 세션 시작 자동 Pull 원칙 추가

@@ -61,10 +61,14 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
   동일 패턴 재사용 (Create Date 기준 FY/Month 파생, Business Segment 컬럼 그대로 사용,
   FT Override 재판정 없음)
 - IC Booked/Completed: `Leads_OPS`의 `IC Booked Date`/`IC Completed Date`
-- Deals/Revenue(Actual): `Deal Tracker`([KOR] Deal Tracking), `computeNewP1DealWonRevenueFromRows_()`
-  패턴(`40_NewP1Report.js`) 재사용 — 딜의 Created Date 코호트 + Segment 컬럼 직접 집계,
-  리드 단위 매칭 없음. Upsell/Referral은 그 자체를 별도 카테고리로 분리(Other로 접지 않음 —
-  ACQ_REP/NewP1_REP과 다른 점, 사용자가 Pipeline/Revenue 섹션에서 명시적으로 요청).
+- Deals(Pipeline, 건수): `Deal Tracker`([KOR] Deal Tracking), `computeNewP1DealWonRevenueFromRows_()`
+  패턴(`40_NewP1Report.js`) 재사용 — 딜의 **Created Date 코호트** + Segment 컬럼 직접 집계,
+  리드 단위 매칭 없음. **Revenue(Actual, 2026-08-08 수정)**: 처음엔 Deals와 동일하게 Created
+  Date 코호트로 구현했으나, 사용자 피드백("코호트가 아니라 ACQ_REP의 Revenue처럼 그 달에
+  얼마 했는지를 봐야 한다")으로 **Close Date 기준 그 달 실제 발생액**으로 전환(ACQ_REP의
+  `computeACQDealRevenueFromRows_()`와 동일 사상) — Deals(건수)와 Revenue(금액)가 서로 다른
+  날짜 기준을 쓰는 것으로 최종 확정. Upsell/Referral은 그 자체를 별도 카테고리로 분리(Other로
+  접지 않음 — ACQ_REP/NewP1_REP과 다른 점, 사용자가 Pipeline/Revenue 섹션에서 명시적으로 요청).
 
 ### Revenue 섹션 — Target(세그먼트별) 추정
 
@@ -86,16 +90,117 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
 - [x] 데이터 소스 전체 확정, 사용자 최종 확인("이거면 충분해?" → 통화 NZD 통일만 추가 확인)
 - [x] `CONFIG.FYREP` 신규(00_Config.js v1.29.0) — 시트명, 외부 스프레드시트 ID/탭/헤더행,
       월 컬럼 범위, 지표 라벨(SPENT는 접두사 매칭 필요함을 실측 중 추가로 발견해 반영) 정의
-- [ ] FX 유틸 일반화 — `fetchKrwToNzdRate_()`(AD_004_SpendCache.js)를 AUD/USD도 되게 확장
-- [ ] Marketing 섹션 Engine — `perfTrackerByFY` 플랫폼 블록 읽기/파싱, 채널 동적 목록,
-      NZD 환산
-- [ ] ACQ 섹션 Engine — Leads_OPS 코호트 집계 (NewP1_REP 패턴)
-- [ ] Pipeline 섹션 Engine — Leads_OPS(IC Booked/Completed) + Deal Tracker(Deals 건수,
-      Upsell/Referral 분리)
-- [ ] Revenue 섹션 Engine — Deal Tracker(Actual, 세그먼트별) + Target 추정(Deal Share 배분)
-- [ ] Report/Write 레이어 — 4섹션 레이아웃, 헤더, Target(추정) 라벨링/스타일
-- [ ] 파일 번호대 확정 — 90번대(Target)와 붙여 쓸지 별도 100번대로 뺄지 구현 착수 시 결정
-- [ ] 실 시트 검증 (사용자 확인)
+- [x] FX 유틸 일반화 — `fetchFxRateToNzd_(currencyCode)`(AD_004_SpendCache.js v1.3.0)
+      신규, `AD.FX.RATES`(AD_001_Config.js v1.18.0) KRW/AUD/USD. 기존
+      `fetchKrwToNzdRate_()`는 하위호환으로 그대로 유지, 새 함수만 추가.
+- [x] Marketing 섹션 Engine(`FYREP_001_Engine.js` v1.0.0) — `perfTrackerByFY` 플랫폼
+      블록 읽기/파싱(FY24/25는 헤더 1번만, FY26은 블록마다 반복 — 둘 다 대응 확인),
+      채널 동적 목록, NZD 환산. **실측 중 발견(2026-08-08)**: 통화 판정은 플랫폼명이
+      아니라 **Spent 행 라벨 자체의 "(NZD)" 표기를 우선** — FY26 탭은 전 플랫폼
+      Spent 라벨에 통화가 명시돼 있어(플랫폼명엔 없는 경우多) 기존 "플랫폼명으로만
+      판단" 가정(00_Config.js 주석)이 FY26엔 안 맞음, 라벨 우선 + 플랫폼명 폴백으로
+      일반화해 3개 탭 전부 커버. 순수 함수 4개 유닛 테스트 Node로 실행 확인(PASS) —
+      실제 시트 값으로는 아직 미검증.
+- [x] ACQ 섹션 Engine — Leads_OPS 코호트 집계 (NewP1_REP 패턴)
+- [x] Pipeline 섹션 Engine — Leads_OPS(IC Booked/Completed) + Deal Tracker(Deals 건수,
+      Upsell/Referral 분리). **구현 시 결정**: ACQ/Pipeline의 Leads_OPS 파생 지표(New
+      Leads/New P1/SAL/IC Booked/IC Completed)는 FY×Month×Segment로 같은 코호트 키를
+      쓰는 같은 소스라 `aggregateFYRepLeadsOPSFromRecords_()` 하나로 통합(시트 중복
+      스캔 방지) — Report 레이어에서 ACQ/Pipeline 두 섹션으로 나눠 씀. Deals(건수)는
+      Deal Tracker 소스라 별도 `aggregateFYRepDealCountsFromRows_()`.
+      `FYREP_001_Engine.js` v1.1.0, 유닛 테스트 3개 Node로 PASS 확인(실 시트 값은 미검증).
+- [x] Revenue 섹션 Engine — Deal Tracker(Actual, 세그먼트별) + Target 추정(Deal Share 배분).
+      **구현 시 결정(2026-08-08, 사용자 확정)**: Target 배분은 7세그먼트+Upsell 전체
+      대상(Target_Engine의 5세그먼트 전용 Deal Share와 별개 함수,
+      `computeFYRepDealShareRatiosForFY_()` — Upsell/Referral을 분모·분자에서 제외하지
+      않음). Quarterly Summary Revenue Target 컬럼 구조는
+      `runInspectFYRepQuarterlySummaryColumns()`(96_TempQA_FYRepExternalSheet.js
+      v1.7.0)로 실측 확인 — B열=월 라벨, **C열=Revenue Target이 3개 탭 전부 동일**
+      (FY26이 F열 뒤에 "% Revenue" 컬럼을 끼워 넣어 그 뒤 컬럼만 밀림, C열 앞은 무관).
+      `CONFIG.FYREP.QUARTERLY_SUMMARY` 신규(00_Config.js v1.30.0).
+      `FYREP_001_Engine.js` v1.2.0, 유닛 테스트 4개 Node로 PASS 확인(실 시트 값은 미검증).
+- [x] Report/Write 레이어(`FYREP_002_Report.js`/`FYREP_003_Styles.js`) — **v1.0.0
+      구현 후 사용자 피드백(2026-08-08, "세로로 너무 길고 범위가 넓다")으로
+      v2.0.0 전면 재설계**:
+      - **Control Area(체크박스 4개, 사용자 확정)**: 시트 상단(LABEL_ROW=1/
+        CHECKBOX_ROW=2)에 Marketing/ACQ/Pipeline/Revenue 체크박스 — 체크된
+        섹션만 Engine 호출 + 작성, 체크 안 한 섹션은 빈 자리도 안 남기고
+        건너뜀. `setupFYReport()`는 재실행해도 기존 체크 상태를 안 건드림
+        (라벨/데이터 검증만 다시 씌움), 최초 생성 시에만 4개 다 체크로 시작.
+      - **레이아웃(사용자 확정, "FY를 컬럼으로 Month를 행으로")**: v1.0.0의
+        FY×Month×Segment 플랫 행 나열(세그먼트당 36행) 대신, 세그먼트/채널마다
+        블록을 만들고 블록 안에서 **Month가 행(12개, AUG→JUL), FY가 컬럼**인
+        피벗 표(perfTrackerByFY 원본의 "지표=행/월=열" 사상과 동일 계열) —
+        세그먼트당 12행(+헤더 3행)으로 축소. 지표 그룹 헤더는 병합 셀로
+        FY 3개 컬럼을 아우름(Target_REP의 `mergeAcross` 관례 재사용).
+      - Report 영역만(`CONFIG.FYREP.REPORT_START_ROW`부터) 매 Generate마다
+        clear, Control Area 체크박스는 보존.
+      - Revenue Target% ≥100% 강조는 기존 ACQ_REP `highlightAtOrAboveThreshold_()`
+        (#C6E0B4) 그대로 재사용 — 새 색상 안 만듦.
+      - 메뉴(00_Menu.js) 배선 없음 — 기존 NewP1_REP/Target_REP과 동일하게 Apps
+        Script 편집기에서 `setupFYReport()`→`runGenerateFYReport()` 직접 Run
+        방식(프로젝트 관례, "Manual Execution Instructions" 확인).
+      - 유닛 테스트 3개(collectFYRepDynamicBlockKeys_/buildFYRepPivotIndex_/
+        buildFYRepPivotDataRows_) Node로 PASS 확인.
+- [x] 파일 번호대 확정(2026-08-08, 사용자) — 90번대도 100번대도 아닌 AD_ 스타일
+      신규 컨벤션 채택: `FYREP_NNN_Name.js` (FYREP_001_Engine.js/FYREP_002_Report.js/
+      FYREP_003_Styles.js). CONFIG.FYREP는 기존 방침대로 00_Config.js에 계속 유지
+      (AD_001_Config.js처럼 분리하지 않음 — 이미 그렇게 구현돼 있었고 이번 결정은
+      Engine/Report/Styles 파일에만 해당).
+- [ ] 실 시트 검증 (사용자 확인) — 진행 중, Report/Write 레이어가 3차례
+      재설계됨(Engine 레이어는 전혀 안 바뀜):
+      1차: 체크박스 기본값 버그 발견·수정(FYREP_002_Report.js v2.1.0).
+      2차: Revenue Actual을 Created Date 코호트→Close Date 기준 그 달 실제
+      발생액으로 전환(`aggregateFYRepDealRevenueFromRows_()` FYREP_001_Engine.js
+      v1.3.0), Target 안내 문구를 헤더 셀 Note로 전환(v2.2.0).
+      **3차(최종, 2026-08-08)**: "세로로 길고 범위가 넓다"는 반복 피드백 끝에
+      최종 레이아웃 확정 — Control Area가 A1:B2(Start/End FY 드롭다운,
+      NewP1_REP 패턴 재사용)+C1:F2(섹션 체크박스)+C3:E3(Marketing/ACQ/Pipeline
+      지표 드롭다운, Revenue는 Actual 고정)로 재구성. Report 영역은 **세그먼트/
+      채널이 컬럼, Month가 행, FY 범위만큼 블록이 세로로 반복**, 섹션당 지표
+      1개만 표시(드롭다운으로 전환 가능) — v2.x의 "지표=병합헤더, FY=서브컬럼"
+      피벗 완전 폐기. `FYREP_002_Report.js`/`FYREP_003_Styles.js` v3.0.0,
+      유닛 테스트 5개 Node로 PASS 확인.
+      **4차(2026-08-08)**: Generate 체크박스(A3:B3) 추가 — Target_REP과 동일한
+      이유(Simple Trigger 권한 부족, docs/OpenItems.md #11)로 설치형 트리거
+      (`onFYReportEdit_()`/`runInstallFYReportGenerateTrigger()`)로 구현.
+      **5차(2026-08-08)**: 모든 블록에 Total 행(컬럼별 합계), Revenue 블록에
+      Sum 컬럼(세그먼트 값 행별 합계, 8세그먼트+Upsell 기준 자연스럽게 J열),
+      Sum이 그 달 회사 전체 Revenue Target 초과 시 `#01EF18` 하이라이트,
+      Generate 완료 후 섹션 체크박스(C2:F2)도 자동 해제, 블록 전체 테두리.
+      `FYREP_002_Report.js`/`FYREP_003_Styles.js` v3.4.0/v3.1.0, 유닛
+      테스트 7개 Node로 PASS 확인.
+      **6차(2026-08-08, 실측 버그 수정)**: Revenue 실행 후 Marketing/Results로
+      재실행하면 Total 행에 "$" 잔여 서식이 남는 버그 발견 — 정수 카운트
+      지표(Results/New Leads/New P1/SAL/IC Booked/IC Completed/Deals)의
+      format이 `null`이라 이전 실행의 통화 서식이 덮어써지지 않고 남아있던
+      게 원인. 전부 `"0"`으로 명시 + Styles 레이어가 서식을 조건 없이 항상
+      재적용하도록 수정(`FYREP_002_Report.js`/`FYREP_003_Styles.js`
+      v3.5.0/v3.2.0).
+      **7차(2026-08-08)**: 정수 지표 서식 "0"→"#,##0"(1000단위 콤마, 사용자
+      요청). Marketing 채널 표시명 매핑(`FY_REP_MARKETING_CHANNEL_DISPLAY_MAP`)
+      + 제외 목록(`FY_REP_MARKETING_CHANNEL_EXCLUDE`) 신규 — 원본 채널명이
+      길어 컬럼 너비가 들쭉날쭉하던 문제 해소, "Others" 등 노이즈성 채널
+      제거. **발견(미해결)**: "Content Performance"가 채널로 잡히는 건
+      perfTrackerByFY 원본의 장식용 섹션 헤더 행이
+      `scanFYRepMarketingPlatformBlocks_()`에 블록으로 오인식된 것으로
+      추정(실제 지출/리드 데이터 없는 빈 컬럼일 가능성) — 사용자가 삭제 대신
+      "Content"로 개명 요청해 일단 그대로 따름, 스캔 로직 수정 여부는 미정.
+      `FYREP_002_Report.js` v3.6.0, 유닛 테스트 1개 추가 Node로 PASS 확인.
+      **8차(2026-08-08)**: FY 블록을 최신이 위로 오도록 역순 표시. Sum
+      컬럼(행별 합계)을 Revenue 전용→4개 섹션 전체로 확장(Target 초과
+      하이라이트는 여전히 Revenue만 — 다른 섹션엔 비교할 Target이 없음).
+      `FYREP_002_Report.js` v3.7.0.
+      **9차(2026-08-08)**: "27도 추가해줘. 이후 년도도 자동으로 추가되게
+      하자" — `CONFIG.FYREP.FYS`를 하드코딩 `[24,25,26]`에서
+      `computeFYRepDefaultFYList_(24)`(FYREP_001_Engine.js v1.4.0 신규,
+      startFY부터 오늘이 속한 FY까지 자동 계산) 호출로 교체(00_Config.js
+      v1.34.0) — 매년 8월 수동으로 배열을 늘려줄 필요 없어짐. Marketing
+      섹션은 `perfTrackerByFY`에 FY27 탭이 아직 없으면(TABS 설정에 없음)
+      그 FY만 자동으로 빈 값 처리(에러 없이 안전), ACQ/Pipeline/Revenue는
+      Leads_OPS/Deal Tracker 라이브 데이터라 FY27도 바로 정상 표시될 것으로
+      예상. 유닛 테스트 1개 추가 Node로 PASS 확인.
+      재실행 결과 아직 미확인, 완료로 간주하지 말 것.
 
 ## Surprises & Discoveries
 

@@ -23,9 +23,21 @@
  * openTargetExternalSheetByGid_() 재사용
  *
  * Version
- * v1.5.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-08)
+ * - runInspectFYRepQuarterlySummaryColumns() 신규 — v1.6.0 로그를 파이프(" | ")로
+ *   join된 텍스트로 육안 카운팅하다 보니 FY26 헤더 행(6행)과 데이터 행(7행)의
+ *   컬럼이 밀린 것처럼 보이는 게 실제 시트 구조인지 카운팅 실수인지 구분이
+ *   안 됨 — 컬럼 문자를 명시적으로 붙여 한 줄에 하나씩 찍어 오독 위험을 제거.
+ * v1.6.0 (2026-08-08)
+ * - runInspectFYRepQuarterlySummary() 신규 — Revenue 섹션 Engine 착수 전 마지막
+ *   확인. Quarterly Summary(회사 전체 월별 Target/Actual, 플랫폼 블록 헤더 행
+ *   직전까지)의 실제 헤더 행 + 전체 컬럼(C열부터) 값을 탭별로 통째로 덤프해
+ *   "Revenue Target이 정확히 몇 행 몇 열인지" 코드 작성 전 확정한다 —
+ *   runInspectFYRepConsolidatedSheet()는 상위 15행만 봐서 FY26(헤더 27행)은
+ *   안 잘림.
  * v1.5.0 (2026-08-07)
  * - runInspectFYRepConsolidatedSheetHeaderRows() 신규 — 실제 컬럼 작성 전
  *   마지막 확인. 플랫폼 블록 표(FY24/25 헤더행=25, FY26 헤더행=27)의 "월→열"
@@ -486,6 +498,119 @@ function runInspectFYRepConsolidatedSheetHeaderRows(){
     for(let i = 0; i < lastCol; i++){
       if(headerValues[i] !== "" || spentValues[i] !== ""){
         Logger.log("col" + (i + 1) + ": '" + headerValues[i] + "' => " + spentValues[i]);
+      }
+    }
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Inspect FY_REP Quarterly Summary (읽기 전용, 안전)
+ *
+ * WHY
+ * 파일 상단 v1.6.0 Change Log 참고 — Revenue 섹션 Engine 착수 전, Quarterly
+ * Summary(회사 전체 월별 Target/Actual) 구간을 플랫폼 블록 헤더 행 직전까지
+ * 통째로 덤프해 정확한 행/열 구조를 확정한다.
+ * ==========================================================
+ */
+function runInspectFYRepQuarterlySummary(){
+
+  const SPREADSHEET_ID = "1DhJynLE6eySh6X9X-Zsgbs6HvuXDT5omjf_m0XjXQ3o";
+  const TABS = [
+    { name: "FY24", platformHeaderRow: 25 },
+    { name: "FY25", platformHeaderRow: 25 },
+    { name: "FY26", platformHeaderRow: 27 }
+  ];
+
+  const file = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  TABS.forEach(function(tab){
+
+    const sheet = file.getSheetByName(tab.name);
+
+    Logger.log("");
+    Logger.log("======================================");
+    Logger.log("탭: \"" + tab.name + "\" — Quarterly Summary(1~" + (tab.platformHeaderRow - 1) + "행) 전체 덤프");
+    Logger.log("======================================");
+
+    if(!sheet){
+      Logger.log("❌ 탭을 찾을 수 없음");
+      return;
+    }
+
+    const lastCol = sheet.getLastColumn();
+    const numRows = tab.platformHeaderRow - 1;
+
+    const values = sheet.getRange(1, 1, numRows, lastCol).getDisplayValues();
+
+    values.forEach(function(row, i){
+      Logger.log((i + 1) + ": " + row.join(" | "));
+    });
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Inspect FY_REP Quarterly Summary Columns (읽기 전용, 안전)
+ *
+ * WHY
+ * 파일 상단 v1.7.0 Change Log 참고 — 파이프 join 텍스트 육안 카운팅의 오독
+ * 위험을 없애기 위해, 헤더 행 하나와 데이터 행 하나(FY24/25는 "AUGUST" 행,
+ * FY26은 "August 2026" 행)를 컬럼 문자를 명시해 한 줄씩 찍는다
+ * (columnToLetter_ 없이 A/B/C... 직접 계산 — 이 프로젝트에 아직 없는
+ * 범용 유틸이라 이 진단 함수 안에서만 임시로 계산).
+ * ==========================================================
+ */
+function runInspectFYRepQuarterlySummaryColumns(){
+
+  const SPREADSHEET_ID = "1DhJynLE6eySh6X9X-Zsgbs6HvuXDT5omjf_m0XjXQ3o";
+  const TABS = [
+    { name: "FY24", headerRow: 4, dataRow: 6 },
+    { name: "FY25", headerRow: 4, dataRow: 6 },
+    { name: "FY26", headerRow: 6, dataRow: 8 }
+  ];
+
+  const file = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  function colLetter(oneBasedIndex){
+    let n = oneBasedIndex;
+    let s = "";
+    while(n > 0){
+      const rem = (n - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
+
+  TABS.forEach(function(tab){
+
+    const sheet = file.getSheetByName(tab.name);
+
+    Logger.log("");
+    Logger.log("======================================");
+    Logger.log("탭: \"" + tab.name + "\" — 헤더행(" + tab.headerRow + ")/데이터행(" + tab.dataRow + ") 컬럼별 값");
+    Logger.log("======================================");
+
+    if(!sheet){
+      Logger.log("❌ 탭을 찾을 수 없음");
+      return;
+    }
+
+    const lastCol = sheet.getLastColumn();
+
+    const headerValues = sheet.getRange(tab.headerRow, 1, 1, lastCol).getDisplayValues()[0];
+    const dataValues = sheet.getRange(tab.dataRow, 1, 1, lastCol).getDisplayValues()[0];
+
+    for(let i = 0; i < lastCol; i++){
+      if(headerValues[i] !== "" || dataValues[i] !== ""){
+        Logger.log(colLetter(i + 1) + "열: 헤더='" + headerValues[i] + "' | 데이터='" + dataValues[i] + "'");
       }
     }
 

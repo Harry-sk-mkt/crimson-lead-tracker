@@ -36,9 +36,14 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-08)
+ * - `fetchFxRateToNzd_(currencyCode)` 신규 — `fetchKrwToNzdRate_()`를 KRW
+ *   하나로 고정하지 않고 AD.FX.RATES(KRW/AUD/USD) 임의 통화로 일반화한 버전.
+ *   FY_REP Marketing 섹션(Engine, 다음 커밋)이 소비 예정. 기존
+ *   `fetchKrwToNzdRate_()`/`refreshAdSpendCache_()`는 변경 없음(하위호환).
  * v1.2.0 (2026-07-31)
  * - **Kakao Channel(3번째 플랫폼) 합산 추가** — `refreshAdSpendCache_()`가
  *   `computeKakaoChannelSpendSummary_()`(AD_005_KakaoChannel.js, KRW 원본)도
@@ -93,6 +98,67 @@ function fetchKrwToNzdRate_(){
     throw new Error(
       "KRW→NZD 환율을 가져오지 못했습니다(GOOGLEFINANCE 값: " + rate + ") — " +
       AD.FX.RATE_CACHE_SHEET + " 시트 A1 셀을 직접 확인하세요."
+    );
+  }
+
+  return rate;
+
+}
+
+
+/**
+ * ==========================================================
+ * Fetch FX Rate To NZD (IO 래퍼, 통화 일반화)
+ *
+ * WHY
+ * fetchKrwToNzdRate_()와 동일한 우회 방식(숨김 시트+GOOGLEFINANCE)이지만
+ * KRW 하나로 고정돼 있지 않고 AD.FX.RATES에 등록된 임의 통화 코드를 받는다
+ * (FY_REP Marketing 섹션이 AUD/USD 표기 플랫폼도 NZD로 환산해야 해서 신규 —
+ * docs/exec-plans/active/2026-08-07-fy-rep-implementation.md 참고). 통화별로
+ * 캐시 시트의 다른 행(같은 A열)에 수식을 심어 서로 덮어쓰지 않게 한다.
+ * "NZD"는 변환이 필요 없으므로 시트 접근 없이 1을 바로 반환한다.
+ *
+ * INPUT
+ * currencyCode : string  "KRW"/"AUD"/"USD"/"NZD" 등 AD.FX.RATES 키
+ *
+ * OUTPUT
+ * number  1 {currencyCode}당 NZD 환율(NZD면 1)
+ * ==========================================================
+ */
+function fetchFxRateToNzd_(currencyCode){
+
+  if(currencyCode === "NZD") return 1;
+
+  const rateConfig = AD.FX.RATES[currencyCode];
+
+  if(!rateConfig){
+    throw new Error(
+      "지원하지 않는 통화 코드입니다: " + currencyCode +
+      " — AD.FX.RATES에 등록되지 않음(AD_001_Config.js)."
+    );
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(AD.FX.RATE_CACHE_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(AD.FX.RATE_CACHE_SHEET);
+    sheet.hideSheet();
+  }
+
+  const cell = sheet.getRange(rateConfig.CELL_ROW, 1);
+
+  cell.setFormula(rateConfig.FORMULA);
+
+  SpreadsheetApp.flush();
+
+  const rate = cell.getValue();
+
+  if(typeof rate !== "number" || isNaN(rate) || rate <= 0){
+    throw new Error(
+      currencyCode + "→NZD 환율을 가져오지 못했습니다(GOOGLEFINANCE 값: " + rate + ") — " +
+      AD.FX.RATE_CACHE_SHEET + " 시트 " + rateConfig.CELL_ROW + "행 A열 셀을 직접 확인하세요."
     );
   }
 
