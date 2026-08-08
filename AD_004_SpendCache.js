@@ -36,9 +36,23 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.3.0
+ * v1.4.1
  *
  * Change Log
+ * v1.4.1 (2026-08-08)
+ * - `runPeriodicRefreshAdSpendCache()` 신규 — `periodicRefreshAdSpendCache_()`
+ *   이름 끝에 `_`가 있어 Run 드롭다운에 안 뜨는 문제(사용자 실측 확인)로
+ *   수동 테스트용 공개 래퍼 추가(docs/apps-script-gotchas.md #2 관례).
+ * v1.4.0 (2026-08-08)
+ * - `periodicRefreshAdSpendCache_()`/`runInstallAdSpendPeriodicRefreshTrigger()`
+ *   신규 — ACQ_REP를 refresh해도 Kakao Moments(메시지광고 API) 신규 데이터가
+ *   반영 안 되는 문제 확인 후 사용자 요청으로 독립 시간 트리거 추가(매
+ *   `AD.SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS`시간, AD_001_Config.js
+ *   v1.19.0). `syncKakaoMomentsReportToKakaoSMSRaw_()`(AD_006_KakaoMoments.js)로
+ *   `KakaoSMS_Raw`를 먼저 최신화한 뒤 `refreshAdSpendCache_()` 호출 —
+ *   `computeKakaoChannelSpendSummary_()`가 같은 시트를 읽으므로 별도 Kakao
+ *   Moments 전용 집계 함수 불필요. `docs/OpenItems.md` 항목 19(2026-08-04
+ *   보류) 해제.
  * v1.3.0 (2026-08-08)
  * - `fetchFxRateToNzd_(currencyCode)` 신규 — `fetchKrwToNzdRate_()`를 KRW
  *   하나로 고정하지 않고 AD.FX.RATES(KRW/AUD/USD) 임의 통화로 일반화한 버전.
@@ -399,6 +413,109 @@ function readAdSpendCacheMap_(){
   }
 
   return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * Periodic Refresh Ad Spend Cache (설치형 시간 트리거 핸들러)
+ *
+ * WHY (2026-08-08, 사용자 요청)
+ * ACQ_REP를 refresh해도 Kakao Moments(메시지광고 API)로 새로 보낸 메시지가
+ * 반영 안 된다는 문의로 조사한 결과 두 가지가 겹쳐 있었음: (1) ACQ_REP 자체
+ * refresh는 2026-08-06 성능 수정 이후 Revenue만 재조회하고 Ad_Spend_Cache는
+ * 읽기만 함(211초 문제로 분리 확정, 되돌리지 않음), (2) Kakao Moments API
+ * sync(`syncKakaoMomentsReportToKakaoSMSRaw_()`, AD_006_KakaoMoments.js)가
+ * 자동 파이프라인에 전혀 연결 안 돼 있어 사람이 직접 안 돌리면 `KakaoSMS_Raw`
+ * 자체가 안 바뀜. 사용자 확정 방향: ACQ_REP는 계속 캐시만 빠르게 읽고, 대신
+ * 이 함수를 독립적인 시간 트리거로 주기적으로 돌려 캐시를 최신 유지
+ * (`docs/OpenItems.md` 항목 19, 2026-08-04 보류를 사용자가 직접 해제).
+ *
+ * `computeKakaoChannelSpendSummary_()`(AD_005_KakaoChannel.js)가 이미
+ * `KakaoSMS_Raw` 시트를 그대로 읽어 합산하고, Kakao Moments sync의 목적지도
+ * 동일한 `KakaoSMS_Raw`이므로(AD_001_Config.js v1.17.0 changelog 참고) 별도
+ * "Kakao Moments 전용 spend summary" 함수는 불필요 — sync만 먼저 최신화하면
+ * `refreshAdSpendCache_()`가 자동으로 반영한다. Naver Search는 이미
+ * `refreshAdSpendCache_()` 안에서 매번 실시간 API를 호출하므로 이 함수를
+ * 주기적으로 도는 것만으로 "카카오모먼트와 동일한 처리"가 됨(사용자 확인).
+ *
+ * 실패 격리(refreshCampaignSpend_()/refreshAndGenerateACQReport_()와 동일
+ * 원칙) — Kakao Moments Access Token은 refresh_token이 없어 장기 미사용 시
+ * 만료될 수 있는데(AD_001_Config.js v1.10.0 changelog), 그 실패가
+ * Naver Search/Meta/Kakao Channel 갱신까지 막으면 안 되므로 각각 별도
+ * try/catch로 격리. 참고로 이 함수가 주기적으로 Kakao Moments API를 실제
+ * 호출하는 것 자체가, 토큰이 미사용으로 만료되는 걸 막는 의도된 부수 효과
+ * (v1.10.0 changelog에 이미 이 방향으로 적혀 있었음).
+ * ==========================================================
+ */
+function periodicRefreshAdSpendCache_(){
+
+  try {
+    syncKakaoMomentsReportToKakaoSMSRaw_();
+  } catch(err){
+    Logger.log(
+      "periodicRefreshAdSpendCache_: Kakao Moments sync 실패(비필수, 계속 진행) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  try {
+    refreshAdSpendCache_();
+  } catch(err){
+    Logger.log(
+      "periodicRefreshAdSpendCache_: refreshAdSpendCache_ 실패 — 기존 캐시 유지 — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — periodicRefreshAdSpendCache_() 수동 실행/확인용 공개 진입점
+ *
+ * WHY
+ * 이름 끝에 `_`가 붙은 함수는 Apps Script 편집기 Run 드롭다운에 안 뜬다
+ * (docs/apps-script-gotchas.md #2) — 트리거가 실제로 4시간 기다리지 않고
+ * 지금 바로 동작하는지 확인하고 싶을 때 이 함수를 대신 Run한다.
+ * ==========================================================
+ */
+function runPeriodicRefreshAdSpendCache(){
+
+  periodicRefreshAdSpendCache_();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — periodicRefreshAdSpendCache_() 시간 트리거 설치(최초 1회 수동
+ * 실행 전용)
+ *
+ * WHY
+ * `ScriptApp.newTrigger()`로 트리거를 설치하려면 Full Authorization이
+ * 필요해 사람이 Apps Script 편집기에서 직접 한 번 Run 해야 한다
+ * (FYREP_002_Report.js의 runInstallFYReportGenerateTrigger()와 동일 패턴).
+ * 재실행해도 안전하도록 설치 전 같은 핸들러의 기존 트리거를 먼저 지운다
+ * (deleteTriggersByHandlerName_(), 08_PipelineAsync.js 재사용) — 중복 설치
+ * 방지.
+ * ==========================================================
+ */
+function runInstallAdSpendPeriodicRefreshTrigger(){
+
+  deleteTriggersByHandlerName_("periodicRefreshAdSpendCache_");
+
+  ScriptApp.newTrigger("periodicRefreshAdSpendCache_")
+    .timeBased()
+    .everyHours(AD.SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS)
+    .create();
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " Ad Spend Cache 주기적 갱신 트리거 등록 완료 (매 " +
+    AD.SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS + "시간)."
+  );
 
 }
 

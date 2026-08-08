@@ -42,9 +42,47 @@
  * AD (2026-07-30 네이밍 컨벤션)
  *
  * Version
- * v1.19.0
+ * v1.23.0
  *
  * Change Log
+ * v1.23.0 (2026-08-08)
+ * - **`Marketo program` 자동 채움 재시도 로직 추가(사용자 지적)**: v1.22.0은
+ *   신규 행에만 자동 채움을 적용하고 기존 행은 항상 보존이라, 처음엔
+ *   딕셔너리에 없어(또는 모호해) 빈 값으로 저장된 UTM이 나중에 실제 리드
+ *   전환으로 딕셔너리가 갱신돼도 영원히 빈 값으로 고정되는 문제가 있었음
+ *   — "미리 예측할 필요 없이 리드가 들어온 후 매칭되는 값을 나중에 채워도
+ *   된다"는 사용자 지적으로 수정. `mergeKakaoMomentsSyncRows_()`에
+ *   `preserveOnlyIfNonBlankIndexes` 파라미터 신규(기존 `preserveColIndexes`와
+ *   분리) — Marketo program을 이쪽으로 이동, 기존 값이 **비어있을 때만**
+ *   새로 계산된 값(매 주기적 재동기화 때 딕셔너리 최신 상태 반영)으로
+ *   교체하고 사람이 이미 입력한 값은 여전히 보존.
+ * v1.22.0 (2026-08-08)
+ * - **`Marketo program` 컬럼 자동 채움** — `computeKakaoMomentsSyncRow_()`에
+ *   선택적 trailing 파라미터 `utmProgramMap` 추가(생략 시 기존과 완전히
+ *   동일 — 하위호환), `syncKakaoMomentsReportToKakaoSMSRaw_()`가
+ *   `readUtmProgramDictionaryMap_()`(신규 `17_UtmProgramDictionary.js`,
+ *   MTA_Master에서 채굴한 UTM↔Marketo Program 딕셔너리)를 읽어 전달. 신규
+ *   행에만 영향(기존 행은 `mergeKakaoMomentsSyncRows_()`의
+ *   preserveColIndexes가 그대로 보존). 사용자 요청("마케토 프로그램-utm
+ *   딕셔너리 하자") — 오늘 세션에서 KakaoSMS_Raw Marketo program 수기입력
+ *   부담이 논의된 게 계기.
+ * v1.21.0 (2026-08-08)
+ * - **버그 수정(실측) — KakaoSMS_Raw Cost/Sent/Reach/Click/Responsed/CPL이
+ *   0으로 덮어써지는 문제**. `runDebugKakaoMomentsReportForSpecificMessageAds()`
+ *   응답으로 확인: 리포트 API가 `dimension: "MESSAGE_AD"`로 요청해도
+ *   messageAdId당 한 줄이 아니라 **일자별로 여러 줄**을 반환하는데(발송일엔
+ *   실적 있고 그 이후 날짜는 0), 기존 코드가 같은 messageAdId 행을 순서대로
+ *   덮어쓰기만 해서 마지막(대개 0인) 날짜 값이 최종값이 됐음.
+ *   `sumKakaoMomentsReportRowsByMessageAdId_()` 신규 — 같은 messageAdId의
+ *   모든 날짜 행을 합산(CPL은 합산된 cost/conv_signup_7d로 재계산)하도록
+ *   `syncKakaoMomentsReportToKakaoSMSRaw_()` 수정. 신규 테스트:
+ *   testSumKakaoMomentsReportRowsByMessageAdId().
+ * v1.20.0 (2026-08-08)
+ * - `runDebugKakaoMomentsReportForSpecificMessageAds()` 신규 — KakaoSMS_Raw
+ *   Cost 열이 0으로 보인다는 사용자 보고 조사용, 특정 messageAdId 몇 개만
+ *   골라 리포트 API 원본 응답을 확인하는 진단 함수(기존
+ *   runDebugKakaoMomentsReportFirstRow()는 전체 297건+을 다 조회해 로그가
+ *   잘림).
  * v1.19.0 (2026-08-06)
  * - **`readKakaoSMSRawProgramCostRows_()` 신규** — Events_OPS Spent 자동
  *   집계(51_Events_Engine.js `computeEventsKakaoSpendAggregates_()`)가
@@ -807,6 +845,57 @@ function runDebugKakaoMomentsReportFirstRow(){
 
 /**
  * ==========================================================
+ * TEMP — 특정 messageAdId만 리포트 API 응답 확인(수동 실행, 1회성 진단)
+ *
+ * WHY (2026-08-08)
+ * `runDebugKakaoMomentsReportFirstRow()`는 전체 메시지광고(297건+)를 다
+ * 조회 요청에 넣어 로그가 잘림("Logging output too large") — 사용자가
+ * KakaoSMS_Raw에서 Cost=0으로 보인다고 확인한 특정 messageAdId 몇 개만
+ * 골라 리포트 API 원본 응답(metrics.cost 필드 실제 값/유무)을 확인한다.
+ * `syncKakaoMomentsReportToKakaoSMSRaw_()`의 `metrics ? metrics.cost : ...`
+ * 폴백이 report 쪽 cost가 비어있는 경우를 못 잡는 게 아닌지 검증하기 위함
+ * (추측 금지 — 실제 응답으로 확인).
+ * ==========================================================
+ */
+function runDebugKakaoMomentsReportForSpecificMessageAds(){
+
+  const messageAdIds = [
+    "msg-ad-1535293629935366144", // KR_core_2026-08-08_..._kakao-online-event, 2026-08-08 10:00 발송, list cost=105495
+    "msg-ad-1534139723687342080"  // WB-2026-07-KOR-MOFU-Core..., 2026-08-05 18:30 발송(가장 오래된 것도 재확인)
+  ];
+
+  const accountsResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.AD_ACCOUNTS_LIST_URL, {}, null
+  );
+
+  const adAccountId = accountsResult.body.content[0].id;
+
+  const profilesResult = callKakaoMomentsApi_(
+    "get", AD.KAKAO_MOMENTS.REPORT.CHANNEL_PROFILES_URL,
+    { "adAccountId": String(adAccountId) }, null
+  );
+
+  const channelProfileId = profilesResult.body[0].id;
+
+  const result = callKakaoMomentsApi_(
+    "post", AD.KAKAO_MOMENTS.REPORT.MESSAGE_ADS_REPORT_URL,
+    { "adAccountId": String(adAccountId), "channel-profile-id": String(channelProfileId) },
+    {
+      messageAdIds: messageAdIds,
+      dimension: "MESSAGE_AD",
+      metricsGroup: ["MESSAGE", "MESSAGE_ADDITION", "PIXEL_SDK_CONVERSION"],
+      datePreset: "LAST_30DAY"
+    }
+  );
+
+  Logger.log("statusCode: " + result.statusCode);
+  Logger.log("body: " + JSON.stringify(result.body, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
  * Parse Kakao Moments Sending Date (순수 함수)
  *
  * WHY
@@ -933,10 +1022,16 @@ function testParseKakaoMomentsSendingDate(){
  * testComputeKakaoMomentsSyncRow() 참고
  * ==========================================================
  */
-function computeKakaoMomentsSyncRow_(messageAd, metrics){
+function computeKakaoMomentsSyncRow_(messageAd, metrics, utmProgramMap){
 
   const name = String((messageAd && messageAd.name) || "");
   const messageAdId = (messageAd && messageAd.messageAdId) || "";
+
+  // Marketo program(수동 입력 컬럼) 자동 채움 — 17_UtmProgramDictionary.js가
+  // MTA_Master에서 채굴한 UTM↔Program 딕셔너리를 여기서 조회만 함(직접 읽지
+  // 않음, 순수 함수 성질 유지 — 기존 테스트 패턴과 일관). 매칭 없으면 기존과
+  // 동일하게 빈 문자열(수기 입력 유지).
+  const marketoProgram = (utmProgramMap && utmProgramMap[name.trim().toLowerCase()]) || "";
 
   const mainTitle = String(
     (messageAd && messageAd.message && messageAd.message.mainTitle) || ""
@@ -987,7 +1082,7 @@ function computeKakaoMomentsSyncRow_(messageAd, metrics){
     "",                 // CvR
     cpl,                 // CPL
     "",                 // 비고
-    ""                  // Marketo program (수동 입력 — Events_OPS 매칭용 실제 Program명)
+    marketoProgram      // Marketo program (17_UtmProgramDictionary.js 자동 채움, 매칭 없으면 빈 값)
   ];
 
 }
@@ -1097,6 +1192,23 @@ function testComputeKakaoMomentsSyncRow(){
   Logger.log("Result(report pending, list fallback): " + JSON.stringify(reportPendingResult));
   Logger.log(reportPendingPass ? "✅ PASS" : "❌ FAIL");
 
+  // utmProgramMap(17_UtmProgramDictionary.js) 자동 채움 — 매칭 있으면 채워지고
+  // (대소문자/앞뒤공백 무시), 매칭 없으면 기존과 동일하게 빈 값 유지
+  const utmProgramMap = {
+    "kr_core_2026-08-12_grades-ecs-kakao_event-online": "WB-2026-07-KOR-MOFU-Core EC for Each Year of High"
+  };
+
+  const matchedResult = computeKakaoMomentsSyncRow_(onlineStyleAd, metrics, utmProgramMap);
+  const unmatchedResult = computeKakaoMomentsSyncRow_(wbStyleAd, undefined, utmProgramMap);
+
+  const utmProgramMapPass =
+    matchedResult[17] === "WB-2026-07-KOR-MOFU-Core EC for Each Year of High" &&
+    unmatchedResult[17] === ""; // 딕셔너리에 없는 name — 빈 값 유지
+
+  Logger.log("Result(utmProgramMap matched): " + matchedResult[17]);
+  Logger.log("Result(utmProgramMap unmatched): " + JSON.stringify(unmatchedResult[17]));
+  Logger.log(utmProgramMapPass ? "✅ PASS" : "❌ FAIL");
+
 }
 
 
@@ -1114,29 +1226,41 @@ function testComputeKakaoMomentsSyncRow(){
  * 과거 동기화된 행 — 은 새 데이터와 절대 매칭되지 않아 그대로 보존된다.
  *
  * **수동 입력 컬럼 보존(2026-08-06 추가)**: `computeKakaoMomentsSyncRow_()`는
- * PIC/Push/비고/Marketo program을 항상 빈 문자열로 계산한다(API 소스 없음,
- * Marketo program은 Events_OPS 매칭용으로 사람이 직접 입력하는 컬럼 —
- * exec-plan 2026-08-04-kakao-moments-api-integration.md 참고). preserveColIndexes
- * 없이 그냥 새 값으로 덮어쓰면, 이미 사람이 입력해둔 값이 다음 재동기화(예:
- * 전환 지표가 나중에 채워져 재실행) 때 통째로 날아감 — 기존 행의 이 컬럼
- * 값들만 새 행에 이식해서 보존한다.
+ * PIC/Push/비고를 항상 빈 문자열로 계산한다(API 소스 없음, 사람이 직접
+ * 입력하는 컬럼). preserveColIndexes 없이 그냥 새 값으로 덮어쓰면, 이미
+ * 사람이 입력해둔 값이 다음 재동기화(예: 전환 지표가 나중에 채워져 재실행)
+ * 때 통째로 날아감 — 기존 행의 이 컬럼 값들만 새 행에 이식해서 보존한다.
+ *
+ * **Marketo program은 "비어있을 때만 재시도"(2026-08-08 변경, 사용자 요청)**:
+ * 처음엔 이 컬럼도 항상 보존 대상이었는데, 그러면 딕셔너리
+ * (17_UtmProgramDictionary.js)에 아직 없어서 처음엔 빈 값으로 저장된
+ * UTM이 — 나중에 실제 리드가 전환돼 딕셔너리가 갱신돼도 — 영원히 빈
+ * 값으로 고정되는 문제가 있었음. "미리 예측할 필요 없이, 리드가 들어온
+ * 후에 매칭되는 값을 나중에 채워도 된다"는 사용자 지적으로, 기존 행 값이
+ * **비어있을 때만** 새로 계산된(딕셔너리 최신 상태 반영) 값으로 교체하고,
+ * 사람이 이미 직접 입력해둔 값은 여전히 보존한다 — `preserveColIndexes`와
+ * 분리된 별도 파라미터로 처리.
  *
  * INPUT
  * existingRows : Array<Array>  KakaoSMS_Raw의 기존 데이터 행(헤더 제외)
  * newRows : Array<Array>  이번 sync에서 계산된 새 행
  * keyColIndex : number  매칭 키로 쓸 컬럼 인덱스
- * preserveColIndexes : Array<number>  매칭된 기존 행에서 그대로 유지할 컬럼
- *   인덱스(수동 입력 컬럼) — 생략 시 보존 없이 전부 새 값으로 교체
+ * preserveColIndexes : Array<number>  매칭된 기존 행에서 **항상** 그대로
+ *   유지할 컬럼 인덱스(순수 수동 입력 컬럼) — 생략 시 없음
+ * preserveOnlyIfNonBlankIndexes : Array<number>  매칭된 기존 행 값이
+ *   **비어있지 않을 때만** 유지하고, 비어있으면 새로 계산된 값을 채택하는
+ *   컬럼 인덱스(자동 채움 재시도 대상 — Marketo program) — 생략 시 없음
  *
  * OUTPUT
  * Array<Array>  최종 전체 행(기존 행 순서 유지, 매칭된 건 새 값으로 교체하되
- *   preserveColIndexes는 기존 값 유지, 새 키만 뒤에 추가)
+ *   preserveColIndexes는 기존 값 유지, preserveOnlyIfNonBlankIndexes는
+ *   비어있지 않을 때만 기존 값 유지, 새 키만 뒤에 추가)
  *
  * TEST
  * testMergeKakaoMomentsSyncRows() 참고
  * ==========================================================
  */
-function mergeKakaoMomentsSyncRows_(existingRows, newRows, keyColIndex, preserveColIndexes){
+function mergeKakaoMomentsSyncRows_(existingRows, newRows, keyColIndex, preserveColIndexes, preserveOnlyIfNonBlankIndexes){
 
   const newByKey = {};
 
@@ -1157,6 +1281,14 @@ function mergeKakaoMomentsSyncRows_(existingRows, newRows, keyColIndex, preserve
 
       (preserveColIndexes || []).forEach(function(idx){
         mergedRow[idx] = row[idx];
+      });
+
+      (preserveOnlyIfNonBlankIndexes || []).forEach(function(idx){
+        const oldValue = row[idx];
+        if(oldValue !== "" && oldValue !== null && oldValue !== undefined){
+          mergedRow[idx] = oldValue;
+        }
+        // 비어있으면 mergedRow[idx]는 이미 newByKey[key]의 새로 계산된 값 — 그대로 둠
       });
 
       return mergedRow;
@@ -1230,6 +1362,30 @@ function testMergeKakaoMomentsSyncRows(){
   Logger.log("Result(preserve manual column): " + JSON.stringify(preserveResult));
   Logger.log(preservePass ? "✅ PASS" : "❌ FAIL");
 
+  // preserveOnlyIfNonBlankIndexes(Marketo program, 2026-08-08) — 기존 값이
+  // 비어있으면 새로 계산된(딕셔너리 최신 반영) 값으로 교체돼야 하고, 사람이
+  // 이미 채워둔 값은 여전히 보존돼야 함
+  const existingBlankAndFilled = [
+    ["msg-ad-blank", "old", "row-blank", ""],                                  // 아직 매칭 안 됨 — 재시도 대상
+    ["msg-ad-manual", "old", "row-manual", "WB-2024-02-KOR-MOFU-Core Manual"]  // 사람이 이미 입력 — 보존 대상
+  ];
+
+  const newRowsWithDictionaryHit = [
+    ["msg-ad-blank", "new", "row-blank-updated", "WB-2026-08-KOR-MOFU-Core Auto-Filled"], // 딕셔너리가 이제 매칭됨
+    ["msg-ad-manual", "new", "row-manual-updated", ""] // computeKakaoMomentsSyncRow_()는 매칭 없으면 항상 빈 문자열
+  ];
+
+  const retryResult = mergeKakaoMomentsSyncRows_(
+    existingBlankAndFilled, newRowsWithDictionaryHit, 0, [], [3]
+  );
+
+  const retryPass =
+    retryResult[0][3] === "WB-2026-08-KOR-MOFU-Core Auto-Filled" && // 비어있던 값 — 새 값으로 채워짐
+    retryResult[1][3] === "WB-2024-02-KOR-MOFU-Core Manual";        // 사람이 입력한 값 — 그대로 보존
+
+  Logger.log("Result(preserve only if non-blank): " + JSON.stringify(retryResult));
+  Logger.log(retryPass ? "✅ PASS" : "❌ FAIL");
+
 }
 
 
@@ -1277,6 +1433,125 @@ function fetchKakaoMomentsAdAccountAndChannelProfile_(){
   }
 
   return { adAccountId: adAccountId, channelProfileId: profiles[0].id };
+
+}
+
+
+/**
+ * ==========================================================
+ * Sum Kakao Moments Report Rows By Message Ad ID (순수 함수)
+ *
+ * WHY (2026-08-08, 사용자 실측 발견 — Cost=0 버그)
+ * 카카오모먼트 리포트 API는 `dimension: "MESSAGE_AD"`로 요청해도
+ * messageAdId당 한 줄이 아니라 **일자별로 여러 줄**을 돌려준다(`start`/`end`가
+ * 하루 단위, 같은 message_ad_id가 요청한 날짜 범위(datePreset LAST_30DAY)
+ * 안에서 여러 행으로 반복). 기존 코드는 같은 messageAdId의 행을 순서대로
+ * `metricsByMessageAdId[id] = row.metrics`로 덮어쓰기만 해서, 배열의 **마지막
+ * 날짜(대개 활동 없는 날, cost/msg_send 등이 0)** 값으로 최종 값이 정해져
+ * KakaoSMS_Raw Cost 열이 0으로 보이는 버그가 실측 확인됨(`runDebugKakaoMomentsReportForSpecificMessageAds()`
+ * 응답 — msg-ad-1534139723687342080이 08-05(cost:105585, 실제 발송일)/
+ * 08-06(cost:0)/08-07(cost:0) 세 줄로 나뉘어 왔고, 마지막 줄이 이겼음). 각
+ * 지표는 발생한 날짜에 귀속되는 값(누적 반복이 아님 — msg_send가 발송일에만
+ * 잡히고 그 이후엔 0인 것으로 확인)이라, 같은 messageAdId의 모든 날짜 행을
+ * 합산하는 게 올바른 합계다. `cost_per_conv_signup_7d`(CPL)만 예외 — 일자별
+ * 비율을 그대로 합산하면 의미가 없어, 합산된 cost/conv_signup_7d로 다시
+ * 계산한다(분모 0이면 0).
+ *
+ * INPUT
+ * reportRows : Array<{dimensions:{message_ad_id}, metrics:Object}>  리포트 API
+ *   `body.data` 그대로
+ *
+ * OUTPUT
+ * Object  messageAdId → 합산된 metrics(msg_send/msg_open/msg_click/
+ *   msg_send_fail/cost/conv_signup_7d/cost_per_conv_signup_7d)
+ *
+ * TEST
+ * testSumKakaoMomentsReportRowsByMessageAdId() 참고
+ * ==========================================================
+ */
+function sumKakaoMomentsReportRowsByMessageAdId_(reportRows){
+
+  const totals = {};
+
+  (reportRows || []).forEach(function(row){
+
+    const id = row.dimensions && row.dimensions.message_ad_id;
+
+    if(!id) return;
+
+    const m = row.metrics || {};
+
+    if(!totals[id]){
+      totals[id] = {
+        msg_send: 0, msg_open: 0, msg_click: 0, msg_send_fail: 0,
+        cost: 0, conv_signup_7d: 0
+      };
+    }
+
+    totals[id].msg_send += Number(m.msg_send) || 0;
+    totals[id].msg_open += Number(m.msg_open) || 0;
+    totals[id].msg_click += Number(m.msg_click) || 0;
+    totals[id].msg_send_fail += Number(m.msg_send_fail) || 0;
+    totals[id].cost += Number(m.cost) || 0;
+    totals[id].conv_signup_7d += Number(m.conv_signup_7d) || 0;
+
+  });
+
+  Object.keys(totals).forEach(function(id){
+    const t = totals[id];
+    t.cost_per_conv_signup_7d = t.conv_signup_7d > 0 ? t.cost / t.conv_signup_7d : 0;
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — sumKakaoMomentsReportRowsByMessageAdId_()
+ * ==========================================================
+ */
+function testSumKakaoMomentsReportRowsByMessageAdId(){
+
+  // 실제 응답 형태(runDebugKakaoMomentsReportForSpecificMessageAds() 실측,
+  // msg-ad-1534139723687342080 — 발송일(08-05)만 실적 있고 이후 이틀은 0)
+  const reportRows = [
+    {
+      dimensions: { message_ad_id: "msg-ad-1534139723687342080" },
+      metrics: { msg_send: 7039, msg_open: 2406, msg_click: 44, msg_send_fail: 7, cost: 105585, conv_signup_7d: 4 }
+    },
+    {
+      dimensions: { message_ad_id: "msg-ad-1534139723687342080" },
+      metrics: { msg_send: 0, msg_open: 729, msg_click: 5, msg_send_fail: 0, cost: 0, conv_signup_7d: 1 }
+    },
+    {
+      dimensions: { message_ad_id: "msg-ad-1534139723687342080" },
+      metrics: { msg_send: 0, msg_open: 20, msg_click: 0, msg_send_fail: 0, cost: 0, conv_signup_7d: 0 }
+    },
+    {
+      dimensions: { message_ad_id: "msg-ad-other" },
+      metrics: { msg_send: 100, msg_open: 50, msg_click: 5, msg_send_fail: 0, cost: 1000, conv_signup_7d: 0 }
+    }
+  ];
+
+  const result = sumKakaoMomentsReportRowsByMessageAdId_(reportRows);
+
+  const target = result["msg-ad-1534139723687342080"];
+
+  const pass =
+    target.msg_send === 7039 &&
+    target.msg_open === 3155 &&   // 2406+729+20
+    target.msg_click === 49 &&    // 44+5+0
+    target.msg_send_fail === 7 &&
+    target.cost === 105585 &&     // 0으로 덮어써지지 않고 발송일 값이 합산 유지돼야 함
+    target.conv_signup_7d === 5 && // 4+1+0
+    Math.abs(target.cost_per_conv_signup_7d - (105585 / 5)) < 1e-9 &&
+    result["msg-ad-other"].cost === 1000 &&
+    result["msg-ad-other"].cost_per_conv_signup_7d === 0; // conv_signup_7d=0 — 0으로 나누지 않고 0
+
+  Logger.log("Result: " + JSON.stringify(result, null, 2));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1335,20 +1610,22 @@ function syncKakaoMomentsReportToKakaoSMSRaw_(){
 
   const reportRows = (reportResult.body && reportResult.body.data) || [];
 
-  const metricsByMessageAdId = {};
+  const metricsByMessageAdId = sumKakaoMomentsReportRowsByMessageAdId_(reportRows);
 
-  reportRows.forEach(function(row){
-    const id = row.dimensions && row.dimensions.message_ad_id;
-    if(id) metricsByMessageAdId[id] = row.metrics;
-  });
+  // 17_UtmProgramDictionary.js — Marketo program(수동 입력 컬럼) 자동 채움용
+  // UTM↔Program 딕셔너리(같은 스프레드시트, MTA_Master에서 미리 채굴돼 있어야
+  // 함 — runRefreshUtmProgramDictionary() 참고). 신규 행에만 영향(preserveColIndexes가
+  // 기존 행의 이 컬럼을 그대로 보존하므로).
+  const utmProgramMap = readUtmProgramDictionaryMap_();
 
   const columnDefs = AD.KAKAO_CHANNEL.SYNC_COLUMNS;
   const headerValues = columnDefs.map(function(c){ return c.header; });
   const keyColIndex = 0; // Message Ad ID
-  const preserveColIndexes = [3, 7, 16, 17]; // PIC/Push/비고/Marketo program(수동 입력) — 재동기화 시 보존
+  const preserveColIndexes = [3, 7, 16]; // PIC/Push/비고(수동 입력) — 항상 재동기화 시 보존
+  const preserveOnlyIfNonBlankIndexes = [17]; // Marketo program — 사람이 채운 값만 보존, 비어있으면 딕셔너리 최신값으로 재시도(2026-08-08)
 
   const newRows = sentMessageAds.map(function(ad){
-    return computeKakaoMomentsSyncRow_(ad, metricsByMessageAdId[ad.messageAdId]);
+    return computeKakaoMomentsSyncRow_(ad, metricsByMessageAdId[ad.messageAdId], utmProgramMap);
   });
 
   const destSS = SpreadsheetApp.openById(AD.SPREADSHEET_ID);
@@ -1365,7 +1642,9 @@ function syncKakaoMomentsReportToKakaoSMSRaw_(){
     ? destSheet.getRange(2, 1, lastRow - 1, headerValues.length).getValues()
     : [];
 
-  const merged = mergeKakaoMomentsSyncRows_(existingRows, newRows, keyColIndex, preserveColIndexes);
+  const merged = mergeKakaoMomentsSyncRows_(
+    existingRows, newRows, keyColIndex, preserveColIndexes, preserveOnlyIfNonBlankIndexes
+  );
 
   if(existingRows.length > 0){
     destSheet.getRange(2, 1, existingRows.length, headerValues.length).clearContent();

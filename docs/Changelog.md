@@ -38,6 +38,58 @@
   것으로 추정(실제 데이터 없는 빈 컬럼일 가능성) — 사용자가 삭제 대신 개명 요청해 그대로
   두었으나 스캔 로직 수정 여부는 미정. 상세 진행 기록: `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md`.
 
+## Ad_Spend_Cache 독립 주기적(4시간) 갱신 트리거 추가 — docs/OpenItems.md #19 해제
+
+ACQ_REP를 refresh해도 Kakao Moments(메시지광고 API) 신규 데이터가 반영 안 된다는 문의로 조사한
+결과, ACQ_REP 자체 refresh는 2026-08-06 성능 분리 이후 Ad_Spend_Cache를 읽기만 하고,
+Kakao Moments API sync는 애초에 자동 파이프라인에 연결돼 있지 않았음을 확인. 사용자 확정
+방향("외부 시트에서 주기적으로 api 콜을 하도록") — `periodicRefreshAdSpendCache_()`/
+`runInstallAdSpendPeriodicRefreshTrigger()`(AD_004_SpendCache.js v1.4.1) 신규, 매
+`AD.SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS`(4, AD_001_Config.js v1.19.0)시간마다
+Kakao Moments sync + `refreshAdSpendCache_()`를 자동 실행. 기존 Leads/MTA 파이프라인 tail의
+`refreshCampaignSpend_()` 호출은 그대로 유지(하위호환). 실 사용자 실행으로 트리거 등록 확인.
+
+## Kakao Moments 버그 2건 발견·수정 (실 데이터 실행 중 발견)
+
+- **Event type 오분류**: `getBusinessSegment()`(16_TransformHelper.js v1.14.0)에 Webinar 판정
+  `campaign.includes("online-event")` 추가 — 카카오모먼트 메시지 이름이 기존 "event-online"과
+  반대 순서("...kakao-online-event")라 Other로 잘못 분류되던 문제, 사용자 실측 확인.
+- **Cost/Sent/Reach/Click 등이 0으로 덮어써지는 버그**: 카카오모먼트 리포트 API가
+  `dimension: "MESSAGE_AD"`로 요청해도 messageAdId당 한 줄이 아니라 **일자별로 여러 줄**을
+  반환하는데(발송일엔 실적 있고 이후 날짜는 0), 기존 코드가 마지막(대개 0인) 날짜 값으로
+  덮어써지고 있었음. `sumKakaoMomentsReportRowsByMessageAdId_()` 신규(AD_006_KakaoMoments.js
+  v1.21.0) — 같은 messageAdId의 모든 날짜 행을 합산(CPL은 합산된 cost/conv_signup_7d로
+  재계산)하도록 수정. 실 시트 재실행으로 Cost/Event type 정상화 확인.
+
+## UTM Campaign ↔ Marketo Program 딕셔너리 신규 구축 + Kakao Moments 자동 채움 연동
+
+KakaoSMS_Raw의 `Marketo program` 컬럼(Events_OPS 매칭용)을 사람이 매번 수기 입력해야 하는
+문제 해결을 위해, 이미 쌓여있는 MTA_Master(`MKT UTM Campaign`/`Lead Source Detail`)에서
+UTM↔Program 매핑을 자동 채굴하는 신규 딕셔너리 착수(사용자 요청, "마케토 프로그램-utm
+딕셔너리 하자"). `71_Search_Engine.js`의 `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(수작업 5~7개
+하드코딩)가 정확히 이걸 자동화하는 전례.
+
+- **17_UtmProgramDictionary.js 신규**(v1.3.0) — `readMtaMasterUtmProgramPairs_()`/
+  `aggregateUtmProgramCounts_()`/`resolveUtmProgramDictionaryEntries_()`/
+  `refreshUtmProgramDictionary_()`/`runRefreshUtmProgramDictionary()`/
+  `readUtmProgramDictionaryMap_()`. 같은 UTM에 서로 다른 Program이 섞이면 다수결 채택 +
+  확신도(Match/Total/Distinct Program Count) 기록. 자동 파이프라인엔 얹지 않음(MTA_Master
+  8만 행+ 전체 스캔, 수동/가끔 실행 전용). 실행 결과: 총 3,674개 UTM 키, 640개 모호(약 17%).
+- **모호한 UTM 원인 규명(실 데이터 진단)**: `runListAmbiguousUtmProgramEntries()`(후보 Program
+  전부 펼쳐 보여주는 버전으로 재설계, 사용자가 "뭐가 모호한지 안 보인다" 지적 후 수정)/
+  `runDebugMtaMasterTouchesForUtm()`로 실제 리드 터치 내역 확인 — Consolidated/Pmax류 복합
+  캠페인은 UTM 하나가 여러 개의 서로 다른 eBook 등 Program과 **진짜로 1:N**(예: 한 UTM이 8개
+  Program과 매칭). 같은 터치(같은 행) 안에서는 UTM/Program이 항상 정확한 짝이라 오류가
+  아니라 캠페인 설계상 정상 — 사용자 확인 후, 이런 UTM은 자동 채움에서 제외하고 사람이
+  직접 확인하는 것으로 확정(`readUtmProgramDictionaryMap_()`이 Distinct Program Count > 1인
+  항목 제외).
+- **Kakao Moments 연동**(AD_006_KakaoMoments.js v1.23.0) — `computeKakaoMomentsSyncRow_()`에
+  선택적 `utmProgramMap` 파라미터 추가(하위호환), `syncKakaoMomentsReportToKakaoSMSRaw_()`가
+  이 딕셔너리를 읽어 신규 행에 자동 채움. **재시도 로직 추가**(사용자 지적 — "미리 예측할
+  필요 없이 리드가 들어온 후 매칭되는 값을 나중에 채워도 된다"): `mergeKakaoMomentsSyncRows_()`에
+  `preserveOnlyIfNonBlankIndexes` 신규 — Marketo program은 기존 값이 **비어있을 때만** 매
+  주기적 재동기화 때 최신 딕셔너리로 재시도, 사람이 입력한 값은 계속 보존.
+
 # Changelog — 2026-08-07
 
 ## 세션 시작 자동 Pull 원칙 추가

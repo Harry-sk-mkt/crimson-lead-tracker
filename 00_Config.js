@@ -9,9 +9,14 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.34.0
+ * v1.35.0
  *
  * Change Log
+ * v1.35.0 (2026-08-08)
+ * - `CONFIG.UTM_PROGRAM_DICT.SHEET`("UTM_Program_Dictionary") 신규 — MTA_Master
+ *   에서 자동 채굴하는 UTM Campaign↔Marketo Program 딕셔너리 캐시 시트 설정
+ *   (신규 `17_UtmProgramDictionary.js`가 소비). Kakao Moments 메시지명(UTM
+ *   스타일)의 `Marketo program` 컬럼 자동 채움 위해 사용자 요청으로 착수.
  * v1.34.0 (2026-08-08)
  * - `CONFIG.FYREP.FYS`를 하드코딩 `[24,25,26]`에서
  *   `computeFYRepDefaultFYList_(24)`(FYREP_001_Engine.js 신규) 호출로
@@ -259,6 +264,17 @@ const CONFIG = {
     // 2026-08-04 추가 — 백그라운드 파이프라인 진행상태 표시용(08_PipelineAsync.js)
     README: "README"
 
+  },
+
+  /**
+     * UTM_PROGRAM_DICT — UTM Campaign ↔ Marketo Program명 딕셔너리(2026-08-08 신규).
+     * MTA_Master(MKT UTM Campaign / Lead Source Detail)에서 자동으로 채굴해
+     * 같은 스프레드시트 안 숨김 시트에 캐시(17_UtmProgramDictionary.js).
+     * Kakao Moments 등 UTM 스타일 이름만 있는 채널이 실제 Marketo Program명을
+     * 자동으로 찾을 때 이 캐시를 읽는다(Simple Trigger 안전, 같은 스프레드시트).
+     */
+  UTM_PROGRAM_DICT: {
+    SHEET: "UTM_Program_Dictionary"
   },
 
   /**

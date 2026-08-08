@@ -8,9 +8,15 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.13.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-08-08)
+ * - Webinar 판정에 `campaign.includes("online-event")` 추가 — 카카오모먼트
+ *   메시지광고 이름이 기존 "event-online"과 반대 순서("...kakao-online-event")로
+ *   와서 Other로 떨어지는 문제 실측 확인(KakaoSMS_Raw Event type 열, 사용자
+ *   보고). "event-offline"↔"offline-seminar" 반대 순서 등록 전례(v1.x, 2026-07-25)와
+ *   동일 패턴. 신규 테스트: testGetBusinessSegmentKakaoOnlineEventOrder().
  * v1.13.0 (2026-08-05)
  * - BUSINESS_SEGMENT_EXCEPTIONS에 "kr_core_expo_earlybird2_ptc": "Search"
  *   추가 — Search_OPS Naver 캠페인 매핑 작업 중 발견. "expo" 키워드로 인해
@@ -941,6 +947,7 @@ function getBusinessSegment(
   if (
     campaign.includes("event-online") ||
     campaign.includes("online-webinar") ||
+    campaign.includes("online-event") ||
     campaign.includes("book a consult") ||
     detail.includes("wb-") ||
     detail.includes("webinar") ||
@@ -1750,6 +1757,48 @@ function testGetBusinessSegmentResearchSubstringFix(){
     ["crimson-careers-typeform", "", "", "Content"],
     ["MedView - Contact Form", "", "", "Other"],
     ["{campaign.name}", "", "", "Other"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() "online-event" 순서(카카오모먼트 메시지광고
+ * 네이밍) 인식 확인
+ *
+ * WHY (2026-08-08)
+ * 카카오모먼트 메시지광고 이름(예: "KR_core_2026-08-08_ec-each-year-kakao-
+ * online-event")이 기존 "event-online" 리터럴과 순서가 반대라 Other로
+ * 떨어짐(사용자 실측 확인, KakaoSMS_Raw Event type 열). "event-offline"→
+ * "offline-seminar" 반대 순서 패턴을 이미 등록했던 전례와 동일한 방식으로
+ * "online-event" 추가.
+ * ==========================================================
+ */
+function testGetBusinessSegmentKakaoOnlineEventOrder(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+    ["KR_core_2026-08-08_ec-each-year-kakao-online-event", "", "", "Webinar"],
+    ["KR_core_2026-08-12_grades-ecs-kakao_event-online", "", "", "Webinar"] // 회귀 — 기존 순서 그대로 동작
   ];
 
   let pass = true;

@@ -21,9 +21,18 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.18.0
+ * v1.19.0
  *
  * Change Log
+ * v1.19.0 (2026-08-08)
+ * - `SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS`(4) 신규 — ACQ_REP를 refresh해도
+ *   Kakao Moments(메시지광고 API)/Naver Search 최신 지출이 반영 안 되는 문제
+ *   확인 후 사용자 요청("외부 시트에서 주기적으로 api 콜을 하도록"): ACQ_REP
+ *   자체 refresh는 2026-08-06 성능 분리대로 계속 캐시만 읽고, 대신 독립적인
+ *   시간 트리거(`periodicRefreshAdSpendCache_()`, `AD_004_SpendCache.js`
+ *   신규)가 이 간격으로 Kakao Moments sync + `refreshAdSpendCache_()`를 돌려
+ *   캐시를 최신 유지. `docs/OpenItems.md` 항목 19(2026-08-04 보류)를 사용자가
+ *   직접 해제한 것 — 상세는 그 문서 갱신 참고.
  * v1.18.0 (2026-08-08)
  * - `FX.RATES`(KRW/AUD/USD→NZD) 신규 — FY_REP Marketing 섹션(`perfTrackerByFY`)의
  *   AUD/USD 표기 플랫폼 지출을 NZD로 환산하기 위함. 기존 `KRW_TO_NZD_FORMULA`는
@@ -524,6 +533,26 @@ const AD = {
       AUD: { CELL_ROW: 2, FORMULA: '=GOOGLEFINANCE("CURRENCY:AUDNZD")' },
       USD: { CELL_ROW: 3, FORMULA: '=GOOGLEFINANCE("CURRENCY:USDNZD")' }
     }
+
+  },
+
+  /**
+  ==========================================================
+  SPEND_CACHE — Ad_Spend_Cache 독립 주기적 갱신(2026-08-08 신규,
+  사용자 확정: "외부 시트에서 주기적으로 api 콜을 하도록").
+  ACQ_REP 자체 refresh는 Ad_Spend_Cache를 읽기만 하고(2026-08-06 성능
+  분리, 되돌리지 않음) 이 캐시를 최신으로 유지하는 건 별도의 시간 트리거
+  (periodicRefreshAdSpendCache_(), AD_004_SpendCache.js) 몫 — 그 트리거의
+  실행 간격을 여기서 설정.
+  ==========================================================
+  */
+
+  SPEND_CACHE: {
+
+    // ACQ_REP가 보여줄 ad spend 데이터의 최대 지연 시간(사용자 확정, 2026-08-08).
+    // ScriptApp.newTrigger().timeBased().everyHours()가 받는 값 — 허용값(Apps
+    // Script 제약): 1/2/4/6/8/12.
+    PERIODIC_REFRESH_INTERVAL_HOURS: 4
 
   }
 
