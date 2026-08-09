@@ -9,9 +9,14 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.11.1
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-08-09)
+ * - `applyRatioFormulas_()` — RATIO_FORMULAS 스펙 컬럼이 header에 없을 때
+ *   조용히 건너뛰던 걸 `Logger.log` 경고로 남기도록 수정(qa-review 스킬
+ *   Mode 1 테스트런에서 지적된 silent skip 이슈). `testApplyRatioFormulas()`에
+ *   존재하지 않는 컬럼을 참조하는 스펙을 추가해 크래시 없이 건너뛰는지 검증.
  * v1.11.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `53_Events_Merge.js` → 신규 `EVENTS_004_Merge.js`, 코드 내용 변경 없음.
  * v1.11.0 (2026-08-09)
@@ -179,6 +184,12 @@ function mergeEventsOPS_(existingOps, engineMap) {
  * ratioSpecs  : {column, numerator, denominator}[]
  * dataStartRow: number        (1-based, 이 배열의 0번째 행이 시트에서 몇 행부터 시작하는지)
  *
+ * NOTE
+ * ratioSpecs의 column/numerator/denominator 중 하나라도 header에 없으면
+ * (RATIO_FORMULAS Config 오타/컬럼명 변경 후 갱신 누락 등) 그 스펙만 조용히
+ * 건너뛰던 걸 2026-08-09부터 Logger.log 경고로 남긴다 — QA 리뷰에서 지적된
+ * silent skip(에러 없이 그 컬럼만 수식이 안 채워짐) 재발 방지.
+ *
  * TEST
  * testApplyRatioFormulas 참고
  * ==========================================================
@@ -195,7 +206,11 @@ function applyRatioFormulas_(rows, header, ratioSpecs, dataStartRow) {
     const numLetter = columnLetters[header.indexOf(spec.numerator)];
     const denLetter = columnLetters[header.indexOf(spec.denominator)];
 
-    if (colIndex === -1 || !numLetter || !denLetter) return;
+    if (colIndex === -1 || !numLetter || !denLetter) {
+      Logger.log("⚠️ applyRatioFormulas_: RATIO_FORMULAS 스펙 컬럼을 header에서 찾을 수 없어 건너뜀 — " +
+        JSON.stringify(spec));
+      return;
+    }
 
     rows.forEach(function (row, i) {
       row[colIndex] = buildRatioFormula_(numLetter, denLetter, dataStartRow + i, 0);
@@ -215,7 +230,10 @@ function testApplyRatioFormulas() {
 
   const header = ["Num", "Den", "Ratio"];
   const rows = [["10", "5", ""], ["20", "4", ""]];
-  const ratioSpecs = [{ column: "Ratio", numerator: "Num", denominator: "Den" }];
+  const ratioSpecs = [
+    { column: "Ratio", numerator: "Num", denominator: "Den" },
+    { column: "Ratio", numerator: "Num", denominator: "MissingCol" }   // 존재하지 않는 컬럼 — 경고 후 건너뜀, 크래시 없어야 함
+  ];
 
   applyRatioFormulas_(rows, header, ratioSpecs, 3);
 

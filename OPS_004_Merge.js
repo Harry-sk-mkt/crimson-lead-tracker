@@ -7,9 +7,14 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.2.3
+ * v3.2.4
  *
  * Change Log
+ * v3.2.4 (2026-08-09)
+ * - 중복 이메일 스킵할 때마다 찍던 `Logger.log("[mergeOPS] Duplicate
+ *   skipped...")` 제거(사용자 요청 — 대량 중복 발생 시 실행 로그가 수백 줄로
+ *   도배됨, 실측 739건). 카운트(`summary.duplicate`)는 그대로 유지되고
+ *   `runOPSQA_()` BUILD SUMMARY에 총계로 이미 찍히므로 정보 손실 없음.
  * v3.2.3 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `22_OPS_Merge.js` → 신규 `OPS_004_Merge.js`, 코드 내용 변경 없음.
  * v3.2.2 (2026-07-29)
@@ -163,20 +168,6 @@ function mergeOPS(master, ops) {
       if (candidate !== earliest) {
 
         summary.duplicate++;
-
-        Logger.log(
-          "[mergeOPS] Duplicate skipped — Email: " +
-          email +
-          " / Lead ID: " +
-          candidate["Lead ID"] +
-          " / Create Date: " +
-          candidate["Create Date"] +
-          "  (kept Lead ID: " +
-          earliest["Lead ID"] +
-          ", Create Date: " +
-          earliest["Create Date"] +
-          ")"
-        );
 
       }
 

@@ -228,6 +228,24 @@ N/A       (2026-07-25 추가 — 아래 참고)
   레거시(campaign.includes("search")로 이미 확정되는 케이스나 leadSource 최종 fallback 경로 포함)는
   식별 기준이 아직 없어 별도 처리 필요, 임의로 처리하지 말 것.
 
+### ⚠️ "Campaign/Detail 빈 값 + Lead Source만 있음" Other 케이스 — Salesforce 동기화 이슈로 확인 (2026-08-09)
+- **발견**: temp_QA(`TEMPQA_001_BusinessSegment.js`)로 First MKT UTM Campaign/First Touch Detail이
+  둘 다 빈 값인데 Business Segment가 Other인 리드 284건 확인. 그중 하나(Lead ID
+  `00QRC00001FRZ2C`, ellypark.korea@gmail.com)는 Marketo 클릭 로그엔
+  `utm_campaign=KR_core_2025-09-17_demgen-kr-consolidated-ebook-mofu_lead`처럼 UTM이 멀쩡히
+  찍혀있어 이상해 보였음.
+- **확인(사용자, Salesforce 직접 조회)**: 이 리드의 Salesforce Lead 레코드 자체에 First Touch
+  Detail/UTM 필드가 비어있음 — 즉 Marketo 클릭 로그에는 UTM이 있었지만 Salesforce Lead로
+  동기화되는 과정에서 First Touch 필드가 채워지지 않았음. **이 프로젝트(Apps Script
+  파이프라인)의 문제가 아니라 Salesforce/Marketo 쪽 동기화 이슈** — `getBusinessSegment()`는
+  Salesforce export에 있는 값 그대로 읽을 뿐이라, 원본이 비어있으면 Other로 떨어지는 게 정상
+  동작.
+- **결론**: 284건 중 일부는 `SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES`의 의도된 매핑(Paid
+  Social/Affiliate Organization/Offline Outreach → Other), 일부는 이런 Salesforce 동기화
+  누락으로 설명 가능 — **코드 수정 대상 아님**. 이 근본 원인(Salesforce 동기화 누락)이 다른
+  리드에도 반복되는지는 Salesforce/Marketo 관리 쪽에서 별도 확인 필요, 이 저장소에서
+  임의로 처리하지 말 것.
+
 ## Marketo 네이밍 정정 필요 목록 (2026-07-25)
 아래는 `BUSINESS_SEGMENT_EXCEPTIONS`로 임시 우회 중인 캠페인/폼 이름. Marketo에서 이름 자체를
 정정(예: 프로그램명에 콘텐츠 유형 키워드 포함)하면 코드 하드코딩 없이도 일반 룰로 분류 가능해짐.

@@ -119,6 +119,59 @@ Spent/Results/CPL 중 하나만 표시하는 구조라 Spent/Results 셀이 화�
 - 실 시트에서 오늘 변경사항 전체(수식 표시 확인, On Track 색칠 확인, 새 파일명으로 편집기에
   잘 보이는지, 업로드 다이얼로그 정상 동작) 사용자 확인 대기 — 완료로 간주하지 말 것.
 
+## (세션 계속) `qa-review` 스킬 실사용 + Biz Segment QA 실행·룰 수정
+
+앞선 세션에서 만든 `qa-review` 스킬을 이어지는 새 세션에서 실제로 테스트런/실사용했다.
+
+- **Mode 1 테스트런**: 직전 커밋(9bcdc41)의 실제 로직 변경분(Events/ACQ_REP)을 리뷰 — `EVENTS_004_Merge.js`의
+  `applyRatioFormulas_()`가 `RATIO_FORMULAS` 스펙 컬럼을 header에서 못 찾으면 조용히 건너뛰던 silent-skip
+  발견. `Logger.log` 경고 추가 + `testApplyRatioFormulas()`에 존재하지 않는 컬럼 참조 케이스 추가
+  (`UTIL_001_TransformHelper.js`가 아니라 `EVENTS_004_Merge.js` v1.12.0).
+- **Mode 2 (Import 단계 리드 QA 갭 체크)**: "import될 때 리드 QA"를 확인해달라는 요청 — 실제로는 이미
+  `runOPSQA_()`(`checkExactDuplicateLeadRows_`/`checkLeadIdUniqueness_` 등)가 `runLeadsPipelineTail()`
+  → `buildLeadsOPS()` 체인으로 매 Leads 백그라운드 실행마다 자동 호출되고 있어(2026-08-04부터 배선)
+  이미 커버됨으로 결론, 코드 변경 없음.
+- **Biz Segment QA / Marketo-UTM 매칭 QA 서브에이전트 신규**: 사용자 요청으로 `.claude/agents/
+  biz-segment-qa.md`/`.claude/agents/utm-matching-qa.md` 생성 — `qa-review`의 "서브에이전트 대신
+  스킬" 결론(§4)에 대한 명시적 예외로 `docs/QAAgentDesign.md` §9에 기록. 각각 기존 진단 함수
+  (`TEMPQA_001_BusinessSegment.js`의 `runTempQABusinessSegment()`, `UTIL_002_UtmProgramDictionary.js`의
+  `runRefreshUtmProgramDictionary()`/`runListAmbiguousUtmProgramEntries()`)만 재사용하도록 명시,
+  새 진단 함수는 만들지 않음. **이번 세션 도중엔 신규 서브에이전트가 인식되지 않음**(세션 시작 시
+  agent 목록이 고정되는 것으로 추정) — 다음 세션부터 정상 트리거 예상.
+- **화/금 자동 QA 리마인더 routine — 보류**: 매주 월/목 업로드 기준 화/금에 두 QA를 자동 리마인드하고
+  싶다는 요청으로 `/schedule` 검토했으나, 클라우드 routine은 격리 sandbox(이 repo git checkout만 접근)라
+  실제 시트/Apps Script를 건드릴 수 없어 "텍스트 리마인더"까지만 가능함을 확인 — 사용자가 일단 수동
+  진행으로 결정, `docs/OpenItems.md` #24로 기록.
+- **Biz Segment QA 실행 결과 반영**: `runTempQABusinessSegment()` 실행 결과 중 "Other (룰상으로도
+  Other)" 플래그를 육안 검토.
+  - Campaign/Detail 둘 다 빈 값 + Lead Source만 있는 284건 — 조사 결과 (1) `SEARCH_CATCHALL_
+    LEAD_SOURCE_OVERRIDES`의 기존 의도된 매핑, (2) 일부는 **Salesforce/Marketo 동기화 이슈**로 확인
+    (Lead ID `00QRC00001FRZ2C` — Marketo 클릭 로그엔 UTM이 있으나 Salesforce Lead 자체엔 First Touch
+    필드가 비어있음, 사용자가 Salesforce에서 직접 확인). 코드 문제 아님 — `docs/
+    BusinessSegmentClassification.md`에 근거 기록, 코드 변경 없음.
+  - Campaign에 "bofu"/"webinar"/"seminar" 단어가 그대로 있는데도 Other로 떨어지던 **진짜 룰 갭
+    발견·수정** — 세 판정 전부 이 단어들을 Detail에서만 체크하고 Campaign은 붙임말 패턴만 봤음(예전
+    Content의 "campaign만 체크" 버그와 반대 방향의 동일 유형). `campaign.includes("bofu"/"webinar"/
+    "seminar")` 추가(`UTIL_001_TransformHelper.js` v1.15.0), 신규 테스트
+    `testGetBusinessSegmentCampaignBareKeywords()`.
+  - 키워드로 일반화 불가능한 8건은 `BUSINESS_SEGMENT_EXCEPTIONS`에 개별 확정 추가(v1.16.0) —
+    why-crimson-is-the-best/2026-admissions-trends/all-about-us-and-uk-med/sa-ha-admit/uk-medicine/
+    2024-early-admissions-result-analysis/major-strategy-part-2-humanity-and-liberal-arts-kuk → Webinar,
+    honors-that-get-into-the-ivy-league-eb-email-cta → Content. `kr_core_2021-09-01_contactus`는 이번에도
+    "BOFU 아니냐" 질문이 나왔으나 로그 대조 없이 한 판단이라, 예전 로그 대조 배치("Other", v1.12.0)가
+    더 신뢰도 높다고 사용자 확인 — 값 유지, 회귀 테스트만 추가.
+  - `rebuildLeadsMaster()` → `buildLeadsOPS()` 재실행으로 반영. 첫 시도에서 `writeOPS()` 타임아웃
+    발생(`docs/PerformanceBenchmark.md` 2026-08-09 항목 — 2026-07-25와 동일 패턴, 코드 버그 아님으로
+    판단) → 재시도로 정상 완료(OPS Records 5833, 246.94s).
+- **`mergeOPS()` 중복 로그 노이즈 제거**: 중복 이메일 스킵마다 찍던 `Logger.log("[mergeOPS] Duplicate
+  skipped...")`(실측 739줄) 삭제 — 카운트(`summary.duplicate`)는 유지, BUILD SUMMARY 총계로 이미
+  확인 가능해 정보 손실 없음(`OPS_004_Merge.js` v3.2.4).
+
+**미해결로 남김(사용자 확정, 다음 세션 TODO)**: 이번 `buildLeadsOPS()` 실행에서 나온 OPS QA 결과
+(Total Issues 9765 — Funnel Match 불일치: IC Booked Date 2904/IC Completed Date 2769/Opportunity Won
+Date 2696, Revenue Existence 746, Exact Duplicate Lead Row 650) 전부 오늘 세션 범위 밖이라 손대지
+않음 — 다음에 확인.
+
 # Changelog — 2026-08-08
 
 ## FY_REP(FY24~27 Marketing/ACQ/Pipeline/Revenue 비교 리포트) 구현 — Report/Write 레이어 완성, 실 시트 검증 대기

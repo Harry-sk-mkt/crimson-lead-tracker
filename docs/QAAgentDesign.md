@@ -78,3 +78,17 @@
 - `docs/EngineeringConstitutionalRULES.md` (Mode 1의 체크 기준)
 - `docs/OperationsLayer.md` (Leads_OPS_QA 시트, `24_OPSQA.js` 체크 목록)
 - `docs/apps-script-gotchas.md` (전역 함수 덮어쓰기, `_` 접미사 Run 드롭다운 이슈)
+
+## 9. 예외 — 특정 반복 QA 항목은 서브에이전트로도 생성 (2026-08-09)
+
+§4의 "서브에이전트 대신 스킬" 결론은 유지하되, **Biz Segment 분류 QA**/**Marketo-UTM
+매칭 QA**처럼 이미 진단 함수가 정해져 있고 반복적으로 호출할 좁은 범위의 QA 항목은 사용자
+요청으로 `.claude/agents/biz-segment-qa.md`/`.claude/agents/utm-matching-qa.md` 서브에이전트로
+별도 생성함(§4의 "대화형 왕복이 힘들다"는 한계는 여전히 유효 — `Agent` 툴의 `SendMessage`
+연속 호출로 대응: 에이전트가 1턴째에 "이 함수를 실행해서 결과를 알려달라"고 요청 →
+오케스트레이터가 사용자에게 전달 → 사용자가 결과를 붙여넣으면 같은 에이전트를 이어서 호출해
+해석). `qa-review` 스킬의 Mode 3(리포트 값 검증)과 겹치는 워크플로우이지만, 이 두 항목은
+빈도가 높아 전용 트리거(자연어로 바로 호출)를 두는 게 낫다고 판단(사용자 확정). 두 에이전트
+모두 새 진단 함수를 만들지 않고 기존 것만 재사용하도록 명시(`TEMPQA_001_BusinessSegment.js`
+`runTempQABusinessSegment()` / `UTIL_002_UtmProgramDictionary.js`
+`runRefreshUtmProgramDictionary()`+`runListAmbiguousUtmProgramEntries()`).

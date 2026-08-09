@@ -8,9 +8,31 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.14.1
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-08-09)
+ * - `BUSINESS_SEGMENT_EXCEPTIONS`에 temp_QA "Other (룰상으로도 Other)" 육안
+ *   검토 배치 8건 추가 — 키워드로 일반화 불가능해 사용자가 개별 확정
+ *   (why-crimson-is-the-best/2026-admissions-trends/all-about-us-and-uk-med/
+ *   sa-ha-admit/uk-medicine/2024-early-admissions-result-analysis/
+ *   major-strategy-part-2-humanity-and-liberal-arts-kuk → Webinar,
+ *   honors-that-get-into-the-ivy-league-eb-email-cta → Content).
+ *   `kr_core_2021-09-01_contactus`는 이번에도 "BOFU 아니냐"는 질문이 나왔으나
+ *   Marketo 로그 대조 없이 한 판단이라, 예전 로그 대조 배치("Other",
+ *   v1.12.0)가 더 신뢰도 높다고 사용자 확인 — 값 변경 없음(회귀 테스트만
+ *   추가). `testGetBusinessSegmentHardcodedExceptions()`에 케이스 추가.
+ * v1.15.0 (2026-08-09)
+ * - BOFU/Webinar/Seminar 판정에 Campaign 단어 자체("bofu"/"webinar"/"seminar")
+ *   체크 추가 — 기존엔 Detail에서만 이 단어들을 찾고 Campaign은 "ptc"/
+ *   "online-webinar"/"offline-seminar" 같은 붙임말 패턴만 봐서, Campaign에
+ *   단어가 그대로 있는 케이스(예: "...-bofu-naver-cafe-kuk")가 Other로
+ *   떨어지고 있었음. temp_QA "Other (룰상으로도 Other)" 육안 검토 중 사용자
+ *   발견. `BUSINESS_SEGMENT_EXCEPTIONS`로 이미 다른 값(Content/Other 등)이
+ *   확정된 캠페인들은 최우선순위 하드코딩이라 이 변경의 영향을 받지 않음
+ *   (grep으로 충돌 없음 확인). 신규 테스트:
+ *   testGetBusinessSegmentCampaignBareKeywords(). 기존 Master 데이터에
+ *   반영하려면 rebuildLeadsMaster() Full Rebuild 필요.
  * v1.14.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `16_TransformHelper.js` → 신규 `UTIL_001_TransformHelper.js`, 코드 내용 변경 없음.
  * v1.14.0 (2026-08-08)
@@ -767,7 +789,24 @@ const BUSINESS_SEGMENT_EXCEPTIONS = {
   // Seminar로 먼저 판정되고 있었으나, 실제로는 상담신청(ptc) 캠페인으로
   // Search가 맞다는 것을 사용자가 확인 — 일반 룰보다 우선하는 예외로 처리.
   // ------------------------------------------------------
-  "kr_core_expo_earlybird2_ptc": "Search"
+  "kr_core_expo_earlybird2_ptc": "Search",
+
+  // ------------------------------------------------------
+  // 2026-08-09 — temp_QA "Other (룰상으로도 Other)" 육안 검토 배치.
+  // 캠페인명에 일반화 가능한 키워드가 전혀 없어 룰로 못 잡는 케이스 —
+  // 사용자가 실제 캠페인 내용을 알고 있어 개별 확정. "kr_core_2021-09-01_
+  // contactus"는 이번 배치에서도 "bofu 아니냐"는 질문이 나왔으나, 그건
+  // Marketo 로그 대조 없이 한 판단이라 예전 로그 대조 배치(위, "Other")가
+  // 더 신뢰할 수 있다고 확인 — 값 변경 안 함.
+  // ------------------------------------------------------
+  "kr_core_2026-05-16_why-crimson-is-the-best": "Webinar",
+  "kr_core_2025-09-30_honors-that-get-into-the-ivy-league-eb-email-cta": "Content",
+  "kr_core_2026-02-11_2026-admissions-trends": "Webinar",
+  "kr_core_2025-09-13_all-about-us-and-uk-med": "Webinar",
+  "kr_core_2025-08-12_sa-ha-admit": "Webinar",
+  "kr_core_2025-04-30_uk-medicine": "Webinar",
+  "kr_core_2023-12-20_2024-early-admissions-result-analysis": "Webinar",
+  "kr_core_2023-07-22_major-strategy-part-2-humanity-and-liberal-arts-kuk": "Webinar"
 
 };
 
@@ -932,6 +971,7 @@ function getBusinessSegment(
     campaign.includes("offline-seminar") ||
     campaign.includes("expo") ||
     campaign.includes("summit") ||
+    campaign.includes("seminar") ||
     detail.includes("ev-") ||
     detail.includes("expo") ||
     detail.includes("summit") ||
@@ -951,6 +991,7 @@ function getBusinessSegment(
     campaign.includes("online-webinar") ||
     campaign.includes("online-event") ||
     campaign.includes("book a consult") ||
+    campaign.includes("webinar") ||
     detail.includes("wb-") ||
     detail.includes("webinar") ||
     detail.includes("book a consult") ||
@@ -965,6 +1006,7 @@ function getBusinessSegment(
 
   if (
     detail.includes("bofu") ||
+    campaign.includes("bofu") ||
     campaign.includes("ptc") ||
     detail.includes("ptc") ||
     detail.includes("consultation request") ||
@@ -1696,7 +1738,19 @@ function testGetBusinessSegmentHardcodedExceptions(){
     ["", "WF-2025-11-SGP-MOFU-Core US Admissions Quiz", "", "Content"],
     ["", "WF-2022-02-KOR-MOFU-Core Major Selection On Demand", "", "Content"],
     ["", "Mini SAT Practice Test (RUS-RU)", "", "Content"],
-    ["NZ_core_2021-06-10_email-au-webinar-research", "", "", "Content"]
+    ["NZ_core_2021-06-10_email-au-webinar-research", "", "", "Content"],
+
+    // 2026-08-09 추가 — temp_QA "Other (룰상으로도 Other)" 육안 검토, 키워드로
+    // 일반화 불가능해 개별 확정(사용자 확인)
+    ["KR_core_2026-05-16_why-crimson-is-the-best", "", "", "Webinar"],
+    ["KR_core_2025-09-30_honors-that-get-into-the-ivy-league-eb-email-cta", "", "", "Content"],
+    ["KR_core_2026-02-11_2026-admissions-trends", "", "", "Webinar"],
+    ["KR_core_2025-09-13_all-about-us-and-uk-med", "", "", "Webinar"],
+    ["KR_core_2025-08-12_sa-ha-admit", "", "", "Webinar"],
+    ["KR_core_2025-04-30_uk-medicine", "", "", "Webinar"],
+    ["KR_core_2023-12-20_2024-early-admissions-result-analysis", "", "", "Webinar"],
+    ["KR_core_2023-07-22_major-strategy-part-2-humanity-and-liberal-arts-kuk", "", "", "Webinar"],
+    ["KR_core_2021-09-01_contactus", "", "", "Other"] // 재확인(2026-08-09) — 로그 대조 없이 판단한 "bofu"보다 예전 로그 대조 배치("Other")가 신뢰도 높음, 값 유지
   ];
 
   let pass = true;
@@ -1801,6 +1855,55 @@ function testGetBusinessSegmentKakaoOnlineEventOrder(){
     // [campaign, detail, leadSource, expected]
     ["KR_core_2026-08-08_ec-each-year-kakao-online-event", "", "", "Webinar"],
     ["KR_core_2026-08-12_grades-ecs-kakao_event-online", "", "", "Webinar"] // 회귀 — 기존 순서 그대로 동작
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST
+ * getBusinessSegment() — Campaign에 bofu/webinar/seminar 단어 자체가 있는데
+ * Detail 전용 체크라 놓치던 케이스 (2026-08-09, temp_QA "Other (룰상으로도
+ * Other)" 육안 검토 중 사용자 발견)
+ *
+ * WHY
+ * BOFU/Webinar/Seminar 판정이 전부 "bofu"/"webinar"/"seminar" 단어 자체는
+ * Detail에서만 찾고 Campaign에서는 각각 "ptc"/"online-webinar"/"offline-seminar"
+ * 같은 붙임말 패턴만 체크하고 있었음 — 예전 Content의 "campaign만 체크,
+ * detail은 안 봄" 버그(2026-07-25)와 반대 방향의 동일 유형 버그. Campaign에
+ * 단어 자체가 그대로 있는 케이스(예: "...-bofu-naver-cafe-kuk",
+ * "...-webinar-usa", "...-seoul-seminar-...")가 Other로 떨어지고 있었음.
+ * ==========================================================
+ */
+function testGetBusinessSegmentCampaignBareKeywords(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+    ["KR_core_2026-05-08_johns-hopkins-bofu-naver-cafe-kuk", "", "", "BOFU"],
+    ["KR_core_2025-08-23_ec-timeline-webinar-usa", "", "", "Webinar"],
+    ["KR_core_2023-06-24_alumni-webinar-part-2-stem-kuk", "", "", "Webinar"],
+    ["KR_core_2025-04-12_04-12-rd-seoul-seminar-kakao-da", "", "", "Seminar"],
+    ["KR_core_2025-02-03_application-strategy-with-stanford-fao-daniel-seoul-seminar", "", "", "Seminar"],
+    ["KR_core_2024-09-01_jamie-seminar-jeju", "", "", "Seminar"]
   ];
 
   let pass = true;

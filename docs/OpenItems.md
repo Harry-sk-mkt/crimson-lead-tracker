@@ -182,3 +182,23 @@
     run-function` 전무) 리포트 값 검증 모드는 "진단 함수 작성 → 사용자가 Apps Script 편집기에서
     직접 Run → 결과 붙여넣기" 가이드형 워크플로우로 설계, naming/version-header/중복선언/문법은
     이미 `scripts/check-*.sh`가 커버하므로 재구현하지 않음. 상세: `docs/QAAgentDesign.md`.
+24. **원하는 파이프라인 순서(1차 import → master 업로드 → marketo-utm 매칭 → QA → 비즈니스
+    세그먼트 분류 → QA → OPS 싱크)를 화/금 자동 리마인더 routine으로 걸어두고 싶다는 요청 —
+    routine 미구현, 당분간 수동 진행으로 보류(2026-08-09)** — 사용자가 매주 월/목 리드 업로드
+    기준으로 화/목요일에 Biz Segment QA(`biz-segment-qa` 서브에이전트)/UTM 매칭 QA
+    (`utm-matching-qa` 서브에이전트)를 routine으로 자동 실행하고 싶어함. `/schedule` 스킬로
+    확인한 결과, 클라우드 routine은 격리된 sandbox(이 repo git checkout만 접근 가능)에서 돌아서
+    **실제 Google Sheet를 읽거나 Apps Script 함수를 실행할 방법이 없음**(23번 항목과 동일한
+    근본 제약 — Sheets API/MCP/`clasp run-function` 전무) — 즉 routine이 QA를 대신 완료해줄 수
+    없고 "지금 이 함수 돌릴 차례예요"라는 텍스트 리마인더 역할까지만 가능. 사용자에게 리마인더를
+    어떤 형태(예: GitHub Issue 자동 생성)로 받을지 물었으나, **일단은 수동으로 진행하기로 결정**
+    — routine 생성은 보류, 이 항목으로 로그만 남김. 두 서브에이전트(`.claude/agents/
+    biz-segment-qa.md`/`.claude/agents/utm-matching-qa.md`) 자체는 이미 생성 완료(§9,
+    `docs/QAAgentDesign.md`) — 수동으로 부를 때는 정상 사용 가능. 향후 `clasp run-function` 또는
+    Sheets API/MCP 연동이 생기면 이 routine 자동화를 재검토할 것 — 임의로 착수하지 말 것.
+25. **OPS QA 결과(Total Issues 9765건) — 미해결로 보류, 다음 세션 확인 필요(2026-08-09)** —
+    Biz Segment 룰 수정(24번 항목 인접 세션 작업, `UTIL_001_TransformHelper.js` v1.15.0/v1.16.0)
+    반영을 위한 `rebuildLeadsMaster()` → `buildLeadsOPS()` 재실행 중 `runOPSQA_()`가 출력한 값 —
+    Funnel Match 불일치(IC Booked Date 2904/IC Completed Date 2769/Opportunity Won Date 2696),
+    Revenue Existence 746, Exact Duplicate Lead Row 650. 사용자 확인 — 오늘 세션 범위 밖이라
+    **의도적으로 미해결 상태로 둠**, 원인 조사·처리는 다음 세션에서. 임의로 손대지 말 것.

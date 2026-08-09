@@ -102,3 +102,19 @@ Search/Content Engine → Target Actuals refresh 전체 체인을 실행.
 알림을 받고 다이얼로그를 닫을 수 있음 — 이 6분은 브라우저를 막지 않음(설계 목적 달성).
 README 탭 Pipeline Status A1:C7 표시 위치도 사용자가 직접 셀 클릭 확인(Name Box: A1) —
 설계대로 정상 동작 확인.
+
+## 2026-08-09 — `buildLeadsOPS()` write 타임아웃 재발 (참고용 실패 사례, 2건째)
+
+배경: Business Segment 룰 수정(Campaign bofu/webinar/seminar 키워드 추가 + 예외 8건,
+`UTIL_001_TransformHelper.js` v1.15.0/v1.16.0) 반영을 위한 `rebuildLeadsMaster()` →
+`buildLeadsOPS()` 재구축 중 `buildLeadsOPS()` 실패.
+
+| 실패 지점 | 에러 |
+| --- | --- |
+| `writeOPS()`(`OPS_005_Write.js:65`, `buildLeadsOPS`(`OPS_003_Build.js:57`)에서 호출) | `Exception: Service Spreadsheets timed out while accessing document with id ...` |
+
+2026-07-25 항목(그때 35,482행)과 정확히 같은 실패 지점·같은 에러 문구 — 코드 버그가 아니라
+그때 이미 식별된 "Leads_OPS 전체를 매번 `clear()`+`setValues()`로 전량 재작성"하는 구조적
+타임아웃 위험이 데이터가 더 늘어난 채로 재발한 것으로 추정. 조치: `buildLeadsOPS()` 재시도
+안내(재현 시나리오 확인 전까지 증분 업데이트 리팩터링은 착수하지 않음 — 반복되면 그때
+우선순위 재검토).
