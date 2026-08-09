@@ -175,7 +175,10 @@
     (`readUtmProgramDictionaryMap_()`이 Distinct Program Count > 1 항목 제외). 딕셔너리는
     수동 실행(`runRefreshUtmProgramDictionary()`) 전용 — 자동 파이프라인엔 얹지 않음(MTA_Master
     전체 스캔 8만 행+ 무거움).
-23. **QA 에이전트 설계 — 신규 TODO(2026-08-08), 착수 전** — 사용자가 세션 종료 시점에 "QA 에이전트
-    설계"를 todo로 남겨달라고 요청. 상세 스코프/목적은 이 세션에서 논의되지 않음 — 착수 전 범위
-    확인 필요(무엇을 QA하는 에이전트인지, 이 프로젝트의 어느 영역 대상인지 등), 임의로 설계하지
-    말 것.
+23. ~~QA 에이전트 설계~~ — **설계 및 구현 완료(2026-08-09)**. 사용자 확인 결과 스코프는
+    데이터 정합성+리포트 값 검증+코드/엔지니어링 품질 3개 전부, 형태는 Claude Code 서브에이전트/
+    스킬. `.claude/skills/qa-review/SKILL.md` 신규(Apps Script 코드 변경 없음, 스킬/문서만).
+    Claude가 라이브 Google Sheet를 읽을 방법이 전혀 없음을 확인해(Sheets API/MCP/`clasp
+    run-function` 전무) 리포트 값 검증 모드는 "진단 함수 작성 → 사용자가 Apps Script 편집기에서
+    직접 Run → 결과 붙여넣기" 가이드형 워크플로우로 설계, naming/version-header/중복선언/문법은
+    이미 `scripts/check-*.sh`가 커버하므로 재구현하지 않음. 상세: `docs/QAAgentDesign.md`.

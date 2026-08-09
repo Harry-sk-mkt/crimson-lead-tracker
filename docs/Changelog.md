@@ -1,3 +1,124 @@
+# Changelog — 2026-08-09
+
+## QA 에이전트 설계 및 구현 — `qa-review` 스킬 신규
+
+`docs/OpenItems.md` #23("QA 에이전트 설계 — 착수 전, 임의로 설계하지 말 것")의 후속. 사용자
+확인 결과 스코프는 데이터 정합성+리포트 값 검증+코드/엔지니어링 품질 3개 전부, 형태는 Claude
+Code 서브에이전트/스킬. 탐색 결과 이 저장소엔 기존 `.claude/agents`/`.claude/skills`/
+`.claude/commands`가 전혀 없었고, naming/version-header/중복선언/문법은 이미
+`scripts/check-*.sh`가 커밋마다 강제 중이라 재구현 대상에서 제외. **Claude는 라이브
+Google Sheet를 읽을 방법이 전혀 없음을 확인**(Sheets API/MCP/`clasp run-function` 전무)—
+리포트 값 검증 모드는 "진단 함수 작성 → 사용자가 Apps Script 편집기에서 직접 Run → 결과
+붙여넣기" 가이드형 워크플로우로 설계. `.claude/skills/qa-review/SKILL.md` 신규(Apps Script
+코드 변경 없음), `docs/QAAgentDesign.md` 설계 문서 신규, `CLAUDE.md`/`docs/OpenItems.md` #23
+갱신. **세션 후반 실사용 테스트**: 이번 세션 중에 만든 스킬이라 스킬 목록이 그 자리에서 바로
+갱신되지 않아(다음 세션부터 정상 인식 예상) `Skill` 도구 호출은 실패, SKILL.md 내용을 수동으로
+따라 Mode 1(코드 품질 리뷰)을 오늘 변경 코드에 시연 — 개선 권고 4건 발견(전부 경미, 아래 참고).
+
+## 비율/퍼센트 컬럼을 정적 값 → 실제 시트 수식으로 전환
+
+사용자 요청 — Events_OPS의 "Success %" 등 여러 % 컬럼이 JS에서 미리 계산한 숫자만 시트에
+쓰고 있어, 분자/분모로 쓰인 수동 입력 컬럼(Spent 등)을 나중에 고쳐도 파이프라인을 다시 돌리기
+전까진 반영이 안 되는 문제. 셀에 실제 `=IFERROR(...)` 수식이 들어가도록 전환해 수동 입력값
+수정 시 자동 재계산되게 함. 스코프는 **OPS 4개 시트 + ACQ_REP + NewP1_REP** — Target_REP(값
+자체가 벤치마크 기반 다단계 역산이라 같은 행 두 컬럼 나누기가 아님), FY_REP CPL(드롭다운으로
+Spent/Results/CPL 중 하나만 표시하는 구조라 Spent/Results 셀이 화면에 동시 존재하지 않아 참조
+불가 — 구현 중 발견)은 제외.
+
+- **탐색으로 확인한 재사용 가능 인프라**: `columnIndexToLetter_()`(`EVENTS_005_Write.js`, 구
+  `54_Events_Write.js`)가 이미 컬럼 인덱스→A1 문자 변환 공용 함수로 존재. 수식 문자열을
+  `setValues()`에 넣는 전례도 이미 있음(`writeEventsSubtotalRow_()`의 SUBTOTAL 수식,
+  `AD_006_KakaoMoments.js`의 IF-가드 나눗셈 수식).
+- **신규 공용 헬퍼**(`EVENTS_005_Write.js`에 추가, 기존 관례 따름): `buildRatioFormula_()`
+  (분모 0 → 고정 fallback, OPS 4개 시트 전부 이 케이스), `buildGuardedRatioFormula_()`(분자
+  또는 분모 셀이 공란이면 무조건 공란 — Target%/CPNP1처럼 외부 조회값이 없을 수 있는 컬럼용,
+  `guardColLetter` 인자로 어느 쪽을 가드할지 지정).
+- **OPS 4개 시트**(`EVENTS_004_Merge.js`/`BOFU_004_Merge.js`/`SEARCH_004_Merge.js`/
+  `CONTENT_004_Merge.js` 및 각 `_Config.js`): `applyXGroup5Derived_()` 계열 함수와
+  `divideGuard_()`(사용처 grep으로 전체 확인 후 삭제) 제거, `RATIO_FORMULAS` Config 스펙 +
+  공용 `applyRatioFormulas_()`(`EVENTS_004_Merge.js`)로 대체 — 정렬 후 최종 행 배열이 확정된
+  시점에 수식 주입.
+- **ACQREP_001_Report.js**: All P1%/New Leads%/New P1%(0 fallback), Revenue Target%/New P1
+  Target%(공란 fallback, "Target 없음"과 "Target=0" 구분) 전환. On Track 하이라이트 로직은
+  원본 값 기반이라 영향 없음.
+- **NEWP1REP_001_Report.js**: SAL%/IC Booked%/IC Complete%/Won%(공란 fallback, ACQ_REP
+  메인비율과 fallback 값이 다름에 주의해서 반영), CPNP1/New P1 Target%(값 없음 가드).
+- 각 컬럼마다 "분모 0/값 없음" 처리 방식(0 vs 공란, 분자 가드 vs 분모 가드)이 실제로 전부
+  달라 기존 JS 삼항연산자 로직을 하나하나 정확히 재현 — 획일적으로 가정하지 않음.
+
+## ACQ_REP 스타일링 조정 (사용자 요청 4건)
+
+- **New Leads%(H) 중앙값 강조 제거** — 불필요 판단, `highlightAboveMedian_()` 삭제(다른
+  사용처 없음 확인).
+- **CPNP1 On Track 강조 신규** — 사용자가 이미 ACQ_REP에 수동으로 만들어둔 X열("CPNP1" 헤더,
+  X4)에 On Track(Actual ≤ Target, CPNP1은 낮을수록 좋은 지표라 방향 반대) 강조 추가.
+  `CONFIG.ACQ.CPNP1_COLUMN`(24) 신규. Target CPNP1 = Target_Engine Block 0 수동 Spent ÷ New
+  P1 Target(기존 `computeReportTargetLookup_()`의 `spent` 필드 재사용, 처음으로 소비). X열의
+  값/수식 자체는 전혀 안 건드리고 배경/볼드만 적용.
+- **Revenue On Track이면 Segment(C열)도 같이 강조**.
+- **On Track 강조 셀(S/T/V/X) + F/J 세그먼트 상위 25% 강조에 볼드 추가** — 지금까지 색만
+  칠하고 볼드는 없었음.
+- 위 과정에서 완전히 미사용 상태가 된 `highlightAtOrAboveThreshold_()`(NewP1_REP의 마지막
+  호출부가 아래 항목으로 대체되며 orphan화)도 함께 삭제.
+
+## NewP1_REP 스타일링 조정 (사용자 요청)
+
+- New P1 Target%(Q)가 100% 이상(On Track)이면 Q 하나만이 아니라 **C(Segment)/D(New P1)/Q
+  세 컬럼 모두** 강조하도록 확장 — 신규 `applyNewP1TargetOnTrackHighlight_()`
+  (`NEWP1REP_002_Styles.js`). 기존 옅은 초록(#C6E0B4, 볼드 없음) 대신 ACQ_REP과 동일한 밝은
+  초록(#01ef18)+볼드로 색상 통일. 재실행 시 이전 강조가 안 남도록 배경/폰트weight 초기화 로직도
+  같이 정리.
+
+## 파일 전체를 신규 네이밍 컨벤션(`STAGE_NNN_Name.js`)으로 정리
+
+2026-07-30에 결정만 되고 "별도 세션으로 보류"돼 있던 작업(당시 `AD_*`/`FYREP_*` 신규 파일에만
+적용, 기존 65개 `NN_Name.js` + `00_UploadDialog.html`은 미착수) — 이번 세션에서 전체 전환
+완료. `CORE`/`IMPORT`/`MASTER`/`UTIL`/`OPS`/`ACQREP`/`NEWP1REP`/`EVENTS`/`BOFU`/`SEARCH`/
+`CONTENT`/`TARGET`/`MAINT`(신규, 워크북 전체 유지보수 — Target과 무관해 별도 분리)/`RESET`/
+`TEMPQA`(신규, TempQA 스크래치 파일 6개를 원래 흩어져 있던 도메인 번호대 대신 단일 스테이지로
+통합 — 사용자 확정) 15개 스테이지로 재편.
+
+- **기능적 위험 요소 처리**: `IMPORT_001_Import.js`(구 `00_Import.js`)의
+  `HtmlService.createTemplateFromFile("00_UploadDialog")` 문자열 참조를
+  `"CORE_003_UploadDialog"`로 같이 수정(안 고쳤으면 업로드 다이얼로그 전체가 깨졌을 것) —
+  `CORE_003_UploadDialog.html` 내부의 동일 문자열 상수도 같이 정리.
+- 파일마다 Version/Change Log에 "구 파일명 → 신 파일명, 코드 내용 변경 없음" 한 줄 기록.
+  버전 헤더 형식이 파일마다 미묘하게 달라서(2-part/3-part 버전, 한 줄/두 줄 Version 표기,
+  Change Log 섹션 자체가 없던 옛 파일도 있었음) Node 스크립트로 자동화하되 케이스별 분기 처리.
+- `docs/NamingConvention.md`에 `STAGE_NNN_Name.js` 규칙 자체를 정식 문서화(지금까지
+  `docs/Changelog.md` 2026-07-30 항목에만 서술돼 있었고 정작 컨벤션 문서엔 없었음),
+  `CLAUDE.md`의 옛 파일명 언급 2건도 갱신.
+  **히스토리 문서(`docs/Changelog.md` 자체, `docs/exec-plans/**`, 각 파일 Change Log의 과거
+  날짜 항목)는 소급 개명하지 않음** — 그 시점 실제 파일명 기록 보존 원칙.
+- **미해결로 남긴 것**: `docs/ImportPipeline.md`/`docs/ACQReportDesign.md`/
+  `docs/OperationsLayer.md`/`docs/OpenItems.md` 등 20여 개 문서에 옛 파일명 참조가 총 200개
+  이상 남아있음(예상보다 훨씬 큰 규모라 이번 세션에서 미처리) — 다음에 처리 여부 확인 필요.
+- `scripts/check-*.sh` 4종 전부 통과, `safe-clasp-push.sh`로 76개 파일 배포 확인.
+
+## 안 쓰는 함수 정리
+
+전체 745개 함수(`test*` 176/`run*` 103/`_`헬퍼 392/기타 74) 전수 조사 — **고아 테스트 0건,
+참조 없는 헬퍼 0건**(오늘 세션 초반 수식 전환 작업 중 실제 죽은 코드는 이미 다 정리했었음).
+유일한 후보 `debugListAllSheetNames()`(`ACQREP_002_Summary.js`, 호출부 없음+주석에 "TEMP"
+명시)만 사용자 확인 후 삭제. `createReportMenu()`(`CORE_002_Menu.js`)는 의도적으로 비활성
+보존된 함수라 그대로 유지.
+
+## 다음에 다룰 항목
+- **문서 내 옛 파일명 참조 정리 여부 확인** — 위 "미해결로 남긴 것" 참고, 20여 개 문서·200개+
+  참조. 히스토리 문서(Changelog/exec-plans)는 제외하고 현재상태 서술 문서만 대상.
+- **`qa-review` 스킬 정상 인식 확인** — 다음 세션에서 `/qa-review` 또는 자연어 트리거로 재확인.
+- 오늘 세션 리뷰에서 나온 경미한 개선 후보(우선순위 낮음, 임의로 처리하지 말 것):
+  1. `buildRatioFormula_()`/`buildGuardedRatioFormula_()`(`EVENTS_005_Write.js`)를 신규
+     `UTIL_` 스테이지로 이전할지 검토 — 지금은 Events 파일에 있는데 ACQ_REP/NewP1_REP까지
+     공용으로 씀.
+  2. ACQ_REP의 `revenueOnTrack`/`newP1OnTrack`/`cpnp1OnTrack` 판정 로직을 인라인에서
+     pure 함수로 분리해 단위 테스트 대상으로 만들지 검토.
+  3. `ACQREP_003_Styles.js`의 X열(CPNP1)에 다른 Target 컬럼처럼 로직 설명 Note 추가.
+  4. NewP1_REP의 on-track 강조(`applyNewP1TargetOnTrackHighlight_()`)를 ACQ_REP처럼
+     배열 기반 배치 처리로 통일할지 검토(현재는 per-row 개별 호출, 성능 문제는 없음).
+- 실 시트에서 오늘 변경사항 전체(수식 표시 확인, On Track 색칠 확인, 새 파일명으로 편집기에
+  잘 보이는지, 업로드 다이얼로그 정상 동작) 사용자 확인 대기 — 완료로 간주하지 말 것.
+
 # Changelog — 2026-08-08
 
 ## FY_REP(FY24~27 Marketing/ACQ/Pipeline/Revenue 비교 리포트) 구현 — Report/Write 레이어 완성, 실 시트 검증 대기
