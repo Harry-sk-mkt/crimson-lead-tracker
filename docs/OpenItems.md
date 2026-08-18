@@ -202,3 +202,15 @@
     Funnel Match 불일치(IC Booked Date 2904/IC Completed Date 2769/Opportunity Won Date 2696),
     Revenue Existence 746, Exact Duplicate Lead Row 650. 사용자 확인 — 오늘 세션 범위 밖이라
     **의도적으로 미해결 상태로 둠**, 원인 조사·처리는 다음 세션에서. 임의로 손대지 말 것.
+26. **`Sales Accepted Date` 과거 오염 데이터 재수집 필요 (코드 수정 완료, 데이터 복구는 TODO, 2026-08-19)** —
+    S&M_REP(신규 리포트) 개발 중 미래 날짜(9~12월)로 찍힌 SAL을 사용자가 발견, ACQ_REP에서도 동일
+    현상 확인 후 Salesforce Field History로 직접 추적해 원인 확정: `CONFIG.RAW_DATE_COLUMNS.MTA`에
+    `"Lead: Sales Accepted Date"`가 누락돼 있어(이 필드가 2026-07-25에 파이프라인에 추가됐는데
+    보호 목록 확정(2026-07-21)엔 그때 같이 반영이 안 됨) Google Sheets가 day-first 원본("9/8/2026"
+    = 실제 8월 9일)을 자기 locale로 오해석해 9월 8일로 영구 변환 — 원본 텍스트 소실. 상세 원인/증거:
+    `docs/DateParsing.md` "2026-08-19 — 재발 사례" 섹션. **코드 수정 완료**(`CONFIG.RAW_DATE_COLUMNS.MTA`에
+    추가, `CORE_001_Config.js` v1.38.0) — 이후 신규 MTA Import부터는 재발 안 함. **미해결**: 이미
+    MTA_Raw/MTA_Master에 잘못 저장된 과거 `Sales Accepted Date` 값(2026-07-25~08-19 사이 import된
+    분량 추정, 정확한 영향 범위 미확인)은 원본 텍스트가 소실돼 코드 수정만으로 복구 불가 — Salesforce에서
+    이 필드를 포함해 재export 후 재import(또는 해당 컬럼만 별도 백필) 필요, 착수 전 정확한 영향 범위(몇
+    건, 어느 기간)부터 확인할 것. 임의로 처리하지 말 것.

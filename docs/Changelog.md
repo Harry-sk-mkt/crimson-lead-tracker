@@ -1,4 +1,57 @@
-# Changelog — 2026-08-09
+# Changelog — 2026-08-19
+
+## MTA Funnel Sync 성능 버그 수정 + S&M_REP 신규 리포트 + Sales Accepted Date 데이터 오염 발견·복구 + Pipeline Status self-heal 확장
+
+- **버그 발견·수정 — MTA Funnel Sync 개별 setValue() 반복으로 인한 성능 문제(실측
+  978.95초 ≈ 16.3분)**: MTA BOFU_OPS에서 Pipeline Status가 RUNNING에 멈춰있다는
+  사용자 보고로 조사 시작 — Apps Script Executions 로그 확인 결과 "Timed Out"
+  (30분 실행시간 초과), `syncMTAFunnelToOPS_()`(`MASTER_003_MTAFunnelSync.js`)가
+  리드당 바뀐 필드마다 `opsSheet.getRange().setValue()`를 개별 호출(8,193개 리드 ×
+  최대 5개 필드 = 수만 번의 개별 Sheets API 호출)하던 게 원인. 신규 순수 함수
+  `computeMTASyncColumnUpdates_()`로 분리해 컬럼별 기존 값을 한 번에 읽고 메모리에서
+  갱신한 뒤 컬럼당 단일 `setValues()`로 되돌려 쓰는 배치 패턴으로 전환(v1.6.0) —
+  실측 55.41초로 단축(17.7배), 전체 MTA 파이프라인도 30분 타임아웃 없이 완주 확인.
+
+- **신규 리포트 `S&M_REP`(Sales & Marketing Weekly Dashboard) 구현**: 사용자 요청으로
+  신규 시트 — Target_REP과 동일한 주간(월~일) 구조(FY 하나 선택 → 그 FY 전체 주가
+  행) 재사용. Leads 블록(All Leads/New Leads/New P1/Event/BOFU/Content/Organic/
+  Referral) + SAL 블록(All SAL/P1/BOFU/Search/Organic/Referral), 두 블록의 breakdown
+  세그먼트 구성이 의도적으로 비대칭(사용자 확정). `CONFIG.SM_REP`(`CORE_001_Config.js`),
+  `SMREP_001_Report.js`(집계/Control Area/Generate), `SMREP_002_Styles.js`(서식) 신규
+  — 기존 `handleReportGenerateEdit()` 공용 설치형 트리거 재사용(별도 설치 불필요).
+
+- **버그 발견·수정 — `Sales Accepted Date` 미래 날짜 데이터 오염(`CONFIG.RAW_DATE_COLUMNS.MTA`
+  누락)**: S&M_REP 검증 중 SAL이 미래 월(9~12월)에 찍히는 현상 발견 → ACQ_REP도 동일
+  현상 확인 → Salesforce Field History로 직접 추적해 원인 확정("9/8/2026"이 실제로는
+  8월 9일인데 9월 8일로 저장돼 있었음). `Lead: Sales Accepted Date`가 2026-07-25에
+  파이프라인에 추가됐는데 Plain Text 보호 목록(`CONFIG.RAW_DATE_COLUMNS.MTA`, 2026-07-21
+  확정)엔 그때 반영이 안 돼, Google Sheets가 day-first 원본을 자기 locale로 오해석해
+  영구 변환된 것 — 목록에 추가해 재발 방지(`CORE_001_Config.js` v1.38.0). **데이터 복구**:
+  읽기 전용 감사(`TEMPQA_007_SalesAcceptedDateAudit.js`, 8,191건 중 3,193건 오염 확인) →
+  swap-back 공식으로 MTA_Raw 직접 복구(`TEMPQA_008_SalesAcceptedDateRepair.js`,
+  "Raw는 원본 보존" 원칙의 명시적 예외 — 원본 텍스트가 이미 소실돼 보존 불가) →
+  `rebuildMTAMaster()` → `runSyncMTAFunnelToOPS()`. 복구 후에도 남은 4건을
+  `TEMPQA_009_SalesAcceptedDateLeadTrace.js`로 추적한 결과 (1) 대표 터치가 공란인데
+  Leads_OPS에 잔존한 옛 값(→ `TEMPQA_010_SalesAcceptedDateStaleClear.js`로 강제
+  클리어) / (2) day>12라 swap 가설과 무관한 별개 원인(월말 날짜 패턴, Salesforce
+  자동화 추정) 2건으로 구분됨. 잔여 3건은 `docs/OpenItems.md` #26에 미해결로 기록.
+
+- **버그 발견·수정 — 플랫폼 강제종료/내부 오류 시 README Pipeline Status에 "RUNNING"
+  영구 잔존(BOFU_OPS Timed Out에 이어 Leads_OPS Build 중 "Error code INTERNAL"로
+  재발)**: 신규 순수 함수 `computeSelfHealedPipelineState_()`(`MASTER_002_PipelineAsync.js`
+  v1.15.0) — RUNNING이 `LOCK_STALE_THRESHOLD_MS`(30분)보다 오래됐거나 `startedAtMs`
+  없는 옛 스키마면 FAILED로 자동 전환(락 self-heal과 동일 원칙). `readPipelineStatusState_()`가
+  읽을 때마다 적용해 `PIPELINE_LAST_FAILED_TYPE`도 같이 세팅, `runRetryPipelineTail()`
+  시작부에서 self-heal을 미리 트리거하도록 배선 — 실전 검증 완료(New Leads 파이프라인
+  자동 복구 후 전 구간 정상 완료 확인).
+
+- **MTA 완전 동일 중복 1625건 재정리**: S&M_REP "All Leads"가 Salesforce 리포트와
+  153건 차이 나는 걸 조사 중 발견 — `rebuildMTAMaster()`를 파이프라인(dedup 포함)을
+  거치지 않고 직접 실행했던 탓에 새로 쌓인 중복이 안 지워진 상태였음.
+  `runAutoDeleteExactDuplicateTouchRows()` 재실행으로 정리, 격차 574 vs 579(잔여
+  5건은 보류)로 축소 확인.
+
+
 
 ## QA 에이전트 설계 및 구현 — `qa-review` 스킬 신규
 

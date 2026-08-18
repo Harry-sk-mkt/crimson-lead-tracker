@@ -18,9 +18,24 @@
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
  *
  * Version
- * v1.5.1
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-18)
+ * - **버그 수정 — 리드당 개별 setValue() 호출로 인한 성능 문제(실측
+ *   978.95초 ≈ 16.3분)**: `runMTAPipelineTail()` 실행 로그(2026-08-17) 확인
+ *   결과 MTA Funnel Sync 하나가 전체 30분 실행시간 예산의 절반 이상을
+ *   써버려, 뒤이은 BOFU_OPS Build 단계가 플랫폼 강제종료(Exceeded maximum
+ *   execution time)로 잘리고 README Pipeline Status에 "RUNNING"이 영구히
+ *   남는 사고로 이어짐(강제종료는 try/catch를 우회해 FAILED로도 못 바뀜).
+ *   원인은 `syncMTAFunnelToOPS_()`가 리드 하나당 바뀐 필드마다
+ *   `opsSheet.getRange().setValue()`를 개별 호출(8,193개 리드 × 최대 5개
+ *   필드 = 수만 번의 개별 Sheets API 호출)하던 구조 — 신규 순수 함수
+ *   `computeMTASyncColumnUpdates_()`로 분리해 컬럼별 기존 값을 한 번에
+ *   읽고 메모리에서 갱신한 뒤 컬럼당 단일 `setValues()`로 되돌려 쓰는
+ *   배치 패턴으로 전환(다른 배치 삭제 수정들과 동일 원칙). `updated`/
+ *   `notFoundInOPS` 집계 로직은 동일하게 유지. `testComputeMTASyncColumnUpdates()`
+ *   신규.
  * v1.5.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `09_MTAFunnelSync.js` → 신규 `MASTER_003_MTAFunnelSync.js`, 코드 내용 변경 없음.
  * v1.5.0 (2026-07-27)
@@ -225,6 +240,184 @@ function testComputeMTAFunnelByLeadId(){
 
 /**
  * ==========================================================
+ * Compute MTA Sync Column Updates
+ *
+ * WHY (2026-08-18, 성능 버그 수정 — 실측 계기)
+ * 기존엔 리드 하나당 바뀐 필드마다 opsSheet.getRange().setValue()를
+ * 개별 호출했음 — 8,193개 리드(2026-08-17 실행 로그 기준 Updated 건수)
+ * × 최대 5개 필드가 전부 개별 Sheets API 호출이 되어 실측 978.95초
+ * (약 16.3분)가 걸림. 이 여파로 총 30분 실행시간 예산이 뒤이은
+ * BOFU_OPS Build 단계 도중 소진돼 플랫폼 강제종료(Exceeded maximum
+ * execution time)로 이어졌고, 강제종료는 try/catch를 우회하므로
+ * README Pipeline Status에 "RUNNING"이 영구히 남는 사고가 발생함
+ * (docs/OpenItems.md 참고). 컬럼별로 기존 값 배열을 한 번에 읽어와서
+ * 메모리에서 갱신한 뒤 컬럼당 단일 setValues() 호출로 되돌려 쓰는
+ * 배치 패턴으로 전환(다른 배치 삭제 수정들과 동일 원칙) — Sheet IO
+ * 없이 Node 하네스로 테스트 가능하도록 순수 함수로 분리.
+ *
+ * INPUT
+ * leadIds              : string[]  (MTA_Master 기준 전체 unique Lead ID)
+ * funnelByLeadId       : Object    (computeMTAFunnelByLeadId_() 출력)
+ * leadIdToRow          : Object    ({ [leadId]: 1-indexed sheet row })
+ * syncColumns          : { opsFieldName, funnelKey }[]
+ * dataStartRow         : number    (OPS.ROWS.DATA_START)
+ * existingColumnValues : Object    ({ [opsFieldName]: value[][] } —
+ *                        getValues() 결과, dataStartRow부터 시작하는 배열)
+ *
+ * OUTPUT
+ * {
+ *   columnValues  : Object   ({ [opsFieldName]: value[][] } — 갱신 반영된
+ *                   새 배열, 입력 existingColumnValues는 변경하지 않음)
+ *   columnChanged : Object   ({ [opsFieldName]: boolean } — 이 컬럼에
+ *                   실제로 쓸 값이 하나라도 있었는지, IO 레이어가
+ *                   불필요한 setValues() 호출을 건너뛸 때 사용)
+ *   updated       : number   (필드 하나라도 갱신된 리드 수)
+ *   notFoundInOPS : number   (Leads_OPS에서 못 찾은 리드 수)
+ * }
+ *
+ * TEST
+ * testComputeMTASyncColumnUpdates() 참고 — 값이 있는 필드만 갱신되고
+ * 없는/0인 필드는 기존 값 보존, leadIdToRow에 없는 리드는 notFoundInOPS로
+ * 집계되며, 입력 배열 자체는 변경되지 않아야 함(순수 함수).
+ * ==========================================================
+ */
+function computeMTASyncColumnUpdates_(
+  leadIds, funnelByLeadId, leadIdToRow, syncColumns, dataStartRow, existingColumnValues
+){
+
+  const columnValues = {};
+  const columnChanged = {};
+
+  syncColumns.forEach(function(col){
+
+    columnValues[col.opsFieldName] = existingColumnValues[col.opsFieldName].map(function(row){
+      return row.slice();
+    });
+
+    columnChanged[col.opsFieldName] = false;
+
+  });
+
+  let updated = 0;
+  let notFoundInOPS = 0;
+
+  leadIds.forEach(function(leadId){
+
+    const sheetRow = leadIdToRow[leadId];
+
+    if(!sheetRow){
+      notFoundInOPS++;
+      return;
+    }
+
+    const funnel = funnelByLeadId[leadId];
+    const rowOffset = sheetRow - dataStartRow;
+
+    let rowUpdated = false;
+
+    syncColumns.forEach(function(col){
+
+      const value = funnel[col.funnelKey];
+
+      if(
+        value === undefined ||
+        value === null ||
+        value === "" ||
+        value === 0
+      ){
+        return;
+      }
+
+      columnValues[col.opsFieldName][rowOffset][0] = value;
+      columnChanged[col.opsFieldName] = true;
+      rowUpdated = true;
+
+    });
+
+    if(rowUpdated){
+      updated++;
+    }
+
+  });
+
+  return {
+    columnValues: columnValues,
+    columnChanged: columnChanged,
+    updated: updated,
+    notFoundInOPS: notFoundInOPS
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeMTASyncColumnUpdates_()
+ * ==========================================================
+ */
+function testComputeMTASyncColumnUpdates(){
+
+  const leadIds = ["L1", "L2", "L3"];
+
+  const funnelByLeadId = {
+    L1: {
+      icBookedDate: new Date(2026, 0, 1), icCompletedDate: null,
+      wonDate: null, revenue: 0, salesAcceptedDate: null
+    },
+    L2: {
+      icBookedDate: null, icCompletedDate: null,
+      wonDate: null, revenue: 5000, salesAcceptedDate: null
+    },
+    L3: {
+      // Leads_OPS에 없는 리드(leadIdToRow에서 의도적으로 누락)
+      icBookedDate: null, icCompletedDate: null,
+      wonDate: null, revenue: 0, salesAcceptedDate: null
+    }
+  };
+
+  const leadIdToRow = { L1: 2, L2: 4 }; // dataStartRow=2 기준 offset 0/2, L3는 없음
+
+  const syncColumns = [
+    { opsFieldName: "IC Booked Date", funnelKey: "icBookedDate" },
+    { opsFieldName: "Revenue", funnelKey: "revenue" }
+  ];
+
+  const dataStartRow = 2;
+
+  const existingColumnValues = {
+    "IC Booked Date": [["old1"], ["old2"], ["old3"], ["old4"]],
+    "Revenue": [[0], [0], [0], [0]]
+  };
+
+  const result = computeMTASyncColumnUpdates_(
+    leadIds, funnelByLeadId, leadIdToRow, syncColumns, dataStartRow, existingColumnValues
+  );
+
+  const icBookedDateForL1 = result.columnValues["IC Booked Date"][0][0];
+  const revenueForL2 = result.columnValues["Revenue"][2][0];
+
+  const pass =
+    result.updated === 2 &&
+    result.notFoundInOPS === 1 &&
+    icBookedDateForL1 instanceof Date &&
+    icBookedDateForL1.getTime() === new Date(2026, 0, 1).getTime() &&
+    result.columnValues["IC Booked Date"][1][0] === "old2" && // L2 IC Booked 미갱신(보존)
+    revenueForL2 === 5000 &&
+    result.columnValues["Revenue"][0][0] === 0 &&             // L1 Revenue 미갱신(0이라 skip, 보존)
+    result.columnChanged["IC Booked Date"] === true &&
+    result.columnChanged["Revenue"] === true &&
+    existingColumnValues["IC Booked Date"][0][0] === "old1";  // 입력 배열 불변(순수 함수 확인)
+
+  Logger.log(
+    "testComputeMTASyncColumnUpdates: " + (pass ? "PASS" : "FAIL") +
+    " result=" + JSON.stringify(result)
+  );
+
+}
+
+
+/**
+ * ==========================================================
  * Sync MTA Funnel to Leads_OPS
  * ==========================================================
  */
@@ -299,7 +492,7 @@ function syncMTAFunnelToOPS_(){
   });
 
   //----------------------------------------------------------
-  // Sync 실행
+  // Sync 실행 — 컬럼별 배치 읽기/쓰기(성능 최적화, 2026-08-18 v1.6.0)
   //----------------------------------------------------------
 
   const syncFieldMap = {
@@ -310,50 +503,42 @@ function syncMTAFunnelToOPS_(){
     "Sales Accepted Date": "salesAcceptedDate"
   };
 
-  let updated = 0;
-  let notFoundInOPS = 0;
+  const syncColumns = Object.keys(syncFieldMap)
+    .map(function(opsFieldName){
+      return {
+        opsFieldName: opsFieldName,
+        funnelKey: syncFieldMap[opsFieldName],
+        colIndex: headerMap[opsFieldName]
+      };
+    })
+    .filter(function(col){ return col.colIndex !== undefined; });
 
-  leadIds.forEach(function(leadId){
+  const numRows = lastRow - OPS.ROWS.DATA_START + 1;
 
-    const sheetRow = leadIdToRow[leadId];
+  const existingColumnValues = {};
 
-    if(!sheetRow){
-      notFoundInOPS++;
-      return;
-    }
+  syncColumns.forEach(function(col){
+    existingColumnValues[col.opsFieldName] = opsSheet
+      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getValues();
+  });
 
-    const funnel = funnelByLeadId[leadId];
+  const syncResult = computeMTASyncColumnUpdates_(
+    leadIds, funnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+  );
 
-    let rowUpdated = false;
+  syncColumns.forEach(function(col){
 
-    Object.keys(syncFieldMap).forEach(function(opsFieldName){
+    if(!syncResult.columnChanged[col.opsFieldName]) return;
 
-      const value = funnel[syncFieldMap[opsFieldName]];
-
-      if(
-        value === undefined ||
-        value === null ||
-        value === "" ||
-        value === 0
-      ){
-        return;
-      }
-
-      const colIndex = headerMap[opsFieldName];
-
-      if(colIndex === undefined) return;
-
-      opsSheet.getRange(sheetRow, colIndex + 1).setValue(value);
-
-      rowUpdated = true;
-
-    });
-
-    if(rowUpdated){
-      updated++;
-    }
+    opsSheet
+      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .setValues(syncResult.columnValues[col.opsFieldName]);
 
   });
+
+  const updated = syncResult.updated;
+  const notFoundInOPS = syncResult.notFoundInOPS;
 
   const seconds = ((new Date() - start) / 1000).toFixed(2);
 

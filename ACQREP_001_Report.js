@@ -17,9 +17,14 @@
  * 20 Reporting
  *
  * Version
- * v1.17.1
+ * v1.18.0
  *
  * Change Log
+ * v1.18.0 (2026-08-18)
+ * - `handleReportGenerateEdit()`에 S&M_REP 분기 추가(`CONFIG.SM_REP.SHEET`
+ *   → `handleSMReportGenerateEdit_()`, SMREP_001_Report.js 신규) — 신규
+ *   리포트 S&M_REP도 이 파일이 소유한 공용 설치형 onEdit 트리거를 그대로
+ *   재사용(사용자 요청, 별도 트리거 설치 절차 불필요).
  * v1.17.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `30_ACQReport.js` → 신규 `ACQREP_001_Report.js`, 코드 내용 변경 없음.
  * v1.17.0 (2026-08-09)
@@ -407,6 +412,11 @@ function handleReportGenerateEdit(e){
 
   if(sheetName === CONFIG.NEWP1.SHEET){
     handleNewP1ReportGenerateEdit_(e, sheet);
+    return;
+  }
+
+  if(sheetName === CONFIG.SM_REP.SHEET){
+    handleSMReportGenerateEdit_(e, sheet);
     return;
   }
 

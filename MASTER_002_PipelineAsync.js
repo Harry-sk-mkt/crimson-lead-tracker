@@ -22,9 +22,33 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.14.1
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-08-19)
+ * - **버그 수정 — 플랫폼 강제종료/내부 오류 시 README Pipeline Status에
+ *   "RUNNING"이 영구 잔존**(실측: BOFU_OPS Timed Out에 이어 이번엔
+ *   Leads_OPS Build 중 "Error code INTERNAL"로 동일 증상 재발). 신규 순수
+ *   함수 `computeSelfHealedPipelineState_(state, nowMs)` — RUNNING 상태가
+ *   `CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS`(30분)보다 오래됐으면 FAILED로
+ *   자동 전환(락 self-heal, v1.7.0과 동일 원칙을 상태 표시에도 적용).
+ *   `runLeadsPipelineTail()`/`runMTAPipelineTail()`의 초기 state에
+ *   `startedAtMs`(raw timestamp) 신규 추가 — 기존 `startedAt`(포맷된 문자열)은
+ *   경과시간 계산에 못 씀. `readPipelineStatusState_()`가 읽을 때마다 이
+ *   판정을 적용해 죽은 RUNNING을 그 자리에서 FAILED로 되돌려쓰고
+ *   `PIPELINE_LAST_FAILED_TYPE`도 같이 세팅(이후 `runRetryPipelineTail()`가
+ *   바로 동작 가능해짐). `runRetryPipelineTail()` 시작부에
+ *   `readPipelineStatusState_()` 두 타입 다 미리 호출해 self-heal을
+ *   트리거하도록 추가(안 하면 죽은 RUNNING이 있어도 "재시도할 게 없다"고
+ *   잘못 알림). `testComputeSelfHealedPipelineState()` 신규.
+ *   **같은 날 실측 수정**: 배포 직후 실제로 죽어있던 RUNNING(2026-08-18
+ *   09:19 KST, `startedAtMs` 필드 도입 *이전*에 저장된 옛 형식)이
+ *   `runRetryPipelineTail()`에서 "재시도할 게 없다"로 잘못 판정되는 걸 확인 —
+ *   최초 구현이 `startedAtMs` 없는 RUNNING을 "나이를 모르니 안전하게 그냥
+ *   둔다"로 처리했던 게 원인. `computePipelineLockState_()`의 파싱 불가한
+ *   옛 형식 락 값 처리(안전하게 죽은 락으로 간주)와 동일 원칙으로 통일 —
+ *   `startedAtMs`가 없는 RUNNING도 즉시 죽은 것으로 간주하도록 수정.
+ *   `testComputeSelfHealedPipelineState()`의 해당 케이스 기대값도 함께 수정.
  * v1.14.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `08_PipelineAsync.js` → 신규 `MASTER_002_PipelineAsync.js`, 코드 내용 변경 없음.
  * v1.14.0 (2026-08-06)
@@ -539,7 +563,128 @@ function schedulePipelineTail_(handlerName){
 
 /**
  * ==========================================================
+ * Compute Self-Healed Pipeline Status State
+ *
+ * WHY (2026-08-19, 실측 계기 — BOFU_OPS Timed Out에 이어 Leads_OPS Build
+ * 중 "Error code INTERNAL" 재발)
+ * 플랫폼 강제종료(실행시간 초과)나 이번처럼 JS 엔진 내부 오류(Error code
+ * INTERNAL)로 실행이 죽으면 try/catch 자체가 실행되지 않아 state.status가
+ * "RUNNING"으로 영구히 남는다 — computePipelineLockState_()가 이미
+ * LOCK_STALE_THRESHOLD_MS(30분)로 락을 self-heal하는 것과 동일한 원리를
+ * 상태 표시(README Pipeline Status)에도 적용: RUNNING이 이 임계값보다
+ * 오래됐으면 "플랫폼이 이미 죽였다"고 간주해 FAILED로 자동 전환한다.
+ *
+ * **`startedAtMs` 없는 RUNNING(이 필드 도입 전 저장된 옛 스키마) 처리
+ * (2026-08-19 실측 수정)**: 최초 구현은 "나이를 모르니 안전하게 그냥 둔다"
+ * 였으나, 실제로 이 필드 도입 *직전*에 죽은 RUNNING(2026-08-18 09:19 KST,
+ * Leads_OPS Build 중 "Error code INTERNAL")이 실측으로 나왔을 때 이 방어
+ * 로직 때문에 `runRetryPipelineTail()`가 "재시도할 게 없다"고 잘못 판정하는
+ * 걸 확인 — `computePipelineLockState_()`가 파싱 불가한 옛 형식 락 값을
+ * "안전하게 죽은 락으로 간주"하는 것과 동일 원칙으로 통일: `startedAtMs`가
+ * 없는 RUNNING도 옛 스키마 잔재로 보고 즉시 죽은 것으로 간주한다(나이를
+ * 특정할 순 없지만, 새 코드가 실행되는 시점엔 이미 이 필드가 항상 채워져야
+ * 하므로 없다는 것 자체가 "이 실행이 새 코드 배포 전에 시작돼 끝까지 못
+ * 갔다"는 신호).
+ *
+ * INPUT
+ * state : Object  (readPipelineStatusState_() 원본 — status/startedAtMs 등)
+ * nowMs : number   (Date.now(), 테스트 가능하도록 주입)
+ *
+ * OUTPUT
+ * Object  — 죽은 RUNNING이면 새 state(status:"FAILED", error 채움), 아니면
+ *   입력을 그대로 반환(참조 동일 — 호출부가 "바뀌었는지"를 참조 비교로 판단
+ *   가능, readPipelineStatusState_() 참고).
+ *
+ * TEST
+ * testComputeSelfHealedPipelineState() 참고
+ * ==========================================================
+ */
+function computeSelfHealedPipelineState_(state, nowMs){
+
+  if(!state || state.status !== "RUNNING"){
+    return state;
+  }
+
+  const FAILED_ERROR_MESSAGE_SUFFIX = "자동 감지)";
+
+  if(typeof state.startedAtMs !== "number"){
+
+    return Object.assign({}, state, {
+      status: "FAILED",
+      finishedAt: nowTimestamp_(),
+      error: "추정: 플랫폼 강제종료 또는 내부 오류로 실행 중단(startedAtMs 없는 옛 형식 RUNNING, " +
+        FAILED_ERROR_MESSAGE_SUFFIX
+    });
+
+  }
+
+  const age = nowMs - state.startedAtMs;
+
+  if(age <= CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS){
+    return state;
+  }
+
+  return Object.assign({}, state, {
+    status: "FAILED",
+    finishedAt: nowTimestamp_(),
+    error: "추정: 플랫폼 강제종료 또는 내부 오류로 실행 중단(RUNNING 상태가 " +
+      CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS / 60000 + "분 이상 지속됨, " +
+      FAILED_ERROR_MESSAGE_SUFFIX
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeSelfHealedPipelineState_()
+ * ==========================================================
+ */
+function testComputeSelfHealedPipelineState(){
+
+  const now = 1000000000000;
+
+  const fresh = computeSelfHealedPipelineState_(
+    { status: "RUNNING", startedAtMs: now - 1000 }, now
+  );
+  const freshOk = fresh.status === "RUNNING"; // 안 바뀜(참조도 동일)
+
+  const stale = computeSelfHealedPipelineState_(
+    { status: "RUNNING", startedAtMs: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }, now
+  );
+  const staleOk = stale.status === "FAILED" && !!stale.error && !!stale.finishedAt;
+
+  const doneUnaffected = computeSelfHealedPipelineState_(
+    { status: "DONE", startedAtMs: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }, now
+  );
+  const doneOk = doneUnaffected.status === "DONE";
+
+  const noStartedAtMs = computeSelfHealedPipelineState_({ status: "RUNNING" }, now);
+  const noStartedAtMsOk = noStartedAtMs.status === "FAILED" && !!noStartedAtMs.error; // 옛 형식(필드 없음) — 즉시 죽은 것으로 간주(락의 legacy-format 처리와 동일 원칙)
+
+  const emptyOk = computeSelfHealedPipelineState_({}, now).status === undefined;
+
+  const pass = freshOk && staleOk && doneOk && noStartedAtMsOk && emptyOk;
+
+  Logger.log(
+    "testComputeSelfHealedPipelineState: " + (pass ? "PASS" : "FAIL") +
+    " stale=" + JSON.stringify(stale)
+  );
+
+}
+
+
+/**
+ * ==========================================================
  * Status State IO Wrappers (PropertiesService, JSON)
+ *
+ * WHY (readPipelineStatusState_() self-heal, 2026-08-19)
+ * 죽은 RUNNING을 감지하면(computeSelfHealedPipelineState_()) 그 자리에서
+ * FAILED로 되돌려쓰고 PIPELINE_LAST_FAILED_TYPE도 같이 세팅한다 —
+ * 이 함수를 부르는 모든 지점(writePipelineStatusToReadme_(), 아래
+ * runRetryPipelineTail() 등)이 자동으로 최신 상태를 보고, 재시도 진입점도
+ * 바로 동작하게 됨(플랫폼 강제종료/내부 오류로 catch가 원래 실행 안 됐던
+ * 케이스까지 커버).
  * ==========================================================
  */
 function readPipelineStatusState_(type){
@@ -554,11 +699,27 @@ function readPipelineStatusState_(type){
     return {};
   }
 
+  let state;
+
   try{
-    return JSON.parse(raw);
+    state = JSON.parse(raw);
   } catch(e){
     return {};
   }
+
+  const healed = computeSelfHealedPipelineState_(state, Date.now());
+
+  if(healed !== state){
+
+    writePipelineStatusState_(type, healed);
+
+    PropertiesService
+      .getScriptProperties()
+      .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
+
+  }
+
+  return healed;
 
 }
 
@@ -1052,6 +1213,7 @@ function runLeadsPipelineTail(){
     status: "RUNNING",
     stage: "",
     startedAt: nowTimestamp_(),
+    startedAtMs: Date.now(), // computeSelfHealedPipelineState_() 판정용(2026-08-19)
     finishedAt: "",
     error: "",
     stages: {}
@@ -1164,6 +1326,7 @@ function runMTAPipelineTail(){
     status: "RUNNING",
     stage: "",
     startedAt: nowTimestamp_(),
+    startedAtMs: Date.now(), // computeSelfHealedPipelineState_() 판정용(2026-08-19)
     finishedAt: "",
     error: "",
     stages: {}
@@ -1260,6 +1423,14 @@ function runMTAPipelineTail(){
  * ==========================================================
  */
 function runRetryPipelineTail(){
+
+  // 죽은 RUNNING이 있으면 여기서 self-heal되어 PIPELINE_LAST_FAILED_TYPE가
+  // 채워짐(readPipelineStatusState_() 내부 side effect, 2026-08-19) — 이
+  // 호출이 없으면 플랫폼 강제종료/내부 오류로 죽은 실행은 재시도 진입점
+  // 자체를 못 찾음(과거엔 이 사각지대 때문에 README에 RUNNING이 영구히
+  // 남아도 이 함수가 "재시도할 게 없다"고 알림).
+  readPipelineStatusState_(CONFIG.PIPELINE.TYPES.LEADS);
+  readPipelineStatusState_(CONFIG.PIPELINE.TYPES.MTA);
 
   const failedType = PropertiesService
     .getScriptProperties()

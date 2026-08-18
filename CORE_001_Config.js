@@ -9,9 +9,25 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.36.1
+ * v1.38.0
  *
  * Change Log
+ * v1.38.0 (2026-08-19)
+ * - **버그 수정 — `RAW_DATE_COLUMNS.MTA`에 `"Lead: Sales Accepted Date"` 누락**
+ *   (S&M_REP 개발 중 미래 날짜 SAL이 찍히는 현상을 사용자가 Salesforce
+ *   Field History까지 직접 확인해 실측: "9/8/2026"이 실제로는 8월 9일인데
+ *   9월 8일로 영구 오변환돼 있었음). 이 필드는 2026-07-25에 파이프라인에
+ *   추가됐는데 Plain Text 보호 목록(2026-07-21 확정, docs/DateParsing.md)엔
+ *   그때 같이 반영이 안 됐던 게 원인 — 목록에 추가. 상세: RAW_DATE_COLUMNS.MTA
+ *   주석 참고. **주의**: 이미 MTA_Raw/MTA_Master에 잘못 저장된 과거 데이터는
+ *   원본 텍스트가 소실돼 이 수정만으로는 복구 안 됨(별도 재export/재import
+ *   필요, docs/OpenItems.md 참고) — 이 수정은 향후 신규 MTA Import부터만
+ *   재발 방지.
+ * v1.37.0 (2026-08-18)
+ * - `CONFIG.SM_REP` 신규 — 신규 리포트 `S&M_REP`(Sales & Marketing Weekly
+ *   Dashboard, 사용자 요청) 설정. Target_REP과 동일한 주간(월~일) 구조
+ *   재사용(FY 하나 선택 → 그 FY 전체 주가 행), Leads/SAL 두 블록. 상세
+ *   정의/구현은 SMREP_001_Report.js 참고.
  * v1.36.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `00_Config.js` → 신규 `CORE_001_Config.js`, 코드 내용 변경 없음.
  * v1.36.0 (2026-08-09)
@@ -327,7 +343,16 @@ const CONFIG = {
       "Lead Created Date",
       "Lead: IC Booked Date",
       "Lead: IC Completed Date (Pre-Conversion)",
-      "Lead: Opportunity Won Date"
+      "Lead: Opportunity Won Date",
+      // 2026-08-19 추가 — "Lead: Sales Accepted Date"가 MASTER_007_MTATransformer.js에
+      // 매핑된 건 2026-07-25(v1.4.0)인데, 이 보호 목록 자체는 2026-07-21에 이미
+      // 확정돼 있어서 그때 같이 추가가 안 됐던 누락. 실측(2026-08-19, S&M_REP 개발
+      // 중 사용자 발견) — Salesforce org locale이 day-first라 "9/8/2026"(실제
+      // 8월 9일)이 Plain Text 보호 없이 Raw에 써지며 Google Sheets가 자기 locale로
+      // 오해석해 9월 8일로 영구 변환됨(원본 텍스트 소실, docs/DateParsing.md 참고).
+      // 이 목록에 없는 새 날짜 컬럼을 MTA Transformer에 추가할 때마다 반드시 여기도
+      // 같이 갱신할 것 — 재발 방지 메모.
+      "Lead: Sales Accepted Date"
     ]
 
   },
@@ -1041,6 +1066,80 @@ const CONFIG = {
     // (FYREP_001_Engine.js)가 `computeDealShareRatiosFromDealRows_()`
     // (90_TargetEngine.js)와 별개로 이 배분 방식을 구현.
     REVENUE_TARGET_IS_ESTIMATED: true
+
+  },
+
+  /**
+   * S&M_REP (Sales & Marketing Weekly Dashboard)
+   *
+   * Target_REP과 동일한 주간(월~일) 구조 재사용(사용자 확정, 2026-08-18) —
+   * FY 하나를 고르면 그 FY의 전체 주가 행으로 나열. 두 블록(Leads/SAL)을
+   * 같은 시트에 나란히 배치. 세부 정의(All Leads/New Leads/New P1/SAL/
+   * Organic 등)는 SMREP_001_Report.js 헤더 주석 참고.
+   */
+  SM_REP: {
+
+    SHEET: "S&M_REP",
+
+    ROWS: {
+      CONTROL_HEADER: 1,
+      CONTROL_VALUE: 2,
+      BLOCK_HEADER: 4,
+      COLUMN_HEADER: 5,
+      REPORT_DATA_START: 6
+    },
+
+    COLUMNS: {
+
+      // Control Area
+      FY: 1,        // A2 — FY 드롭다운(값)
+      GENERATE: 2,  // B2 — Generate 체크박스
+
+      // Report Area
+      WEEK_START: 1,  // A
+      WEEK_END: 2,    // B
+
+      LEADS_START: 3,  // C (8컬럼, C~J)
+      SAL_START: 12    // L (6컬럼, L~Q) — K열은 두 블록 사이 spacer
+
+    },
+
+    LEADS_HEADERS: [
+      "All Leads", "New Leads", "New P1", "Event", "BOFU", "Content", "Organic", "Referral"
+    ],
+
+    SAL_HEADERS: [
+      "All SAL", "P1", "BOFU", "Search", "Organic", "Referral"
+    ],
+
+    // Business Segment(getBusinessSegment() canonical 값) → 이 리포트의 breakdown
+    // 컬럼 매핑. 매핑에 없는 Segment(예: Leads 블록의 "Search", SAL 블록의
+    // "Seminar"/"Webinar"/"Content")는 breakdown 어느 컬럼에도 집계되지 않음 —
+    // All Leads/All SAL(총계)에는 포함되지만 breakdown 5~6개 컬럼 합계와는
+    // 일치하지 않을 수 있음(사용자 확정, 2026-08-18 — 두 블록의 breakdown
+    // 세그먼트 구성이 서로 다른 것 자체가 의도된 설계).
+    LEADS_SEGMENT_BUCKET_MAP: {
+      "Seminar": "Event",
+      "Webinar": "Event",
+      "BOFU": "BOFU",
+      "Content": "Content",
+      "Referral": "Referral",
+      "Other": "Organic",
+      "N/A": "Organic"
+    },
+
+    SAL_SEGMENT_BUCKET_MAP: {
+      "BOFU": "BOFU",
+      "Search": "Search",
+      "Referral": "Referral",
+      "Other": "Organic",
+      "N/A": "Organic"
+    },
+
+    // 선택 가능 FY 목록 — FYREP_001_Engine.js의 computeFYRepDefaultFYList_()
+    // 재사용(이름은 FYRep 전용처럼 보이지만 실제 구현은 범용 "startFY부터
+    // 오늘이 속한 FY까지" 계산 — 새 함수 중복 대신 재사용, 2026-08-18).
+    FYS: computeFYRepDefaultFYList_(24)
 
   },
 
