@@ -44,9 +44,21 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.14.0
+ * v2.15.0
  *
  * Change Log
+ * v2.15.0 (2026-08-19)
+ * - Target_REP 주별 CPNP1 정확도 개선(AD_002_Meta.js v1.7.0과 동일 배경) —
+ *   `/stats`가 임의 기간을 그대로 받는다는 점(`fetchNaverSearchAdStats_()`가
+ *   이미 문자열 since/until을 그대로 넘김, 달력월 정렬 제약 없음)을 활용해
+ *   월 대신 주(월~일) 단위로 직접 조회하는 신규 경로 추가: `buildCalendarWeekRange_()`
+ *   (buildCalendarMonthRange_()의 주 버전, addDaysToDate_() 재사용),
+ *   `computeNaverSearchAdSpendByWeekSegment_()`(computeNaverSearchAdSpendByFYMonthSegment_()의
+ *   주 버전, referenceDate 대신 weekStart를 그대로 키에 씀),
+ *   `computeNaverSearchAdSpendHistoryWeeklySummary_()`(IO 래퍼 — 월별 버전과
+ *   달리 전체 이력이 아니라 Target 주 사이클 전환일(Cutover Date)부터만 순회 —
+ *   Naver는 API로 임의 기간을 정확히 조회하므로 **근사 없는 참값**). 기존
+ *   월별 함수/출력은 전혀 안 건드림(ACQ_REP/FY_REP 하위호환 유지).
  * v2.14.0 (2026-08-05)
  * - **Spent 전체 기간 소급 백필(사용자 요청 — "시작일까지 전체 소급")** —
  *   `runDebugNaverSearchAdStatsCcntRangeLimit()` 실측 결과 ccnt는 salesAmt와
@@ -1064,6 +1076,214 @@ function computeNaverSearchAdSpendHistorySummary_(startYear, startMonth){
   });
 
   return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Calendar Week Range (순수 함수)
+ *
+ * WHY
+ * buildCalendarMonthRange_()의 주(월~일) 버전 — 네이버 API `/stats`가
+ * since/until을 임의 문자열 기간으로 그대로 받으므로(달력월 정렬 제약 없음,
+ * `fetchNaverSearchAdStats_()` 참고) 월요일부터 그 주 일요일까지의 문자열을
+ * 만들면 된다. `addDaysToDate_()`(TARGET_001_Engine.js, 전역) 재사용.
+ *
+ * INPUT
+ * weekStart : Date  그 주의 월요일(시각 없음)
+ *
+ * OUTPUT
+ * {since:string, until:string}  둘 다 "yyyy-MM-dd"
+ *
+ * TEST
+ * testBuildCalendarWeekRange() 참고
+ * ==========================================================
+ */
+function buildCalendarWeekRange_(weekStart){
+
+  function pad2(n){ return (n < 10 ? "0" : "") + n; }
+  function fmt(d){ return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+
+  const weekEnd = addDaysToDate_(weekStart, 6);
+
+  return { since: fmt(weekStart), until: fmt(weekEnd) };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildCalendarWeekRange_()
+ * ==========================================================
+ */
+function testBuildCalendarWeekRange(){
+
+  const result = buildCalendarWeekRange_(new Date(2026, 7, 3)); // 2026-08-03(월)
+  const pass = result.since === "2026-08-03" && result.until === "2026-08-09";
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected 08-03~08-09)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Naver Search Ad Spend By Week/Segment (순수 함수)
+ *
+ * WHY
+ * computeNaverSearchAdSpendByFYMonthSegment_()의 주 버전 — referenceDate(그
+ * 달 대표일)로 fy|month 라벨을 만들던 것과 달리, weekStart를 "yyyy-MM-dd"
+ * 문자열 그대로 키에 쓴다(Target_REP 리포트 행의 Week Start와 1:1 매칭시키기
+ * 위함 — 월 라벨 같은 중간 표현이 필요 없음).
+ *
+ * INPUT
+ * campaignMap : Object  {nccCampaignId: name}
+ * statsRows : Array<{id, salesAmt, ...}>  /stats 응답의 data 배열
+ * weekStart : Date  이 조회에 쓴 주의 월요일
+ *
+ * OUTPUT
+ * Object  키 "yyyy-MM-dd(weekStart)|segment" → 합산 Spent(원)
+ *
+ * TEST
+ * testComputeNaverSearchAdSpendByWeekSegment() 참고
+ * ==========================================================
+ */
+function computeNaverSearchAdSpendByWeekSegment_(campaignMap, statsRows, weekStart){
+
+  const weekKey = Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+  const totals = {};
+
+  statsRows.forEach(function(row){
+
+    const name = campaignMap[row.id];
+
+    if(!name) return;
+
+    const segment = getBusinessSegment(name, "", AD.NAVER_SEARCH.LEAD_SOURCE_OVERRIDE, "");
+    const key = weekKey + "|" + segment;
+
+    totals[key] = (totals[key] || 0) + (Number(row.salesAmt) || 0);
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNaverSearchAdSpendByWeekSegment_()
+ * ==========================================================
+ */
+function testComputeNaverSearchAdSpendByWeekSegment(){
+
+  const campaignMap = {
+    "cmp-a001-01-000000009593715": "KR_core_HStoDS_contact",
+    "cmp-a001-01-000000010516912": "KR_core_expo_earlybird2_ptc"
+  };
+
+  const statsRows = [
+    { id: "cmp-a001-01-000000009593715", salesAmt: 3765 },
+    { id: "cmp-a001-01-000000010516912", salesAmt: 1000 },
+    { id: "cmp-a001-01-999999999999999", salesAmt: 999 } // campaignMap에 없는 id — 무시돼야 함
+  ];
+
+  const result = computeNaverSearchAdSpendByWeekSegment_(
+    campaignMap, statsRows, new Date(2026, 7, 3) // 2026-08-03(월)
+  );
+
+  const pass =
+    result["2026-08-03|Search"] === 3765 &&
+    result["2026-08-03|Seminar"] === 1000 &&
+    Object.keys(result).length === 2;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute NaverSA Spend History Weekly Summary (IO 래퍼)
+ *
+ * WHY
+ * computeNaverSearchAdSpendHistorySummary_()(월 단위, 전체 소급)와 달리
+ * Target 주 사이클 전환일(Cutover Date)부터 오늘까지만 주 단위로 순회한다 —
+ * Naver는 API로 임의 기간을 정확히 조회하므로 근사 없는 참값이지만, 전체
+ * 3년 이력을 주 단위(월 단위 대비 약 4배 호출 수)로 백필할 이유가 없다
+ * (Target_REP은 Cutover Date 이전 주는 원래 공란 규칙 — §8, 이 소급 범위
+ * 축소가 자연스럽게 그 규칙과 일치). 92일 조회 제약(salesAmt는 730일까지
+ * 확인됨, v2.14.0 changelog 참고)에도 여유 있게 안전한 범위.
+ *
+ * INPUT
+ * cutoverMonday : Date  Target_Engine Cutover Date가 속한 주의 월요일
+ *
+ * OUTPUT
+ * Object  키 "yyyy-MM-dd(weekStart)|segment" → 합산 Spent(원, KRW)
+ * ==========================================================
+ */
+function computeNaverSearchAdSpendHistoryWeeklySummary_(cutoverMonday){
+
+  const campaignMap = fetchNaverSearchAdCampaignMap_();
+  const ids = Object.keys(campaignMap);
+
+  const today = new Date();
+  const weeks = generateAdSpendWeekRange_(cutoverMonday, today);
+
+  const totals = {};
+
+  weeks.forEach(function(w){
+
+    const range = buildCalendarWeekRange_(w.weekStart);
+
+    let statsRows;
+
+    try {
+      statsRows = fetchNaverSearchAdStats_(ids, range.since, range.until);
+    } catch(e){
+
+      if(e.statusCode === 400 && e.body && e.body.code === 11004){
+
+        Logger.log(
+          range.since + "~" + range.until + " 건너뜀(Naver Search Ad API 조회 가능 기간 밖)."
+        );
+
+        return;
+
+      }
+
+      throw e;
+
+    }
+
+    const weekTotals = computeNaverSearchAdSpendByWeekSegment_(campaignMap, statsRows, w.weekStart);
+
+    Object.keys(weekTotals).forEach(function(key){
+      totals[key] = (totals[key] || 0) + weekTotals[key];
+    });
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — computeNaverSearchAdSpendHistoryWeeklySummary_() 수동 실행/확인용 진입점
+ * ==========================================================
+ */
+function runComputeNaverSearchAdSpendWeeklyHistory(){
+
+  const cutoverMonday = getMondayOfWeek_(CONFIG.TARGET.CUTOVER_DATE);
+  const summary = computeNaverSearchAdSpendHistoryWeeklySummary_(cutoverMonday);
+
+  Logger.log(JSON.stringify(summary, null, 2));
 
 }
 

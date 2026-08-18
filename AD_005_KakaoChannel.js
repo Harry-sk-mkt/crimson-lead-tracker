@@ -38,9 +38,18 @@
  * AD (2026-07-30 네이밍 컨벤션)
  *
  * Version
- * v1.2.2
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-19)
+ * - Target_REP 주별 CPNP1 정확도 개선(AD_002_Meta.js v1.7.0/AD_003_NaverSearch.js
+ *   v2.15.0과 동일 배경) — SentAt이 정확한 단일 날짜라 Meta처럼 근사가
+ *   필요 없이, 그 날이 속한 주(월요일)에 그대로 귀속하면 실제 값 그대로다
+ *   (근사 아님, 3개 플랫폼 중 가장 간단). 신규 `computeKakaoChannelRowWeeklySpendEntry_()`
+ *   (computeKakaoChannelRowSpendEntry_()의 주 버전, getMondayOfWeek_() 재사용)/
+ *   `aggregateKakaoChannelSpendByWeekSegment_()`/`computeKakaoChannelSpendWeeklySummary_()`
+ *   (IO 래퍼, AD_004_SpendCache.js `refreshAdSpendWeeklyCache_()`가 호출).
+ *   기존 월별 함수/출력은 전혀 안 건드림.
  * v1.2.2 (2026-08-06)
  * - `syncKakaoChannelPerformanceToAD_()` 끝에 `applyKakaoSMSRawStyling_()`
  *   (AD_006_KakaoMoments.js 신규) 호출 추가 — 어느 sync 경로로 갱신되든
@@ -212,6 +221,156 @@ function testAggregateKakaoChannelSpendByFYMonthSegment(){
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Kakao Channel Row Weekly Spend Entry (순수 함수)
+ *
+ * WHY
+ * computeKakaoChannelRowSpendEntry_()의 주(월~일) 버전 — SentAt이 정확한
+ * 단일 날짜라 그 날이 속한 주(월요일)에 그대로 귀속하면 근사 없이 실제
+ * 값 그대로다. `getMondayOfWeek_()`(TARGET_001_Engine.js, 전역) 재사용 —
+ * 주 정의(월~일)를 Target_REP과 통일해야 그대로 조회 가능.
+ *
+ * INPUT
+ * record : Object  {eventType:string, sentAt:Date, cost:number}
+ *
+ * OUTPUT
+ * {weekStart:Date, segment:string, spent:number} | null
+ *
+ * TEST
+ * testComputeKakaoChannelRowWeeklySpendEntry() 참고
+ * ==========================================================
+ */
+function computeKakaoChannelRowWeeklySpendEntry_(record){
+
+  if(!record || !record.eventType) return null;
+  if(!(record.sentAt instanceof Date) || isNaN(record.sentAt.getTime())) return null;
+
+  const weekStart = getMondayOfWeek_(record.sentAt);
+  const segment = String(record.eventType).trim();
+
+  return { weekStart: weekStart, segment: segment, spent: Number(record.cost) || 0 };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeKakaoChannelRowWeeklySpendEntry_()
+ * ==========================================================
+ */
+function testComputeKakaoChannelRowWeeklySpendEntry(){
+
+  const row = { eventType: "BOFU", sentAt: new Date(2026, 7, 6), cost: 108042 }; // 2026-08-06(목)
+  const result = computeKakaoChannelRowWeeklySpendEntry_(row);
+
+  const pass =
+    result.weekStart.getTime() === new Date(2026, 7, 3).getTime() &&
+    result.segment === "BOFU" &&
+    result.spent === 108042;
+
+  Logger.log("Result: " + JSON.stringify({
+    weekStart: result.weekStart.toString(), segment: result.segment, spent: result.spent
+  }));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+  const invalid = computeKakaoChannelRowWeeklySpendEntry_({ eventType: "Webinar", sentAt: null, cost: 100 });
+
+  Logger.log("Invalid sentAt result: " + JSON.stringify(invalid) + " (expected null)");
+  Logger.log(invalid === null ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Kakao Channel Spend By Week/Segment (순수 함수)
+ *
+ * WHY
+ * aggregateKakaoChannelSpendByFYMonthSegment_()의 주 버전.
+ *
+ * INPUT
+ * records : Array<Object>  Performance/KakaoSMS_Raw에서 읽은 원시 레코드 배열
+ *
+ * OUTPUT
+ * Object  키 "yyyy-MM-dd(weekStart)|segment" → 합산 Spent(KRW)
+ *
+ * TEST
+ * testAggregateKakaoChannelSpendByWeekSegment() 참고
+ * ==========================================================
+ */
+function aggregateKakaoChannelSpendByWeekSegment_(records){
+
+  const totals = {};
+
+  (records || []).forEach(function(record){
+
+    const entry = computeKakaoChannelRowWeeklySpendEntry_(record);
+
+    if(!entry) return;
+
+    const key = Utilities.formatDate(entry.weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd") + "|" + entry.segment;
+
+    totals[key] = (totals[key] || 0) + entry.spent;
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateKakaoChannelSpendByWeekSegment_()
+ * ==========================================================
+ */
+function testAggregateKakaoChannelSpendByWeekSegment(){
+
+  const records = [
+    { eventType: "Webinar", sentAt: new Date(2026, 7, 3), cost: 500 },  // 8/3주 월
+    { eventType: "Webinar", sentAt: new Date(2026, 7, 6), cost: 250 },  // 8/3주 목(같은 주)
+    { eventType: "BOFU", sentAt: new Date(2026, 7, 10), cost: 1000 },   // 8/10주 월
+    { eventType: "", sentAt: new Date(2026, 7, 11), cost: 999 }         // eventType 없음 — 무시돼야 함
+  ];
+
+  const result = aggregateKakaoChannelSpendByWeekSegment_(records);
+
+  const pass =
+    result["2026-08-03|Webinar"] === 750 &&
+    result["2026-08-10|BOFU"] === 1000 &&
+    Object.keys(result).length === 2;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Kakao Channel Spend Weekly Summary (IO 래퍼)
+ * ==========================================================
+ */
+function computeKakaoChannelSpendWeeklySummary_(){
+
+  return aggregateKakaoChannelSpendByWeekSegment_(readKakaoSMSRawRows_());
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — computeKakaoChannelSpendWeeklySummary_() 수동 실행/확인용 공개 진입점
+ * ==========================================================
+ */
+function runComputeKakaoChannelSpendWeeklySummary(){
+
+  Logger.log(JSON.stringify(computeKakaoChannelSpendWeeklySummary_(), null, 2));
 
 }
 

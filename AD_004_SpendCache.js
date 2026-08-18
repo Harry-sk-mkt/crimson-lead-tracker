@@ -36,9 +36,25 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.4.1
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-19)
+ * - Target_REP 주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되던 문제(사용자
+ *   리포트) 해소 — 신규 `refreshAdSpendWeeklyCache_()`/`runRefreshAdSpendWeeklyCache()`/
+ *   `readAdSpendWeeklyCacheMap_()`, `Ad_Spend_Cache_Weekly` 시트(월 단위
+ *   `Ad_Spend_Cache`와 별도, `AD.SPEND_CACHE.WEEKLY_CACHE_SHEET` — AD_001_Config.js
+ *   v1.20.0). Meta(`computeMetaSpendWeeklySummary_()`, 근사)/Naver(`computeNaverSearchAdSpendHistoryWeeklySummary_()`,
+ *   참값)/Kakao(`computeKakaoChannelSpendWeeklySummary_()`, 참값) 3개 플랫폼의
+ *   신규 주 단위 집계 함수를 합산 — 기존 `refreshAdSpendCache_()`(월 단위)와
+ *   동일한 합산/환율 변환 패턴 재사용(`mergeSpendSummaries_()`/
+ *   `convertSpendSummaryCurrency_()`), 소급 범위만 Target_Engine Cutover Date부터로
+ *   제한(그 이전 주는 Target_REP도 원래 공란 규칙). WeekStart 컬럼은 Sheets가
+ *   "yyyy-MM-dd" 문자열을 Date로 자동 변환해버리는 걸 막기 위해 쓰기 전
+ *   `setNumberFormat("@")`로 텍스트 고정(이 프로젝트가 반복적으로 겪은 날짜/
+ *   타임존 버그 클래스 예방). `periodicRefreshAdSpendCache_()`가 이 함수도
+ *   함께 호출하도록 확장(기존 실패 격리 원칙 그대로 — 이 캐시 갱신 실패가
+ *   월 단위 캐시 갱신을 막으면 안 됨).
  * v1.4.1 (2026-08-08)
  * - `runPeriodicRefreshAdSpendCache()` 신규 — `periodicRefreshAdSpendCache_()`
  *   이름 끝에 `_`가 있어 Run 드롭다운에 안 뜨는 문제(사용자 실측 확인)로
@@ -383,6 +399,160 @@ function runRefreshAdSpendCache(){
 
 /**
  * ==========================================================
+ * Ad Spend Weekly Cache Headers (Target_REP 전용, 월 단위 캐시와 별도)
+ * ==========================================================
+ */
+const AD_SPEND_WEEKLY_CACHE_HEADERS = ["WeekStart", "Segment", "Spent"];
+
+
+/**
+ * ==========================================================
+ * Refresh Ad Spend Weekly Cache (IO 래퍼 — 수동 실행 전용, 2026-08-19 신규)
+ *
+ * WHY
+ * Target_REP의 Actual CPNP1이 월 값을 그 달 모든 주에 반복 표시하던 문제
+ * (사용자 리포트, 2026-08-19)를 해소하기 위한 신규 주 단위 캐시. 월별 캐시
+ * (refreshAdSpendCache_())와 완전히 별도 시트로 분리 — ACQ_REP/FY_REP는
+ * 계속 월 단위 캐시만 쓰고(기존 출력 변경 금지), 이 캐시는 Target_REP 전용.
+ *
+ * **정확도는 플랫폼마다 다르다**:
+ * - Kakao/Naver: 근사 없는 참값(Kakao는 SentAt 단일 날짜 직접 귀속, Naver는
+ *   API를 주 단위 기간으로 직접 조회).
+ * - Meta: 실무 export가 보통 월 단위라, 정밀(주 단위) export가 없는 한
+ *   캠페인 활성기간 균등분배 근사값(computeMetaRowWeeklySpend_() WHY 참고).
+ *
+ * **소급 범위 = Target 주 사이클 전환일(Target_Engine Block 0 Cutover Date)
+ * 부터만** — 그 이전 주는 이 캐시에 아예 안 만든다(§8 "Cutover 이전 주는
+ * 공란" 원칙 복원, 2026-08-04 월 캐시 전환 때 일시적으로 깨졌던 부분).
+ *
+ * WeekStart 컬럼은 "yyyy-MM-dd" 문자열을 그대로 저장해야 하는데, Google
+ * Sheets가 이런 값을 자동으로 Date로 인식해버리면 읽을 때 다시 문자열로
+ * 포맷해야 하는 번거로움과 타임존 어긋남 위험이 생긴다(이 프로젝트가 반복
+ * 겪은 버그 클래스) — 쓰기 전에 해당 컬럼을 `setNumberFormat("@")`(텍스트)로
+ * 고정해 원천 차단한다.
+ * ==========================================================
+ */
+function refreshAdSpendWeeklyCache_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!engineSheet){
+    Logger.log(
+      CONFIG.TARGET.ENGINE_SHEET + " 시트가 없어 Ad_Spend_Cache_Weekly 갱신을 건너뜁니다 " +
+      "(setupTargetReport() 먼저 실행 필요)."
+    );
+    return;
+  }
+
+  const cutoverDate = readTargetEngineInputs_(engineSheet).cutoverDate;
+
+  if(!(cutoverDate instanceof Date) || isNaN(cutoverDate.getTime())){
+    Logger.log("Target_Engine Cutover Date가 유효하지 않아 Ad_Spend_Cache_Weekly 갱신을 건너뜁니다.");
+    return;
+  }
+
+  const cutoverMonday = getMondayOfWeek_(cutoverDate);
+
+  const metaSummaryNZD = computeMetaSpendWeeklySummary_();
+  const naverSummaryKRW = computeNaverSearchAdSpendHistoryWeeklySummary_(cutoverMonday);
+  const kakaoChannelSummaryKRW = computeKakaoChannelSpendWeeklySummary_();
+
+  const rate = fetchKrwToNzdRate_();
+  const naverSummaryNZD = convertSpendSummaryCurrency_(naverSummaryKRW, rate);
+  const kakaoChannelSummaryNZD = convertSpendSummaryCurrency_(kakaoChannelSummaryKRW, rate);
+
+  const combined = mergeSpendSummaries_([metaSummaryNZD, naverSummaryNZD, kakaoChannelSummaryNZD]);
+
+  const cutoverKey = Utilities.formatDate(cutoverMonday, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+
+  const rows = Object.keys(combined)
+    .filter(function(key){
+      const weekKey = key.slice(0, key.indexOf("|"));
+      return weekKey >= cutoverKey; // "yyyy-MM-dd" 문자열 비교 = 날짜 오름차순 비교와 동일
+    })
+    .map(function(key){
+      const sepIndex = key.indexOf("|");
+      return [key.slice(0, sepIndex), key.slice(sepIndex + 1), combined[key]];
+    });
+
+  let sheet = ss.getSheetByName(AD.SPEND_CACHE.WEEKLY_CACHE_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(AD.SPEND_CACHE.WEEKLY_CACHE_SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, AD_SPEND_WEEKLY_CACHE_HEADERS.length)
+    .setValues([AD_SPEND_WEEKLY_CACHE_HEADERS]);
+
+  if(rows.length > 0){
+
+    // WeekStart 자동 Date 변환 방지(위 WHY 참고) — 값을 쓰기 전에 텍스트로 고정.
+    sheet.getRange(2, 1, rows.length, 1).setNumberFormat("@");
+    sheet.getRange(2, 1, rows.length, AD_SPEND_WEEKLY_CACHE_HEADERS.length).setValues(rows);
+
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "Ad_Spend_Cache_Weekly 갱신 완료: " + rows.length + "행 (Cutover=" + cutoverKey +
+    ", 환율 KRW→NZD=" + rate + ")"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — refreshAdSpendWeeklyCache_() 수동 실행용 공개 진입점
+ * ==========================================================
+ */
+function runRefreshAdSpendWeeklyCache(){
+
+  refreshAdSpendWeeklyCache_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Ad Spend Weekly Cache Map (같은 스프레드시트 안 캐시 읽기)
+ *
+ * OUTPUT
+ * Object  키 "yyyy-MM-dd(weekStart)|segment" → Spent(NZD)
+ * ==========================================================
+ */
+function readAdSpendWeeklyCacheMap_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(AD.SPEND_CACHE.WEEKLY_CACHE_SHEET);
+
+  const map = {};
+
+  if(!sheet) return map;
+
+  const values = sheet.getDataRange().getValues();
+
+  for(let i = 1; i < values.length; i++){
+
+    const row = values[i];
+
+    map[row[0] + "|" + row[1]] = row[2];
+
+  }
+
+  return map;
+
+}
+
+
+/**
+ * ==========================================================
  * Read Ad Spend Cache Map (같은 스프레드시트 안 캐시 읽기 — Simple Trigger 안전)
  *
  * WHY
@@ -465,6 +635,18 @@ function periodicRefreshAdSpendCache_(){
   } catch(err){
     Logger.log(
       "periodicRefreshAdSpendCache_: refreshAdSpendCache_ 실패 — 기존 캐시 유지 — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  // 2026-08-19 신규 — Target_REP 전용 주 단위 캐시도 같은 주기로 갱신. 실패가
+  // 위 월 단위 캐시 갱신에 영향을 주면 안 되므로 별도 try/catch로 격리
+  // (이 함수 전체의 실패 격리 원칙, 파일 헤더 Change Log 참고).
+  try {
+    refreshAdSpendWeeklyCache_();
+  } catch(err){
+    Logger.log(
+      "periodicRefreshAdSpendCache_: refreshAdSpendWeeklyCache_ 실패 — 기존 캐시 유지 — " +
       (err && err.message ? err.message : err)
     );
   }

@@ -12,9 +12,27 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.7.1
+ * v1.8.1
  *
  * Change Log
+ * v1.8.1 (2026-08-19)
+ * - 사용자 실측 리포트 2건 수정: (1) Target P1이 0인 주(예: 그 달 Seminar
+ *   목표가 없는 주)에서 Actual P1도 0이면 "0≥0"이 참이 돼 달성이 아닌데도
+ *   초록색이 켜지던 버그 — P1/CPNP1 규칙 둘 다 `Target > 0`일 때만 평가하도록
+ *   가드 추가(목표 자체가 없는 셀은 달성/미달성 판단 대상이 아님). (2) 하이라이트
+ *   색을 `#b7e1cd`(연한 초록)에서 사용자 지정 `#01ef18`(선명한 초록)로 변경.
+ * v1.8.0 (2026-08-19)
+ * - 사용자 피드백 2건 반영: (1) 셀 간 구분성 강화 — 전 셀 그리드 라인 색을
+ *   `#CCCCCC`(밝은 회색, 짝수 행 배경 `#F3F3F3`과 대비가 약해 거의 안 보임)에서
+ *   `#999999`로 진하게, 고정 컬럼/각 세그먼트 블록 경계에는 굵은 구분선
+ *   (`#434343`, SOLID_MEDIUM)을 추가로 얹어 세그먼트 단위 식별을 보강. (2)
+ *   Actual 달성 시 배경색 강조 — 신규 `applyTargetReportAchievementHighlights_()`
+ *   (수식 기반 조건부 서식, P1은 Actual≥Target(합계)이면 달성/CPNP1은 낮을수록
+ *   좋으므로 Actual≤Target이면서 실제 값이 있을 때만 달성). 조건부 서식은 셀
+ *   값이 아니라 수식이라 `updateTargetReportActuals_()`(Generate 없이 Actual만
+ *   갱신하는 경량 경로)가 실행돼도 규칙이 그대로 살아있어 값이 바뀔 때마다
+ *   자동 재평가된다 — 매번 다시 칠할 필요 없음. `applyTargetReportStyles_()`
+ *   끝에서 호출.
  * v1.7.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `92_TargetStyles.js` → 신규 `TARGET_003_Styles.js`, 코드 내용 변경 없음.
  * v1.7.0 (2026-07-30)
@@ -165,12 +183,26 @@ function applyTargetReportStyles_(sheet, rowCount){
 
   /*
   ==========================================================
-  Borders — 헤더 3행(2~4행) + 데이터 전체
+  Borders — 헤더 3행(2~4행) + 데이터 전체. 전 셀 그리드 라인을 뚜렷하게
+  (`#CCCCCC` → `#999999`, 2026-08-19 사용자 요청: "셀간 구분성 강화" — 옛
+  색은 짝수 행 배경 `#F3F3F3`과 대비가 약해 거의 안 보였음) + 고정 컬럼/각
+  세그먼트 블록 경계에는 굵은 구분선을 추가로 얹어 세그먼트 단위 식별을 보강.
   ==========================================================
   */
 
   sheet.getRange(rows.SEGMENT_HEADER_ROW, 1, rowCount + 3, colCount)
-    .setBorder(true, true, true, true, true, true, "#CCCCCC", SpreadsheetApp.BorderStyle.SOLID);
+    .setBorder(true, true, true, true, true, true, "#999999", SpreadsheetApp.BorderStyle.SOLID);
+
+  const dividerCols = [fixedColCount].concat(
+    CONFIG.TARGET.GROUP_ORDER.map(function(group, i){
+      return fixedColCount + (i + 1) * groupColCount;
+    })
+  );
+
+  dividerCols.forEach(function(col){
+    sheet.getRange(rows.SEGMENT_HEADER_ROW, col, rowCount + 3, 1)
+      .setBorder(null, null, null, true, null, null, "#434343", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  });
 
   /*
   ==========================================================
@@ -201,6 +233,93 @@ function applyTargetReportStyles_(sheet, rowCount){
     sheet.getRange(dataStartRow, baseCol + 5, rowCount, 1).setNumberFormat("$#,##0.00");   // Actual CPNP1
 
   });
+
+  applyTargetReportAchievementHighlights_(sheet, rowCount);
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply Target Report Achievement Highlights (Actual 달성 시 배경색 강조,
+ * 2026-08-19 신규 — 사용자 요청)
+ *
+ * WHY
+ * Target_REP은 달성%(Progress) 컬럼을 2026-07-30에 제거했다("다른 시트에서
+ * 확인" 사용자 확인) — 그 결과 Actual이 Target을 넘었는지 숫자를 눈으로
+ * 직접 비교해야 했다. 값을 다시 계산해서 쓰는 대신, 이미 있는 Target/Actual
+ * 셀을 참조하는 수식 기반 조건부 서식으로 "달성이면 배경색"만 켠다 — 값이
+ * 아니라 수식이라 `updateTargetReportActuals_()`(Generate 없이 Actual만
+ * 갱신하는 경량 경로)가 실행돼도 규칙이 그대로 살아있어 값이 바뀔 때마다
+ * 자동 재평가된다(매번 다시 칠할 필요 없음).
+ *
+ * 기준: P1은 Target > 0이고 Actual ≥ Target(New+Pipeline 합계)이면 달성.
+ * CPNP1은 낮을수록 좋으므로 Target > 0이고 Actual ≤ Target이면서 실제 값이
+ * 있을 때(공란/미래 주 제외)만 달성 — ISNUMBER 가드로 공란(빈 문자열)을 배제.
+ * **Target > 0 가드(2026-08-19 사용자 리포트로 추가)**: 그 달에 목표 자체가
+ * 0인 세그먼트(예: Seminar가 없는 달)는 Actual도 0이라 "0≥0"이 참이 돼
+ * 달성이 아닌데도 초록색이 켜지는 문제가 실측됨 — 목표가 없는 셀은 애초에
+ * 판단 대상이 아니므로 Target > 0일 때만 규칙을 평가한다.
+ *
+ * 매 generate마다 전체 규칙을 새로 만들어 시트에 통째로 덮어쓴다(Master/Report
+ * is Rebuildable 원칙) — Target_REP엔 다른 용도의 조건부 서식이 없어 안전.
+ *
+ * @param {Sheet} sheet
+ * @param {number} rowCount  작성된 데이터 행 수
+ * ==========================================================
+ */
+function applyTargetReportAchievementHighlights_(sheet, rowCount){
+
+  if(rowCount <= 0) return;
+
+  const rows = CONFIG.TARGET.REPORT.ROWS;
+  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
+  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
+  const dataStartRow = rows.REPORT_DATA_START;
+  const ACHIEVED_COLOR = "#01ef18";
+
+  const rules = [];
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
+
+    const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed
+    const targetP1Col = baseCol + 2;
+    const targetCPNP1Col = baseCol + 3;
+    const actualP1Col = baseCol + 4;
+    const actualCPNP1Col = baseCol + 5;
+
+    const actualP1Range = sheet.getRange(dataStartRow, actualP1Col, rowCount, 1);
+    const actualP1A1 = sheet.getRange(dataStartRow, actualP1Col).getA1Notation();
+    const targetP1A1 = sheet.getRange(dataStartRow, targetP1Col).getA1Notation();
+
+    rules.push(
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied(
+          "=AND(" + targetP1A1 + ">0," + actualP1A1 + ">=" + targetP1A1 + ")"
+        )
+        .setBackground(ACHIEVED_COLOR)
+        .setRanges([actualP1Range])
+        .build()
+    );
+
+    const actualCPNP1Range = sheet.getRange(dataStartRow, actualCPNP1Col, rowCount, 1);
+    const actualCPNP1A1 = sheet.getRange(dataStartRow, actualCPNP1Col).getA1Notation();
+    const targetCPNP1A1 = sheet.getRange(dataStartRow, targetCPNP1Col).getA1Notation();
+
+    rules.push(
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied(
+          "=AND(" + targetCPNP1A1 + ">0,ISNUMBER(" + actualCPNP1A1 + ")," +
+            actualCPNP1A1 + "<=" + targetCPNP1A1 + ")"
+        )
+        .setBackground(ACHIEVED_COLOR)
+        .setRanges([actualCPNP1Range])
+        .build()
+    );
+
+  });
+
+  sheet.setConditionalFormatRules(rules);
 
 }
 

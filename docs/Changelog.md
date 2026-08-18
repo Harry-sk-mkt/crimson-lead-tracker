@@ -225,6 +225,46 @@ Spent/Results/CPL 중 하나만 표시하는 구조라 Spent/Results 셀이 화�
 Date 2696, Revenue Existence 746, Exact Duplicate Lead Row 650) 전부 오늘 세션 범위 밖이라 손대지
 않음 — 다음에 확인.
 
+## (세션 계속) Target_REP UI 개선 3건 + ACQ/NewP1 월 구분 테두리 + NewP1_REP Revenue 문의(오탐)
+
+- **셀 테두리 강화 + 세그먼트 구분선**: Target_REP 전 셀 그리드 색을 `#CCCCCC`(짝수 행 배경과 대비
+  약함)에서 `#999999`로 진하게, 고정 컬럼/각 세그먼트(Seminar/Webinar/BOFU/Search/Content) 블록
+  경계에 굵은 구분선(`#434343`, SOLID_MEDIUM) 추가(`TARGET_003_Styles.js` v1.8.0).
+- **Actual 달성 시 하이라이트**: 조건부 서식(수식 기반)으로 P1은 Target>0이고 Actual≥Target(합계)이면,
+  CPNP1은 Target>0이고 Actual≤Target(낮을수록 좋음)이면서 실제 값이 있을 때 초록(`#01ef18`)으로
+  강조 — `applyTargetReportAchievementHighlights_()` 신규. 값이 아니라 수식이라 Actual만 갱신하는
+  경량 경로(`updateTargetReportActuals_()`)에서도 자동 재평가. **실측 버그 수정**: Target이 0인
+  주(세그먼트 목표 없음)에서 Actual도 0이면 "0≥0"이 참이 돼 오탐 강조되던 문제를 `Target>0` 가드로
+  해소(v1.8.1). 하이라이트 색도 사용자 요청으로 `#b7e1cd`→`#01ef18` 변경.
+- **주별 CPNP1 재설계(가장 큰 작업)** — 사용자 리포트: "CPNP1이 3개 주 값이 동일함". 원인은
+  Actual CPNP1이 월 단위 `Ad_Spend_Cache`(FY|Month|Segment)를 그 달 모든 주에 반복 표시하던 구조
+  (2026-08-04 도입, §8이 원래 반려했던 "월 평균 분배" 패턴이 재도입돼 있었음). Meta(`AD_002_Meta.js`
+  v1.7.0)/Naver(`AD_003_NaverSearch.js` v2.15.0)/Kakao(`AD_005_KakaoChannel.js` v1.3.0) 3개 플랫폼
+  지출 집계를 월 단위 옆에 주(월~일) 단위로 신규 추가(기존 월 단위 함수/출력은 그대로 유지,
+  ACQ_REP/FY_REP 하위호환). 정확도는 플랫폼마다 다름 — Naver(API를 주 단위로 직접 조회)/Kakao
+  (SentAt 단일 날짜 직접 귀속)는 근사 없는 참값, Meta는 실무 export가 보통 월 단위라 정밀 export가
+  없는 한 캠페인 활성기간 균등분배 근사값(월 버전과 동일한 "정밀 export 우선" 패턴 재사용).
+  신규 캐시 시트 `Ad_Spend_Cache_Weekly`(`AD_004_SpendCache.js` v1.5.0 `refreshAdSpendWeeklyCache_()`/
+  `readAdSpendWeeklyCacheMap_()`, `AD.SPEND_CACHE.WEEKLY_CACHE_SHEET`) — Target 주 사이클 전환일
+  (Cutover Date)부터만 채움(그 이전 주는 Target_REP도 원래 공란 규칙). WeekStart 컬럼은 Sheets가
+  "yyyy-MM-dd" 문자열을 Date로 자동 변환하는 걸 막기 위해 쓰기 전 `setNumberFormat("@")`로 텍스트
+  고정. `periodicRefreshAdSpendCache_()`가 이 캐시도 같은 주기(4시간)로 갱신하도록 확장(실패 격리
+  유지). `TARGET_002_Report.js`(v1.10.0)의 `computeTargetActualCPNP1ByGroupMonth_()`를
+  `computeTargetActualCPNP1ByGroupWeek_()`로 완전히 대체(구 함수 삭제) — 실 사용자 실행으로 15행
+  생성(Cutover 2026-08-03~실행 시점 약 3주 × 5세그먼트) 확인, 주별로 서로 다른 CPNP1 표시되는 것
+  사용자 확인 완료.
+- **ACQ_REP/NewP1_REP 월 블록 사이 굵은 구분 테두리 추가**: 짝/홀 줄무늬만으로는 흰 배경 블록끼리
+  이어질 때 월 경계가 잘 안 보이던 문제 — ACQ_REP은 고정폭 블록(`computeACQMonthBlockDividerRowOffsets_()`,
+  `ACQREP_003_Styles.js` v1.14.0), NewP1_REP은 가변폭 블록(`computeVariableBlockDividerRowOffsets_()`,
+  `NEWP1REP_002_Styles.js` v1.6.0)이라 각각 다른 경계 판정 로직 필요 — 둘 다 각 블록 마지막 행에
+  `#434343` SOLID_MEDIUM 오버레이. 사용자 확인 완료.
+- **NewP1_REP 8월 Search Revenue $73,029.39 미반영 문의 — 진단 결과 오탐(코드 버그 아님)**:
+  진단 함수(`TEMPQA_012_NewP1AugustSearchRevenueGap.js`) 실행 결과 Close Date 기준 8월 Search
+  딜은 2건뿐이고 금액도 $66,265.87/$59,165.29로 사용자가 말한 금액과 안 맞음 — 확인 결과 사용자가
+  가리킨 케이스는 세그먼트가 Search가 아니라 Webinar였음(사용자 확인). 다만 이 과정에서 NewP1_REP의
+  Revenue가 Close Date가 아니라 **딜의 Created Date** 기준으로 월별 귀속된다는 기존 설계(2026-07-28
+  확정)를 재확인 — Close Date 기준으로 리포트를 읽으면 계속 혼동 소지 있음, 별도 이슈 아님.
+
 # Changelog — 2026-08-08
 
 ## FY_REP(FY24~27 Marketing/ACQ/Pipeline/Revenue 비교 리포트) 구현 — Report/Write 레이어 완성, 실 시트 검증 대기

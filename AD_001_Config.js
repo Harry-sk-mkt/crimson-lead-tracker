@@ -21,9 +21,16 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.19.0
+ * v1.20.0
  *
  * Change Log
+ * v1.20.0 (2026-08-19)
+ * - `SPEND_CACHE.WEEKLY_CACHE_SHEET`("Ad_Spend_Cache_Weekly") 신규 — Target_REP
+ *   주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되던 문제 해소용 신규 주(월~일)
+ *   단위 캐시 시트 이름(AD_004_SpendCache.js `refreshAdSpendWeeklyCache_()`/
+ *   `readAdSpendWeeklyCacheMap_()` 신규가 사용). 기존 월 단위 `AD_SPEND_CACHE_SHEET`
+ *   ("Ad_Spend_Cache", CORE_001_Config.js)와는 별도 시트 — ACQ_REP/FY_REP는
+ *   계속 월 단위 캐시만 쓰고 안 건드림.
  * v1.19.0 (2026-08-08)
  * - `SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS`(4) 신규 — ACQ_REP를 refresh해도
  *   Kakao Moments(메시지광고 API)/Naver Search 최신 지출이 반영 안 되는 문제
@@ -552,7 +559,11 @@ const AD = {
     // ACQ_REP가 보여줄 ad spend 데이터의 최대 지연 시간(사용자 확정, 2026-08-08).
     // ScriptApp.newTrigger().timeBased().everyHours()가 받는 값 — 허용값(Apps
     // Script 제약): 1/2/4/6/8/12.
-    PERIODIC_REFRESH_INTERVAL_HOURS: 4
+    PERIODIC_REFRESH_INTERVAL_HOURS: 4,
+
+    // Target_REP 전용 주(월~일) 단위 캐시 시트(2026-08-19 신규) — 같은 메인
+    // 스프레드시트 안, Ad_Spend_Cache(월 단위)와 별도.
+    WEEKLY_CACHE_SHEET: "Ad_Spend_Cache_Weekly"
 
   }
 

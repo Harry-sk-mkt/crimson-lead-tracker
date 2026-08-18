@@ -34,9 +34,21 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-19)
+ * - Target_REP 주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되는 문제(사용자
+ *   리포트) 해소용 — 월 대신 주(월~일) 단위 지출 분배 신규: `generateAdSpendWeekRange_()`
+ *   (generateAdSpendMonthRange_()의 주 버전, TARGET_001_Engine.js의
+ *   getMondayOfWeek_()/addDaysToDate_() 재사용), `isMetaRowWeekPrecise_()`/
+ *   `computeMetaRowWeeklySpend_()`/`aggregateMetaSpendByWeekSegment_()`(월 버전과
+ *   동일한 "정밀 export 우선" 패턴), `computeMetaSpendWeeklySummary_()`(IO 래퍼,
+ *   AD_004_SpendCache.js `refreshAdSpendWeeklyCache_()`가 호출). **주의**: Meta
+ *   실무 export가 보통 월 단위라, 주 단위 정밀 export가 없는 한 이 경로의
+ *   결과는 캠페인 활성기간 균등분배 근사값이다(월 버전과 동일한 한계 —
+ *   `computeMetaRowWeeklySpend_()` WHY 참고). 기존 월 단위 함수/출력은 전혀
+ *   안 건드림(ACQ_REP/FY_REP 하위호환 유지).
  * v1.6.0 (2026-07-31)
  * - Meta 전용 캐시 쓰기/읽기(`refreshMetaSpendCache_()`/`runRefreshMetaSpendCache()`/
  *   `readMetaSpendCacheMap_()`, `META_SPEND_CACHE_HEADERS`, "Meta_Spend_Cache"
@@ -613,6 +625,360 @@ function computeMetaSpendSummary_(){
 function runComputeMetaSpendSummary(){
 
   const summary = computeMetaSpendSummary_();
+
+  Logger.log(JSON.stringify(summary, null, 2));
+
+}
+
+
+/**
+ * ==========================================================
+ * Generate Ad Spend Week Range (순수 함수)
+ *
+ * WHY
+ * generateAdSpendMonthRange_()의 주(월~일) 버전 — Target_REP 주별 CPNP1
+ * 정확도 개선(2026-08-19)을 위해 Meta 캠페인 지출을 월이 아니라 주 단위로도
+ * 분배할 수 있어야 한다. 주 정의는 Target_Engine과 동일(월요일 시작) —
+ * `getMondayOfWeek_()`/`addDaysToDate_()`(TARGET_001_Engine.js)를 그대로
+ * 재사용한다(같은 Apps Script 프로젝트라 전역에서 바로 호출 가능, 새 유틸
+ * 재작성 안 함).
+ *
+ * INPUT
+ * startDate : Date
+ * endDate : Date
+ *
+ * OUTPUT
+ * Array<{weekStart:Date}>  startDate~endDate에 걸친 각 주(월~일)의 월요일,
+ * 오름차순. 유효하지 않은 범위(endDate < startDate)면 빈 배열.
+ *
+ * TEST
+ * testGenerateAdSpendWeekRange() 참고
+ * ==========================================================
+ */
+function generateAdSpendWeekRange_(startDate, endDate){
+
+  const weeks = [];
+
+  if(!(startDate instanceof Date) || isNaN(startDate.getTime())) return weeks;
+  if(!(endDate instanceof Date) || isNaN(endDate.getTime())) return weeks;
+  if(endDate < startDate) return weeks;
+
+  let cursor = getMondayOfWeek_(startDate);
+  const last = getMondayOfWeek_(endDate);
+
+  while(cursor <= last){
+
+    weeks.push({ weekStart: new Date(cursor) });
+    cursor = addDaysToDate_(cursor, 7);
+
+  }
+
+  return weeks;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — generateAdSpendWeekRange_()
+ * ==========================================================
+ */
+function testGenerateAdSpendWeekRange(){
+
+  const result = generateAdSpendWeekRange_(
+    new Date(2026, 7, 6),   // 2026-08-06 (목, 8/3주)
+    new Date(2026, 7, 20)   // 2026-08-20 (목, 8/17주)
+  );
+
+  const pass =
+    result.length === 3 &&
+    result[0].weekStart.getTime() === new Date(2026, 7, 3).getTime() &&
+    result[1].weekStart.getTime() === new Date(2026, 7, 10).getTime() &&
+    result[2].weekStart.getTime() === new Date(2026, 7, 17).getTime();
+
+  Logger.log("Result: " + result.map(function(r){ return r.weekStart.toString(); }).join(" | "));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+  const invalid = generateAdSpendWeekRange_(new Date(2026, 7, 20), new Date(2026, 7, 6));
+
+  Logger.log("Invalid range length: " + invalid.length + " (expected 0)");
+  Logger.log(invalid.length === 0 ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Is Meta Row Week Precise (순수 함수)
+ *
+ * WHY
+ * isMetaRowMonthPrecise_()의 주 버전 — reportStart/reportEnd가 같은 주(월~일)
+ * 안에 있으면 그 행의 Spent를 "그 주 정확 값"으로 신뢰할 수 있다. 실무
+ * export가 보통 월 단위라 이 조건을 만족하는 행은 드물 것으로 예상됨(사용자가
+ * 주 단위 export로 바꾸기 전까지) — 만족하는 행이 있으면 우선 채택하고,
+ * 없으면 computeMetaRowWeeklySpend_()의 균등분배 근사값으로 대체된다
+ * (aggregateMetaSpendByWeekSegment_()의 정밀 우선 규칙).
+ *
+ * @param {Object} record
+ * @return {boolean}
+ *
+ * TEST
+ * testIsMetaRowWeekPrecise() 참고
+ * ==========================================================
+ */
+function isMetaRowWeekPrecise_(record){
+
+  if(!(record.reportStart instanceof Date) || isNaN(record.reportStart.getTime())) return false;
+  if(!(record.reportEnd instanceof Date) || isNaN(record.reportEnd.getTime())) return false;
+
+  return getMondayOfWeek_(record.reportStart).getTime() === getMondayOfWeek_(record.reportEnd).getTime();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isMetaRowWeekPrecise_()
+ * ==========================================================
+ */
+function testIsMetaRowWeekPrecise(){
+
+  const precise = isMetaRowWeekPrecise_({
+    reportStart: new Date(2026, 7, 3),
+    reportEnd: new Date(2026, 7, 9)
+  });
+
+  const lump = isMetaRowWeekPrecise_({
+    reportStart: new Date(2026, 6, 1),
+    reportEnd: new Date(2026, 6, 31)
+  });
+
+  Logger.log("precise=" + precise + " (expected true), lump=" + lump + " (expected false)");
+  Logger.log((precise === true && lump === false) ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Meta Row Weekly Spend (순수 함수)
+ *
+ * WHY
+ * computeMetaRowMonthlySpend_()의 주 버전 — "캠페인 활성 기간 ∩ 보고 조회
+ * 기간"을 주(월~일) 단위로 균등분배한다. 월 버전과 동일한 근사 한계를 그대로
+ * 가진다(장기 lump 행일수록 실제 주간 변동을 못 담음) — 정밀 export가 월
+ * 단위인 한 이 함수의 대부분 출력은 근사값이라는 걸 유의(파일 헤더 Change
+ * Log v1.7.0 WHY 참고).
+ *
+ * INPUT
+ * record : Object  computeMetaRowMonthlySpend_()와 동일
+ *
+ * OUTPUT
+ * Array<{weekStart:Date, segment:string, spent:number}>
+ *
+ * TEST
+ * testComputeMetaRowWeeklySpend() 참고
+ * ==========================================================
+ */
+function computeMetaRowWeeklySpend_(record){
+
+  const segment = getBusinessSegment(record.campaignName);
+
+  if(!(record.reportStart instanceof Date) || isNaN(record.reportStart.getTime())) return [];
+  if(!(record.reportEnd instanceof Date) || isNaN(record.reportEnd.getTime())) return [];
+
+  const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
+  const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
+
+  const effectiveStart = (hasCampaignStart && record.campaignStart > record.reportStart)
+    ? record.campaignStart
+    : record.reportStart;
+
+  const effectiveEnd = (hasCampaignEnd && record.campaignEnd < record.reportEnd)
+    ? record.campaignEnd
+    : record.reportEnd;
+
+  const weeks = generateAdSpendWeekRange_(effectiveStart, effectiveEnd);
+
+  if(weeks.length === 0) return [];
+
+  const perWeekSpent = (Number(record.spent) || 0) / weeks.length;
+
+  return weeks.map(function(w){
+    return { weekStart: w.weekStart, segment: segment, spent: perWeekSpent };
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeMetaRowWeeklySpend_()
+ * ==========================================================
+ */
+function testComputeMetaRowWeeklySpend(){
+
+  // 2주치 정밀 export(2026-08-03~08-16) — BOFU 캠페인명 패턴(기존
+  // testComputeMetaRowMonthlySpend() Case A와 동일 네이밍 관례).
+  const row = {
+    campaignName: "KR_core_2022-01-19_book-a-consult-acqui_contact-lg",
+    spent: 700,
+    reportStart: new Date(2026, 7, 3),
+    reportEnd: new Date(2026, 7, 16),
+    campaignStart: new Date(2020, 0, 1),
+    campaignEnd: null
+  };
+
+  const result = computeMetaRowWeeklySpend_(row);
+
+  const pass =
+    result.length === 2 &&
+    Math.abs(result[0].spent - 350) < 1e-9 &&
+    Math.abs(result[1].spent - 350) < 1e-9 &&
+    result[0].weekStart.getTime() === new Date(2026, 7, 3).getTime() &&
+    result[1].weekStart.getTime() === new Date(2026, 7, 10).getTime() &&
+    result[0].segment === "BOFU";
+
+  Logger.log("Result: " + JSON.stringify(result.map(function(r){
+    return { weekStart: r.weekStart.toString(), segment: r.segment, spent: r.spent };
+  })));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Meta Spend By Week/Segment (순수 함수)
+ *
+ * WHY
+ * aggregateMetaSpendByFYMonthSegment_()의 주 버전 — 동일한 "정밀 export
+ * 우선" 규칙: 같은 캠페인의 같은 주를 정밀(isMetaRowWeekPrecise_()) 행과
+ * 분배(장기 lump) 행이 동시에 커버하면, 분배 행의 그 주 기여분은 버리고
+ * 정밀값을 채택한다.
+ *
+ * INPUT
+ * records : Array  (readMetaRawRows_() 결과)
+ *
+ * OUTPUT
+ * Object  키 "yyyy-MM-dd(weekStart)|segment" → 합산 Spent
+ *
+ * TEST
+ * testAggregateMetaSpendByWeekSegment() 참고
+ * ==========================================================
+ */
+function aggregateMetaSpendByWeekSegment_(records){
+
+  const toKey = function(weekStart){
+    return Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+  };
+
+  const preciseCoverageByCampaign = {};
+
+  records.forEach(function(record){
+
+    if(!isMetaRowWeekPrecise_(record)) return;
+
+    computeMetaRowWeeklySpend_(record).forEach(function(entry){
+
+      const campaign = record.campaignName;
+
+      if(!preciseCoverageByCampaign[campaign]) preciseCoverageByCampaign[campaign] = {};
+
+      preciseCoverageByCampaign[campaign][toKey(entry.weekStart)] = true;
+
+    });
+
+  });
+
+  const totals = {};
+
+  records.forEach(function(record){
+
+    const isPrecise = isMetaRowWeekPrecise_(record);
+    const coverage = preciseCoverageByCampaign[record.campaignName];
+
+    computeMetaRowWeeklySpend_(record).forEach(function(entry){
+
+      const weekKey = toKey(entry.weekStart);
+
+      if(!isPrecise && coverage && coverage[weekKey]) return;
+
+      const key = weekKey + "|" + entry.segment;
+
+      totals[key] = (totals[key] || 0) + entry.spent;
+
+    });
+
+  });
+
+  return totals;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateMetaSpendByWeekSegment_()
+ * ==========================================================
+ */
+function testAggregateMetaSpendByWeekSegment(){
+
+  const records = [
+    {
+      // 정밀(단일 주) 행 — 2026-08-03~08-09.
+      campaignName: "KR_core_2022-01-19_book-a-consult-acqui_contact-lg",
+      spent: 500,
+      reportStart: new Date(2026, 7, 3),
+      reportEnd: new Date(2026, 7, 9),
+      campaignStart: new Date(2020, 0, 1),
+      campaignEnd: null
+    },
+    {
+      // 같은 캠페인의 장기 분배 행(2026-07-27~08-09, 2주 걸침) — 8/3주는
+      // 위 정밀 행이 이미 커버하므로 그 주 기여분은 버려지고 7/27주만 채택.
+      campaignName: "KR_core_2022-01-19_book-a-consult-acqui_contact-lg",
+      spent: 1000,
+      reportStart: new Date(2026, 6, 27),
+      reportEnd: new Date(2026, 7, 9),
+      campaignStart: new Date(2020, 0, 1),
+      campaignEnd: null
+    }
+  ];
+
+  const result = aggregateMetaSpendByWeekSegment_(records);
+
+  const pass =
+    result["2026-08-03|BOFU"] === 500 &&        // 정밀값 채택(분배 행의 500 안 더해짐)
+    result["2026-07-27|BOFU"] === 500 &&        // 분배 행의 7/27주 기여분(1000/2)
+    Object.keys(result).length === 2;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Meta Spend Weekly Summary (IO 래퍼)
+ * ==========================================================
+ */
+function computeMetaSpendWeeklySummary_(){
+
+  return aggregateMetaSpendByWeekSegment_(readMetaRawRows_());
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — computeMetaSpendWeeklySummary_() 수동 실행/확인용 공개 진입점
+ * ==========================================================
+ */
+function runComputeMetaSpendWeeklySummary(){
+
+  const summary = computeMetaSpendWeeklySummary_();
 
   Logger.log(JSON.stringify(summary, null, 2));
 

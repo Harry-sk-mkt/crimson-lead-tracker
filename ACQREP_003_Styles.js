@@ -12,9 +12,20 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.13.1
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-08-19)
+ * - **월 블록 사이 굵은 구분 테두리 추가**(사용자 요청 — "ACQ, NewP1에도
+ *   month간 구분테두리를 집어넣자", Target_REP에 먼저 적용했던 세그먼트
+ *   구분선(TARGET_003_Styles.js v1.8.0)과 같은 취지). 지금까지는 짝/홀
+ *   줄무늬 배경만으로 월 블록을 구분했는데, 흰 배경 블록끼리(또는 줄무늬
+ *   블록끼리) 이어지면 경계가 잘 안 보였음. 신규
+ *   `computeACQMonthBlockDividerRowOffsets_()`(순수 함수 — 고정폭 블록,
+ *   `CONFIG.ACQ.SEGMENTS.length`행마다 경계) + `applyACQMonthBlockDividers_()`
+ *   (A:N/Target 4컬럼/Spent 3개 range에 굵은 하단 테두리 `#434343`
+ *   SOLID_MEDIUM 오버레이, 기존 얇은 그리드 테두리 그리기 *이후*에 호출해야
+ *   덮어써지지 않음). `applyACQReportStyles_()` 끝에서 호출.
  * v1.13.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `32_ACQReportStyles.js` → 신규 `ACQREP_003_Styles.js`, 코드 내용 변경 없음.
  * v1.13.0 (2026-08-09)
@@ -263,7 +274,116 @@ function applyACQReportStyles_(sheet, rowCount, onTrackRows){
       SpreadsheetApp.BorderStyle.SOLID
     );
 
+  applyACQMonthBlockDividers_(sheet, startRow, rowCount, dataCols, targetStartCol, targetCols, spentCol);
+
   annotateACQReportMetricNotes_(sheet, headerRow);
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute ACQ Month Block Divider Row Offsets (순수 함수)
+ *
+ * WHY
+ * ACQ_REP은 월 블록마다 정확히 `CONFIG.ACQ.SEGMENTS.length`행씩 고정폭이라
+ * (buildACQReportBackgrounds_()의 monthBlockIndex 계산과 동일 전제), 나눗셈만으로
+ * 블록 경계를 찾을 수 있다. 마지막 블록 뒤에는 구분선이 필요 없으므로
+ * (이미 외곽 테두리가 있음) rowCount와 정확히 일치하는 경계는 제외한다.
+ *
+ * INPUT
+ * rowCount : Number
+ * segmentsPerMonth : Number
+ *
+ * OUTPUT
+ * Array<Number>  0-indexed 행 오프셋(각 블록의 마지막 행) 목록, 오름차순
+ *
+ * TEST
+ * testComputeACQMonthBlockDividerRowOffsets() 참고
+ * ==========================================================
+ */
+function computeACQMonthBlockDividerRowOffsets_(rowCount, segmentsPerMonth){
+
+  const offsets = [];
+
+  if(!segmentsPerMonth || segmentsPerMonth <= 0) return offsets;
+
+  for(let boundary = segmentsPerMonth; boundary < rowCount; boundary += segmentsPerMonth){
+    offsets.push(boundary - 1);
+  }
+
+  return offsets;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeACQMonthBlockDividerRowOffsets_()
+ * ==========================================================
+ */
+function testComputeACQMonthBlockDividerRowOffsets(){
+
+  const twoBlocks = computeACQMonthBlockDividerRowOffsets_(14, 7);
+  const threeBlocks = computeACQMonthBlockDividerRowOffsets_(21, 7);
+  const partialBlock = computeACQMonthBlockDividerRowOffsets_(10, 7); // 마지막 블록 미완성(3행)
+
+  const pass =
+    JSON.stringify(twoBlocks) === JSON.stringify([6]) &&
+    JSON.stringify(threeBlocks) === JSON.stringify([6, 13]) &&
+    JSON.stringify(partialBlock) === JSON.stringify([6]);
+
+  Logger.log("twoBlocks=" + JSON.stringify(twoBlocks) + " (expected [6])");
+  Logger.log("threeBlocks=" + JSON.stringify(threeBlocks) + " (expected [6,13])");
+  Logger.log("partialBlock=" + JSON.stringify(partialBlock) + " (expected [6])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply ACQ Month Block Dividers (월 블록 사이 굵은 구분 테두리,
+ * 2026-08-19 신규 — 사용자 요청)
+ *
+ * WHY
+ * 기존 얇은 그리드 테두리(applyACQReportStyles_() 상단)와 짝/홀 줄무늬
+ * 배경만으로는 흰 배경 블록끼리(또는 줄무늬 블록끼리) 이어질 때 월 경계가
+ * 잘 안 보였다. 각 블록의 마지막 행 하단에만 굵은 테두리(`#434343`,
+ * SOLID_MEDIUM)를 오버레이 — 반드시 얇은 그리드 테두리를 그린 *이후*에
+ * 호출해야 덮어써지지 않는다(TARGET_003_Styles.js 세그먼트 구분선과 동일 순서).
+ *
+ * @param {Sheet} sheet
+ * @param {number} startRow
+ * @param {number} rowCount
+ * @param {number} dataCols     A:N(14)
+ * @param {number} targetStartCol
+ * @param {number} targetCols
+ * @param {number} spentCol
+ * ==========================================================
+ */
+function applyACQMonthBlockDividers_(sheet, startRow, rowCount, dataCols, targetStartCol, targetCols, spentCol){
+
+  if(rowCount <= 0) return;
+
+  const segmentsPerMonth = CONFIG.ACQ.SEGMENTS.length;
+  const offsets = computeACQMonthBlockDividerRowOffsets_(rowCount, segmentsPerMonth);
+  const DIVIDER_COLOR = "#434343";
+
+  offsets.forEach(function(offset){
+
+    const dividerRow = startRow + offset;
+
+    sheet.getRange(dividerRow, 1, 1, dataCols)
+      .setBorder(null, null, true, null, null, null, DIVIDER_COLOR, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+    sheet.getRange(dividerRow, targetStartCol, 1, targetCols)
+      .setBorder(null, null, true, null, null, null, DIVIDER_COLOR, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+    sheet.getRange(dividerRow, spentCol, 1, 1)
+      .setBorder(null, null, true, null, null, null, DIVIDER_COLOR, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  });
 
 }
 

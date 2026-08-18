@@ -12,9 +12,20 @@
  * 20 Reporting (Shared Component)
  *
  * Version
- * v1.5.1
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-19)
+ * - **월 블록 사이 굵은 구분 테두리 추가**(사용자 요청 — "ACQ, NewP1에도
+ *   month간 구분테두리를 집어넣자", ACQREP_003_Styles.js v1.14.0/
+ *   TARGET_003_Styles.js v1.8.0과 동일 취지). NewP1_REP은 ACQ_REP과 달리
+ *   블록 크기가 가변(Segment 조합이 실제 데이터 기준)이라 고정 나눗셈을 못
+ *   씀 — 신규 `computeVariableBlockDividerRowOffsets_()`(순수 함수, FY+Month
+ *   키 배열에서 값이 바뀌는 지점을 경계로 판단) + `applyNewP1MonthBlockDividers_()`
+ *   (A:M/Target 4컬럼 2개 range에 굵은 하단 테두리 `#434343` SOLID_MEDIUM
+ *   오버레이, 기존 얇은 그리드 테두리 그리기 *이후*에 호출). 줄무늬 배경
+ *   계산 때 이미 만든 FY+Month 키 배열(`fyMonthValues`)을 그대로 재사용 —
+ *   추가 시트 읽기 없음. `applyNewP1ReportStyles_()` 끝에서 호출.
  * v1.5.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `41_NewP1ReportStyles.js` → 신규 `NEWP1REP_002_Styles.js`, 코드 내용 변경 없음.
  * v1.5.0 (2026-08-09)
@@ -84,6 +95,8 @@ function applyNewP1ReportStyles_(sheet, rowCount){
   const targetStartCol = CONFIG.NEWP1.TARGET_COLUMNS_START_COL;     // N열(14, 2026-07-30 최종 확정 — 이전엔 O열이었으나 사용자가 N열 수동 내용을 삭제하며 원복)
   const targetCols = NEWP1_TARGET_HEADERS.length;                   // 4
 
+  let blockKeys = [];
+
   //----------------------------------------------------------
   // 배경색 우선 초기화 (이전 실행의 줄무늬가 남지 않도록)
   // A:M과 Target 4컬럼은 사이에 사용자 수동 영역(N열)이 껴 있어 range를 분리한다.
@@ -130,12 +143,14 @@ function applyNewP1ReportStyles_(sheet, rowCount){
 
     const fyMonthValues = sheet.getRange(startRow, 1, rowCount, 2).getValues();
 
+    blockKeys = fyMonthValues.map(function(v){ return v[0] + "|" + v[1]; });
+
     let blockIndex = -1;
     let previousKey = null;
 
     for(let i = 0; i < rowCount; i++){
 
-      const key = fyMonthValues[i][0] + "|" + fyMonthValues[i][1];
+      const key = blockKeys[i];
 
       if(key !== previousKey){
         blockIndex++;
@@ -187,7 +202,105 @@ function applyNewP1ReportStyles_(sheet, rowCount){
   sheet.getRange(headerRow, 1, 1, totalCols)
     .setFontWeight("bold");
 
+  applyNewP1MonthBlockDividers_(sheet, startRow, blockKeys, totalCols, targetStartCol, targetCols);
+
   annotateNewP1ReportMetricNotes_(sheet, headerRow);
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Variable Block Divider Row Offsets (순수 함수)
+ *
+ * WHY
+ * NewP1_REP의 FY+Month 블록은 ACQ_REP과 달리 크기가 가변(Segment 조합이
+ * 실제 데이터 기준)이라 고정 나눗셈으로 경계를 못 찾는다 — 행별 블록 키
+ * 배열을 받아 값이 바뀌는 지점(=이전 블록의 마지막 행)을 찾는다. 마지막
+ * 블록 뒤에는 구분선이 필요 없으므로(이미 외곽 테두리가 있음) 포함하지 않음.
+ *
+ * INPUT
+ * keys : Array<string>  행별 블록 키(예: "26|AUG"), 위에서 아래 순서
+ *
+ * OUTPUT
+ * Array<Number>  0-indexed 행 오프셋(각 블록의 마지막 행) 목록, 오름차순
+ *
+ * TEST
+ * testComputeVariableBlockDividerRowOffsets() 참고
+ * ==========================================================
+ */
+function computeVariableBlockDividerRowOffsets_(keys){
+
+  const offsets = [];
+
+  for(let i = 1; i < keys.length; i++){
+    if(keys[i] !== keys[i - 1]) offsets.push(i - 1);
+  }
+
+  return offsets;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeVariableBlockDividerRowOffsets_()
+ * ==========================================================
+ */
+function testComputeVariableBlockDividerRowOffsets(){
+
+  const result = computeVariableBlockDividerRowOffsets_(["a", "a", "a", "b", "b", "c"]);
+  const pass = JSON.stringify(result) === JSON.stringify([2, 4]);
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected [2,4])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+  const empty = computeVariableBlockDividerRowOffsets_([]);
+
+  Logger.log("Empty input: " + JSON.stringify(empty) + " (expected [])");
+  Logger.log(empty.length === 0 ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply NewP1 Month Block Dividers (월 블록 사이 굵은 구분 테두리,
+ * 2026-08-19 신규 — 사용자 요청)
+ *
+ * WHY
+ * ACQREP_003_Styles.js applyACQMonthBlockDividers_()와 동일 취지 — 기존
+ * 얇은 그리드 테두리와 짝/홀 줄무늬 배경만으로는 월 경계가 잘 안 보였다.
+ * 각 블록의 마지막 행 하단에만 굵은 테두리(`#434343`, SOLID_MEDIUM)를
+ * 오버레이 — 반드시 얇은 그리드 테두리를 그린 *이후*에 호출해야 덮어써지지
+ * 않는다.
+ *
+ * @param {Sheet} sheet
+ * @param {number} startRow
+ * @param {Array<string>} blockKeys  행별 FY+Month 키(줄무늬 계산 때 이미 만든 배열 재사용)
+ * @param {number} totalCols        A:M(13)
+ * @param {number} targetStartCol
+ * @param {number} targetCols
+ * ==========================================================
+ */
+function applyNewP1MonthBlockDividers_(sheet, startRow, blockKeys, totalCols, targetStartCol, targetCols){
+
+  if(!blockKeys || blockKeys.length === 0) return;
+
+  const offsets = computeVariableBlockDividerRowOffsets_(blockKeys);
+  const DIVIDER_COLOR = "#434343";
+
+  offsets.forEach(function(offset){
+
+    const dividerRow = startRow + offset;
+
+    sheet.getRange(dividerRow, 1, 1, totalCols)
+      .setBorder(null, null, true, null, null, null, DIVIDER_COLOR, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+    sheet.getRange(dividerRow, targetStartCol, 1, targetCols)
+      .setBorder(null, null, true, null, null, null, DIVIDER_COLOR, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  });
 
 }
 
