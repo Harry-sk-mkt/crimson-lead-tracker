@@ -47,7 +47,16 @@ Field History로 직접 추적해 발견("9/8/2026"이 실제로는 8월 9일인
 **반드시 같은 커밋에서 `CONFIG.RAW_DATE_COLUMNS`(해당 LEADS/MTA 배열)에도 그 원본 컬럼명을
 추가할 것** — 둘이 분리된 두 곳이라 하나만 고치고 잊기 쉽다.
 
-**남은 작업**: 이미 MTA_Raw/MTA_Master에 잘못 저장된 과거 `Sales Accepted Date` 값은 원본
-텍스트가 소실돼 이 코드 수정만으로 복구되지 않는다 — Salesforce에서 이 필드를 포함해 재export
-후 재import(또는 해당 컬럼만 별도 백필)하는 작업이 필요하며, 착수 전 범위 확인 필요
-(`docs/OpenItems.md` 참고, 임의로 처리하지 말 것).
+**데이터 복구 — ✅ 2026-08-18 같은 세션에서 완료(2026-08-19 문서 정정)**: 원본 텍스트 소실로
+재export 대신 swap-back(day/month 역산) 방식으로 직접 복구했다. `TEMPQA_007_
+SalesAcceptedDateAudit.js`(읽기 전용 감사, 8,191건 중 3,193건 오염 확인) →
+`TEMPQA_008_SalesAcceptedDateRepair.js`(MTA_Raw 직접 복구 — "Raw는 원본 보존" 원칙의
+명시적 예외, 원본 텍스트가 이미 소실돼 보존 자체가 불가능했던 상황이라 사용자 확인 후 예외
+처리) → `rebuildMTAMaster()` → `runSyncMTAFunnelToOPS()`. 잔존값 1건은
+`TEMPQA_010_SalesAcceptedDateStaleClear.js`로 별도 클리어. 상세: `docs/Changelog.md`
+2026-08-19 항목.
+
+**남은 작업**: day/month swap 가설로 설명 안 되는(day>12) 잔여 3개 Lead ID는 `TEMPQA_013_
+SalesAcceptedDateResidualTrace.js` 실행 결과 셋 다 월말 날짜 + IC 진행 전무라는 공통 패턴 확인
+— Salesforce 쪽 워크플로우/롤업 기본값 가설이 유력하나 시트/코드로는 더 이상 확인 불가,
+Salesforce Field History 직접 확인 필요. 상세: `docs/OpenItems.md` #26(임의로 처리하지 말 것).

@@ -202,15 +202,36 @@
     Funnel Match 불일치(IC Booked Date 2904/IC Completed Date 2769/Opportunity Won Date 2696),
     Revenue Existence 746, Exact Duplicate Lead Row 650. 사용자 확인 — 오늘 세션 범위 밖이라
     **의도적으로 미해결 상태로 둠**, 원인 조사·처리는 다음 세션에서. 임의로 손대지 말 것.
-26. **`Sales Accepted Date` 과거 오염 데이터 재수집 필요 (코드 수정 완료, 데이터 복구는 TODO, 2026-08-19)** —
-    S&M_REP(신규 리포트) 개발 중 미래 날짜(9~12월)로 찍힌 SAL을 사용자가 발견, ACQ_REP에서도 동일
-    현상 확인 후 Salesforce Field History로 직접 추적해 원인 확정: `CONFIG.RAW_DATE_COLUMNS.MTA`에
-    `"Lead: Sales Accepted Date"`가 누락돼 있어(이 필드가 2026-07-25에 파이프라인에 추가됐는데
-    보호 목록 확정(2026-07-21)엔 그때 같이 반영이 안 됨) Google Sheets가 day-first 원본("9/8/2026"
-    = 실제 8월 9일)을 자기 locale로 오해석해 9월 8일로 영구 변환 — 원본 텍스트 소실. 상세 원인/증거:
-    `docs/DateParsing.md` "2026-08-19 — 재발 사례" 섹션. **코드 수정 완료**(`CONFIG.RAW_DATE_COLUMNS.MTA`에
-    추가, `CORE_001_Config.js` v1.38.0) — 이후 신규 MTA Import부터는 재발 안 함. **미해결**: 이미
-    MTA_Raw/MTA_Master에 잘못 저장된 과거 `Sales Accepted Date` 값(2026-07-25~08-19 사이 import된
-    분량 추정, 정확한 영향 범위 미확인)은 원본 텍스트가 소실돼 코드 수정만으로 복구 불가 — Salesforce에서
-    이 필드를 포함해 재export 후 재import(또는 해당 컬럼만 별도 백필) 필요, 착수 전 정확한 영향 범위(몇
-    건, 어느 기간)부터 확인할 것. 임의로 처리하지 말 것.
+26. **`Sales Accepted Date` 과거 오염 데이터 — 코드 수정 + 대량 복구 완료(2026-08-18), 잔여 3건
+    원인 미확정(TODO, 2026-08-19 문서 정정)** — S&M_REP(신규 리포트) 개발 중 미래 날짜(9~12월)로
+    찍힌 SAL을 사용자가 발견, ACQ_REP에서도 동일 현상 확인 후 Salesforce Field History로 직접
+    추적해 원인 확정: `CONFIG.RAW_DATE_COLUMNS.MTA`에 `"Lead: Sales Accepted Date"`가 누락돼
+    있어(이 필드가 2026-07-25에 파이프라인에 추가됐는데 보호 목록 확정(2026-07-21)엔 그때 같이
+    반영이 안 됨) Google Sheets가 day-first 원본("9/8/2026" = 실제 8월 9일)을 자기 locale로
+    오해석해 9월 8일로 영구 변환 — 원본 텍스트 소실. 상세 원인/증거: `docs/DateParsing.md`
+    "2026-08-19 — 재발 사례" 섹션. **코드 수정 완료**(`CONFIG.RAW_DATE_COLUMNS.MTA`에 추가,
+    `CORE_001_Config.js` v1.38.0) — 이후 신규 MTA Import부터는 재발 안 함.
+    **✅ 데이터 복구도 같은 세션(2026-08-18)에 완료됨 — 아래는 최초 기록 당시(재export 필요로
+    판단) 이후 실제 진행된 내용, 이전 버전 문구는 착수 전 상태였던 것으로 정정**: 원본 텍스트
+    소실로 재export 대신 swap-back(day/month 역산) 방식으로 직접 복구. (1) `TEMPQA_007_
+    SalesAcceptedDateAudit.js`(읽기 전용 감사) — 대표 터치 기준 8,191건 중 **3,193건 오염**
+    확인(day≤12만 ambiguous라 이 조건으로 스캔). (2) `TEMPQA_008_SalesAcceptedDateRepair.js` —
+    swap-back 공식으로 MTA_Raw 직접 복구("Raw는 원본 보존" 원칙의 명시적 예외 — 원본 텍스트가
+    이미 소실돼 보존 자체가 불가능한 상황이라 예외 처리, 사용자 확인) → `rebuildMTAMaster()` →
+    `runSyncMTAFunnelToOPS()`로 반영. (3) `TEMPQA_009_SalesAcceptedDateLeadTrace.js` — 복구
+    후에도 남은 4개 Lead ID 추적, MTA_Raw/MTA_Master/Leads_OPS 3단 덤프로 원인 분리: 1건은
+    대표 터치가 이미 공란인데 Leads_OPS엔 예전 동기화 값이 잔존한 케이스, 나머지는 day>12라
+    애초에 swap 가설과 무관(별도 원인 추정, 아래 참고). (4) `TEMPQA_010_
+    SalesAcceptedDateStaleClear.js` — 잔존값 1건 강제 클리어 완료(1회성, `syncMTAFunnelToOPS_()`
+    자체의 "값 없으면 안 지움" 정책은 유지, 사용자 확정). 상세 서술: `docs/Changelog.md`
+    2026-08-19 항목.
+    **미해결(남은 범위, 이전보다 훨씬 좁아짐)**: 잔여 **3개 Lead ID**(`00QRC00000ti6Vc`/
+    `00QRC00000tnGLi`/`00QRC00000shbd7`)는 day>12라 이 항목의 day/month swap 가설로는 설명이
+    안 됨. **2026-08-19 `TEMPQA_013_SalesAcceptedDateResidualTrace.js`(`runTraceSalesAcceptedDateResidual()`)
+    실행 결과**: 셋 다 (1) 정확히 그 달의 말일(2026-09-30/10-31/10-31), (2) IC Booked/Completed/
+    Won Date 전부 공란(파이프라인 진행 자체가 없음), (3) Priority(P3/P1/P3)·Business
+    Segment(Search/BOFU/Content)는 제각각 — day/month swap이 아니라 **Salesforce 쪽 워크플로우/
+    롤업이 월말 날짜를 기본값으로 채워 넣었을 가능성**(SLA 마감일, 다음 리뷰 예정일 등)이 유력
+    가설로 좁혀짐(미확정). 시트/코드만으로는 더 이상 원인 규명 불가 — 최초 이 버그를 찾았을
+    때와 동일하게, 이 3개 Lead ID를 **Salesforce Field History에서 직접 확인** 필요. 임의로
+    처리하지 말 것.

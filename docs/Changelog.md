@@ -1,5 +1,24 @@
 # Changelog — 2026-08-19
 
+## Sales Accepted Date 오염 — docs drift 정정 + 잔여 3건 원인 조사
+
+`docs/OpenItems.md` #26 점검 요청으로 시작. `docs/OpenItems.md` #26/`docs/DateParsing.md`가
+"데이터 복구 TODO, 영향 범위 미확인"으로 남아있었으나, 같은 날짜(2026-08-18) 커밋에서 이미
+`TEMPQA_007~010`(감사·swap-back 복구·잔여 추적·stale clear)로 8,191건 중 3,193건 오염을
+확인·복구까지 완료했던 사실이 문서에 반영이 안 돼 있었음(docs/Changelog.md 2026-08-19 "MTA
+Funnel Sync..." 항목엔 기록돼 있었으나 OpenItems.md #26만 착수 전 문구 그대로 방치) — 두 문서
+모두 실제 완료 상태로 정정.
+
+**잔여 3건 원인 조사**: 대량 복구 후에도 day>12(swap 가설 불가) 사유로 미해결 남아있던
+`00QRC00000ti6Vc`/`00QRC00000tnGLi`/`00QRC00000shbd7` 3개 Lead ID를 신규 읽기 전용 진단
+`TEMPQA_013_SalesAcceptedDateResidualTrace.js`(`runTraceSalesAcceptedDateResidual()`)로
+확인 — 사용자가 Apps Script 편집기에서 직접 Run. 결과: 셋 다 (1) 정확히 그 달 말일
+(2026-09-30/10-31/10-31), (2) IC Booked/Completed/Won Date 전부 공란(파이프라인 진행 없음),
+(3) Priority/Business Segment는 제각각(P3·Search / P1·BOFU / P3·Content) — day/month swap이
+아니라 Salesforce 쪽 워크플로우/롤업이 월말 날짜를 기본값으로 채워 넣었을 가능성이 유력 가설로
+좁혀짐(미확정). 시트/코드로는 더 이상 원인 규명 불가 — Salesforce Field History 직접 확인이
+다음 단계, 사용자 요청으로 이번 세션은 여기서 다음 세션으로 넘김(`docs/OpenItems.md` #26 참고).
+
 ## MTA Funnel Sync 성능 버그 수정 + S&M_REP 신규 리포트 + Sales Accepted Date 데이터 오염 발견·복구 + Pipeline Status self-heal 확장
 
 - **버그 발견·수정 — MTA Funnel Sync 개별 setValue() 반복으로 인한 성능 문제(실측
