@@ -14,9 +14,17 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.6.2
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-20)
+ * - checkUnprotectedDateLikeRawColumns_() 추가, runOPSQA_()에 배선 —
+ *   docs/OpenItems.md #26(Sales Accepted Date 오염 사고) 재발 방지.
+ *   Leads_Raw/MTA_Raw 헤더 중 이름에 "date"가 들어가는데
+ *   CONFIG.RAW_DATE_COLUMNS 보호 목록에 없는 컬럼을 자동 감지해 QA
+ *   이슈로 기록 — 새 날짜 컬럼을 Transformer에 매핑하면서 보호 목록
+ *   갱신을 깜빡하는 실수(이번 사고의 근본 원인)를 다음 QA 실행 때
+ *   자동으로 잡아냄.
  * v1.6.2 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `24_OPSQA.js` → 신규 `OPS_006_QA.js`, 코드 내용 변경 없음.
  * v1.6.1 (2026-08-06)
@@ -114,6 +122,7 @@ function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
   checkLeadIdUniqueness_(issues);
   checkExactDuplicateLeadRows_(issues);
   checkExactDuplicateTouchRows_(issues);
+  checkUnprotectedDateLikeRawColumns_(issues);
 
   if (preMergeOpsSnapshot && newlyWrittenRows) {
     checkSyncColumnsPreserved_(preMergeOpsSnapshot, newlyWrittenRows, issues);
@@ -666,6 +675,63 @@ function checkExactDuplicateTouchRows_(issues) {
         " / Source=\"" + d.source + "\"" +
         " / Detail=\"" + d.detail + "\"" +
         " 조합이 " + d.count + "번 완전 동일하게 등장 (export 중복 의심)"
+    });
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Check — Unprotected Date-like Raw Column (docs/OpenItems.md #26 예방)
+ *
+ * WHY
+ * Sales Accepted Date 오염 사고(#26)의 진짜 원인은 "새 날짜 컬럼을
+ * Transformer에 매핑하면서 CONFIG.RAW_DATE_COLUMNS 보호 목록 갱신을
+ * 깜빡한 것"이었다(2026-07-25 매핑 vs 2026-08-18 보호 목록 반영, 3주
+ * 공백). docs/DateParsing.md에 "새 날짜 컬럼 추가 시 체크리스트"로
+ * 기록해뒀지만 사람이 기억해야 하는 수동 규칙이라 또 깜빡할 수 있음 —
+ * 이 체크는 Leads_Raw/MTA_Raw 헤더를 직접 스캔해서, 이름에 "date"가
+ * 들어가는데 CONFIG.RAW_DATE_COLUMNS에 없는 컬럼이 있으면 자동으로
+ * 이슈로 잡는다. Transformer 소스 코드를 읽을 수는 없어 정확히
+ * "parseDate()로 파싱되는 컬럼"만 잡아내진 못하지만, 실제 사고가 발생하는
+ * 지점(Raw 시트에 보호 없이 날짜 컬럼이 존재하는 상태)을 데이터 레벨에서
+ * 직접 감지하므로 같은 유형의 재발을 QA 실행마다(runOPSQA_() 배선) 자동
+ * 포착한다.
+ * ==========================================================
+ */
+function checkUnprotectedDateLikeRawColumns_(issues) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const targets = [
+    { sheetName: CONFIG.SHEETS.LEADS_RAW, protectedList: CONFIG.RAW_DATE_COLUMNS.LEADS },
+    { sheetName: CONFIG.SHEETS.MTA_RAW, protectedList: CONFIG.RAW_DATE_COLUMNS.MTA }
+  ];
+
+  targets.forEach(function (target) {
+
+    const sheet = ss.getSheetByName(target.sheetName);
+    if (!sheet) return;
+
+    const headerMap = getHeaderMap(sheet);
+
+    Object.keys(headerMap).forEach(function (header) {
+
+      if (!/date/i.test(header)) return;
+      if (target.protectedList.indexOf(header) !== -1) return;
+
+      issues.push({
+        check: "Unprotected Date-like Raw Column",
+        leadId: "",
+        email: "",
+        detail:
+          target.sheetName + "의 \"" + header + "\" 컬럼이 이름에 'date'를 포함하지만 " +
+          "CONFIG.RAW_DATE_COLUMNS에 없음 — Google Sheets 자동 Date 변환으로 원본 " +
+          "텍스트가 소실될 위험(docs/DateParsing.md 참고), 보호 목록에 추가 필요"
+      });
+
     });
 
   });

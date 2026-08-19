@@ -202,8 +202,10 @@
     Funnel Match 불일치(IC Booked Date 2904/IC Completed Date 2769/Opportunity Won Date 2696),
     Revenue Existence 746, Exact Duplicate Lead Row 650. 사용자 확인 — 오늘 세션 범위 밖이라
     **의도적으로 미해결 상태로 둠**, 원인 조사·처리는 다음 세션에서. 임의로 손대지 말 것.
-26. **`Sales Accepted Date` 과거 오염 데이터 — 코드 수정 + 대량 복구 완료(2026-08-18), 잔여 3건
-    원인 미확정(TODO, 2026-08-19 문서 정정)** — S&M_REP(신규 리포트) 개발 중 미래 날짜(9~12월)로
+26. ~~`Sales Accepted Date` 과거 오염 데이터~~ — **✅ 전부 해소 완료(2026-08-20)**. day/month
+    swap 3,193건(2026-08-18) + 타임존 오사용 94건(2026-08-20) 전부 복구, 예방용 자동 QA 체크
+    (`checkUnprotectedDateLikeRawColumns_()`)까지 추가 완료 — 아래는 진행 경과 기록(참고용).
+    S&M_REP(신규 리포트) 개발 중 미래 날짜(9~12월)로
     찍힌 SAL을 사용자가 발견, ACQ_REP에서도 동일 현상 확인 후 Salesforce Field History로 직접
     추적해 원인 확정: `CONFIG.RAW_DATE_COLUMNS.MTA`에 `"Lead: Sales Accepted Date"`가 누락돼
     있어(이 필드가 2026-07-25에 파이프라인에 추가됐는데 보호 목록 확정(2026-07-21)엔 그때 같이
@@ -235,3 +237,44 @@
     가설로 좁혀짐(미확정). 시트/코드만으로는 더 이상 원인 규명 불가 — 최초 이 버그를 찾았을
     때와 동일하게, 이 3개 Lead ID를 **Salesforce Field History에서 직접 확인** 필요. 임의로
     처리하지 말 것.
+    **2026-08-20 후속 — 전수 감사 결과 3건이 아니라 8건**: S&M_REP 사용 중 사용자가 하드코딩된
+    3건 리스트로는 설명 안 되는 추가 미래 주(Week Start 2026-08-31/2026-11-30)에도 SAL이
+    찍혀있음을 재차 발견 — `TEMPQA_018_SalesAcceptedDateFutureAudit.js`(`runAuditFutureSalesAcceptedDates()`,
+    하드코딩 리스트 없이 Leads_OPS 전체를 "오늘 이후 Sales Accepted Date" 조건으로 스캔) 신규
+    작성해 실행한 결과, 기존 3건 외에 **5건 추가**(`00QRC00000tsLnl`/`00QRC00000trIOy`/
+    `00QRC00000trFxL`/`00QRC00000tb8LW`/`00QRC00000bzYNf`) 확인 — 총 **8건**. 8건 전부
+    동일 패턴(day>=28 월말, IC Booked/Completed/Won Date 전부 공란)이라 위 "월말 기본값" 가설과
+    100% 부합. **S&M_REP 파생 문제**: 이 오염 데이터가 그대로 Leads_OPS에 남아있어 S&M_REP
+    SAL 블록에 미래 주(2026-08-31~09-06/09-28~10-04/10-26~11-01/11-30~12-06)에 실적 값이
+    표시되는 원인 — 조건부 서식(증감 하이라이트) 가드는 이미 추가했으나(`SMREP_002_Styles.js`
+    v1.2.0) 그건 색상만 숨길 뿐 값 자체는 그대로 남아있음.
+    **2026-08-20 판단 정정(사용자 지적)**: IC Booked/Completed/Won Date 공란을 "이상 신호"로
+    잘못 해석했었음 — SAL(상담 신청)만 되고 아직 IC를 안 잡은 것은 정상적인 퍼널 중간 상태이지
+    데이터 오염의 증거가 아님. 즉 **이 8건이 가짜 이벤트라는 근거는 없고**, 실제로 상담 신청
+    자체는 있었을 가능성이 높음 — 의심스러운 건 오직 "날짜 값이 8건 전부 정확히 월말"이라는
+    패턴뿐. **따라서 TEMPQA_010 방식의 stale value 클리어(레코드/날짜 삭제)는 부적절함** —
+    실제 있었던 상담 신청 기록의 타임스탬프를 근거 없이 지우는 셈이 됨. **처리 방침(확정)**:
+    데이터는 그대로 두고, **Salesforce Field History에서 이 8건의 진짜 Sales Accepted Date를
+    확인**해 필요 시 그 정확한 날짜로 교정하는 방향으로만 진행 — 임의 삭제/클리어 금지.
+    **2026-08-20 근본 원인 확정(사용자가 Salesforce Field History 2건 직접 대조)**: 8건은
+    day/month swap이 아니라 **타임존 오사용**이 원인 — TEMPQA_007/008이 day 판정에
+    `Date.getDate()`(스크립트 타임존 America/New_York 기준)를 썼는데, 실제 corruption은
+    스프레드시트 타임존(Asia/Seoul) 기준으로 발생해 자정 전후 KST 시각이 NY 기준으론
+    "전달 말일"로 보여 day≤12 스캔에서 누락된 것. `TEMPQA_020_SalesAcceptedDateTimezoneReaudit.js`로
+    MTA_Master 8,191건 전체를 Asia/Seoul 기준 재감사한 결과 **94건**(8건은 그 부분집합, 나머지
+    86건은 미래뿐 아니라 2024~2025년 과거 날짜도 포함)이 동일 패턴으로 확인됨 — 반대 방향(잘못
+    swap된 것)은 0건, 기존 3,193건 복구는 전부 안전 확인. 상세 원인/증거: `docs/DateParsing.md`
+    "2026-08-20 — 두 번째 근본 원인 발견" 섹션. **✅ 복구 완료(2026-08-20)**:
+    `TEMPQA_021_SalesAcceptedDateTimezoneRepair.js`(`runApplySalesAcceptedDateTimezoneRepair()`)
+    — TEMPQA_008과 동일한 Raw 직접 수정 방식(Seoul 기준 swap-back), 이미 복구된 값(자정 시각)은
+    건드리지 않는 안전장치 포함. 실행 결과 94개 리드의 터치 행 177건 복구(리드당 중복 터치 행
+    포함) — 전부 "원래 월=1월"로 복구됨(이 타임존 롤백 버그에 걸리는 조건 자체가 "Seoul 기준
+    그 달 1일"인 레코드만 해당하고, swap-back 공식상 그 조건이면 항상 1월이 나옴 —
+    yunjiseong955@gmail.com 실측 검증(12/1→1월 12일)과 정확히 같은 계산, 버그 아님).
+    **✅ 전부 완료·검증 완료(2026-08-20)**: `rebuildMTAMaster()` → `runSyncMTAFunnelToOPS()`
+    실행 완료(에러 없음, Leads_OPS 8,221건 갱신), 사용자가 S&M_REP 재Generate 후 미래 주 SAL
+    값이 전부 사라진 것 확인. 26번 항목 전체(day/month swap 3,193건 + 타임존 94건 + 예방
+    QA 체크) 완결.
+    **예방 조치 완료**: `OPS_006_QA.js` v1.7.0에 `checkUnprotectedDateLikeRawColumns_()` 추가 —
+    Leads_Raw/MTA_Raw 헤더 중 이름에 "date"가 들어가는데 `CONFIG.RAW_DATE_COLUMNS`에 없는 컬럼을
+    매 QA 실행마다 자동 감지(이번 사고의 근본 원인이었던 "보호 목록 갱신 누락"을 재발 방지).

@@ -60,3 +60,35 @@ SalesAcceptedDateAudit.js`(읽기 전용 감사, 8,191건 중 3,193건 오염 �
 SalesAcceptedDateResidualTrace.js` 실행 결과 셋 다 월말 날짜 + IC 진행 전무라는 공통 패턴 확인
 — Salesforce 쪽 워크플로우/롤업 기본값 가설이 유력하나 시트/코드로는 더 이상 확인 불가,
 Salesforce Field History 직접 확인 필요. 상세: `docs/OpenItems.md` #26(임의로 처리하지 말 것).
+
+## ⚠️ 2026-08-20 — 두 번째 근본 원인 발견: 타임존 오사용 (day>12 잔여건의 정체)
+
+위 "잔여 3개"는 실제로는 day/month swap과 무관한 별개 버그였다. `TEMPQA_018_
+SalesAcceptedDateFutureAudit.js`로 전수 재확인한 결과 실제로는 8건, `TEMPQA_020_
+SalesAcceptedDateTimezoneReaudit.js`로 MTA_Master 전체(8,191건)를 재감사한 결과 **94건**이었다.
+
+**원인**: TEMPQA_007/008이 day/month swap 여부를 판정할 때 `Date.getDate()`/`.getMonth()`를
+그대로 호출했는데, 이 JS Date getter는 **스크립트 실행 타임존**(`America/New_York`,
+`appsscript.json`) 기준으로 동작한다. 하지만 corruption 메커니즘(Google Sheets가 텍스트를
+Date로 자동 변환) 자체는 **스프레드시트 타임존**(`Asia/Seoul`, `CONFIG.DATE.DISPLAY_TIMEZONE`과
+동일) 기준으로 값을 구성한다. 두 타임존 사이 시차(최대 13~14시간)로 인해 자정 전후(대략
+00:00~13:xx KST) 시각을 가진 레코드는 NY 기준 day가 Seoul 기준 day와 달라진다 — 특히 원본이
+"그 달 1일"인 경우 NY 기준으로는 "전달 말일"(day 28~31)로 보여, day≤12만 스캔하던 원래 로직에서
+전부 누락됐다(사용자가 Salesforce Field History에서 두 건을 직접 대조해 발견 —
+ppm1xxx@gmail.com/yunjiseong955@gmail.com, "12/1/2026, 8:35 am"이 실제로는 day-first 원본
+"1월 12일"인데 Seoul 기준으로도 "12/1"(그 달 1일)로 보여 최초의 day-first→month-first
+오해석과는 별개 축의 문제임이 확인됨). 반대 방향(NY만 ambiguous, Seoul은 안전 — 잘못 swap된
+경우)이 있는지도 같이 재감사했으나 **0건**으로 확인, 기존 3,193건 복구는 전부 안전했음.
+
+**교훈**: 이 프로젝트의 실제 업무 타임존은 Asia/Seoul(스프레드시트 자체 타임존과 동일)이지만
+스크립트 실행 타임존은 America/New_York — **어떤 코드에서든 Date 객체의 날짜/월을 업무
+의미로 판단해야 한다면 `Date.getDate()`/`.getMonth()`를 직접 쓰지 말고 반드시
+`Utilities.formatDate(date, "Asia/Seoul", ...)`(또는 `CONFIG.DATE.DISPLAY_TIMEZONE`)로
+추출할 것** — 이번 버그와 동일 클래스의 문제가 다른 날짜 판정 로직에도 잠재해있을 수 있음.
+
+**복구**: `TEMPQA_021_SalesAcceptedDateTimezoneRepair.js`(Seoul 기준 swap-back, TEMPQA_008과
+동일한 "Raw 직접 수정" 예외 적용 — 이미 복구된 값(자정 시각)은 건드리지 않는 안전장치 포함).
+
+**예방(자동화)**: `OPS_006_QA.js` v1.7.0에 `checkUnprotectedDateLikeRawColumns_()` 추가 —
+Leads_Raw/MTA_Raw 헤더 중 이름에 "date"가 들어가는데 `CONFIG.RAW_DATE_COLUMNS`에 없는 컬럼을
+매 QA 실행마다 자동 감지(이번 사고의 근본 원인인 "보호 목록 갱신 누락"을 코드로 방지).

@@ -10,9 +10,20 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.3.1
+ * v4.4.0
  *
  * Change Log
+ * v4.4.0 (2026-08-20)
+ * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 완전 동일 중복 행
+ *   자동 삭제(runAutoDeleteExactDuplicateLeadRows()/
+ *   runAutoDeleteExactDuplicateTouchRows(), OPS_006_QA.js) 호출 추가.
+ *   두 함수 다 Raw→Master를 1:1로 그대로 옮길 뿐이라(중복 제거 없음),
+ *   증분 파이프라인(runLeadsPipelineTail()/runMTAPipelineTail())에만
+ *   배선돼 있던 이 정리 단계가 Full Rebuild에선 빠져있어 Raw에 쌓인
+ *   중복 행이 그대로 부활하는 문제 실측 발견(Sales Accepted Date 타임존
+ *   버그 복구 후 rebuildMTAMaster() 재실행 → S&M_REP All Leads 수치가
+ *   다시 부풀려짐, 사용자 발견) — 재발 방지로 Full Rebuild에도 동일하게
+ *   배선.
  * v4.3.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `10_MasterBuild.js` → 신규 `MASTER_004_MasterBuild.js`, 코드 내용 변경 없음.
  * v4.3.0 (2026-07-27)
@@ -69,6 +80,15 @@ function rebuildLeadsMaster(showAlert = true) {
     CONFIG.SHEETS.LEADS_MASTER,
     "Create Date"
   );
+
+  //----------------------------------------------------------
+  // Raw는 1:1로 그대로 옮기므로(중복 제거 없음), Raw에 쌓인 완전 동일
+  // 중복 Lead 행이 그대로 부활함 — runLeadsPipelineTail()(증분 파이프라인)
+  // 에만 배선돼 있던 정리 단계를 Full Rebuild에도 동일하게 적용
+  // (2026-08-20, S&M_REP All Leads 수치 오염 실측으로 발견).
+  //----------------------------------------------------------
+
+  runAutoDeleteExactDuplicateLeadRows();
 
   //----------------------------------------------------------
   // Rebuild 완료 후, Append가 중복 처리하지 않도록
@@ -161,6 +181,17 @@ function rebuildMTAMaster(showAlert = true) {
     CONFIG.SHEETS.MTA_MASTER,
     "MTA Created Date"
   );
+
+  //----------------------------------------------------------
+  // Raw는 1:1로 그대로 옮기므로(중복 제거 없음), Raw에 쌓인 완전 동일
+  // 중복 터치 행이 그대로 부활함 — runMTAPipelineTail()(증분 파이프라인)
+  // 에만 배선돼 있던 정리 단계를 Full Rebuild에도 동일하게 적용
+  // (2026-08-20, S&M_REP All Leads 수치 오염 실측으로 발견 — Sales
+  // Accepted Date 타임존 버그 복구 후 rebuildMTAMaster() 재실행 시
+  // 이전에 정리했던 중복 터치 294건이 부활한 것을 사용자가 발견).
+  //----------------------------------------------------------
+
+  runAutoDeleteExactDuplicateTouchRows();
 
   PropertiesService
     .getScriptProperties()

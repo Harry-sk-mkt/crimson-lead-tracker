@@ -1,4 +1,54 @@
-# Changelog — 2026-08-19
+# Changelog — 2026-08-20
+
+## S&M_REP 전주 대비 증감 하이라이트 추가
+
+사용자 요청으로 `SMREP_002_Styles.js`에 `applySMReportWeekOverWeekHighlights_()` 신규 —
+Leads/SAL 블록 숫자 컬럼을 바로 위 행(전주)과 비교하는 수식 기반 조건부 서식(초록
+`#01ef18`/빨강 `#ea4335`). 세 차례 조정: (1) 최초 구현 후 미래 주(아직 안 지난 주, 실적이
+전부 0)가 직전 실측 주 대비 "감소"로 잘못 칠해지는 문제 발견 — Week Start가 `TODAY()` 이후인
+행은 규칙 자체가 평가되지 않도록 가드 추가. (2) 사용자 요청으로 규칙 자체도 변경 — 전주와 값이
+동일해도 초록(증가) 처리, 현재 값이 0이면 증가/감소 어느 쪽이든 색칠 안 함.
+
+## Sales Accepted Date 오염(OpenItems #26) 최종 해소 — 타임존 버그가 진짜 원인이었음
+
+S&M_REP 하이라이트 작업 중 미래 주(2026-08-31 등)에 SAL 값 자체가 찍혀있는 걸 발견하며 시작.
+`TEMPQA_018_SalesAcceptedDateFutureAudit.js`로 Leads_OPS 전체를 하드코딩 없이 재스캔한 결과
+기존에 알려졌던 3건이 아니라 **8건**임을 확인. 사용자가 이 중 2건(ppm1xxx@gmail.com/
+yunjiseong955@gmail.com)을 Salesforce Field History에서 직접 대조해 "day>12라 day/month
+swap 가설로는 설명 안 됨"이라던 기존 판단이 틀렸음을 지적 — 실제로는 원본이 day-first인데
+Google Sheets가 month-first로 오해석한 것까진 기존과 같지만, **그 시각(한국 새벽~오전)이
+스크립트 실행 타임존(America/New_York)과 실제 업무 타임존(Asia/Seoul) 사이 시차(최대
+13~14시간) 때문에 하루 더 밀려 day가 12를 넘어가 버려** 기존 day≤12 스캔에서 통째로 빠졌던
+것으로 근본 원인 확정(`TEMPQA_019_SalesAcceptedDateTimezoneTrace.js`로 검증). 이 발견은
+지난 세션(2026-08-19) 기록이 "day/month swap 가설로는 설명 안 되는 잔여 3건, Salesforce
+워크플로우 월말 기본값 가설" 이라고 적어둔 것 자체를 정정하는 결과.
+
+`TEMPQA_020_SalesAcceptedDateTimezoneReaudit.js`로 MTA_Master 8,191건 전체를 Asia/Seoul
+기준으로 재감사한 결과 **94건**(8건은 그 부분집합)이 동일 패턴, 반대 방향(잘못 swap된 것)은
+0건으로 기존 3,193건 복구가 전부 안전했음도 함께 확인. `TEMPQA_021_
+SalesAcceptedDateTimezoneRepair.js`(TEMPQA_008과 동일한 Raw 직접 수정 방식, 단 Seoul 기준
+day/month + 이미 복구된 값(자정 시각)은 건드리지 않는 안전장치)로 94개 리드 177개 터치 행
+복구 완료(전부 "원래 월=1월"로 나왔는데, 이 버그에 걸리는 조건 자체가 "Seoul 기준 그 달 1일"인
+레코드만 해당해 수학적으로 당연한 결과 — 유학 상담 특성상 1월 쏠림도 현실적으로 타당).
+`rebuildMTAMaster()` → `runSyncMTAFunnelToOPS()` 반영 후 S&M_REP 재확인으로 미래 주 SAL
+소거 확인 완료.
+
+**예방**: `OPS_006_QA.js` v1.7.0에 `checkUnprotectedDateLikeRawColumns_()` 신규 — Leads_Raw/
+MTA_Raw 헤더 중 이름에 "date"가 들어가는데 `CONFIG.RAW_DATE_COLUMNS`에 없는 컬럼을 매 QA
+실행마다 자동 감지. 이번 사고의 진짜 근본 원인("새 날짜 컬럼 매핑 시 보호 목록 갱신 누락",
+2026-07-25~08-18 3주 공백)을 사람이 기억할 필요 없이 코드로 재발 방지.
+
+## Full Rebuild가 완전 동일 중복 행 정리를 건너뛰는 구조적 갭 발견·수정
+
+위 복구 후 사용자가 `rebuildMTAMaster()`를 재실행하자 S&M_REP All Leads 수치가 다시 부풀려짐
+— 조사 결과 `rebuildMTAMaster()`/`rebuildLeadsMaster()`(`MASTER_004_MasterBuild.js`)가
+Raw→Master를 1:1로 그대로 옮길 뿐, 완전 동일 중복 행 자동 삭제
+(`runAutoDeleteExactDuplicateTouchRows()`/`runAutoDeleteExactDuplicateLeadRows()`,
+OPS_006_QA.js)는 증분 파이프라인(`runLeadsPipelineTail()`/`runMTAPipelineTail()`)에만
+배선돼 있어 Full Rebuild 때마다 Raw에 누적된 중복이 그대로 부활하는 구조적 갭이었음(실측:
+1,625건 부활, 삭제 후 85,643 → 84,018). 재발 방지로 두 Rebuild 함수 모두에 해당 삭제 호출을
+추가(v4.4.0) — 이제 Full Rebuild 후에도 자동으로 정리됨.
+
 
 ## Events_OPS EXPO 통합 + Meta 지출 자동화 + BOFU_OPS Business Segment 누수 버그 수정
 
