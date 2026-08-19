@@ -8,9 +8,13 @@
  * SUBTOTAL 행(1행) 서식이 추가됨.
  *
  * Version
- * v1.6.1
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-19)
+ * - Spent(AE)/CPNP1(AH) 통화 서식을 "#,##0.00" → "$#,##0.00"로 변경(사용자
+ *   요청, $ 기호 표시) — Revenue와 동일 그룹으로 이동. ROAS는 비율성 지표라
+ *   기존 "#,##0.00" 그대로 유지(별도 그룹으로 분리).
  * v1.6.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `55_Events_Styles.js` → 신규 `EVENTS_006_Styles.js`, 코드 내용 변경 없음.
  * v1.6.0 (2026-08-06)
@@ -144,7 +148,7 @@ function applyEventsOPSStyle(sheet) {
   ==========================================================
   */
 
-  ["Spent", "CPNP1", "ROAS"].forEach(function (name) {
+  ["ROAS"].forEach(function (name) {
 
     if (map[name]) {
 
@@ -156,7 +160,7 @@ function applyEventsOPSStyle(sheet) {
 
   });
 
-  ["Revenue"].forEach(function (name) {
+  ["Spent", "CPNP1", "Revenue"].forEach(function (name) {
 
     if (map[name]) {
 

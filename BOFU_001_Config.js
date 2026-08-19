@@ -22,9 +22,17 @@
  * 해석 — 함수명까지 그대로 복제하면 전역 중복 선언 에러가 남.
  *
  * Version
- * v1.2.1
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-19)
+ * - `BOFU_ENGINE_HEADERS`에 "Earliest Lead Date" 보조 컬럼 추가(사용자
+ *   요청) — Start Date가 비어있는 신규 런칭 프로그램이
+ *   compareByStartDateBlankLast_()로 인해 시트 최하단에 묻혀 안 보이던
+ *   문제 해결용. `BOFU.GROUP_4_COMPUTED`에는 넣지 않음(그건 매번 무조건
+ *   덮어쓰는 값들이라 Manual Start Date와는 다른 취급이 필요) — Events의
+ *   "Event Date" 보조 컬럼과 동일 패턴. 상세: `BOFU_002_Engine.js`/
+ *   `BOFU_004_Merge.js` 참고.
  * v1.2.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `60_BOFU_Config.js` → 신규 `BOFU_001_Config.js`, 코드 내용 변경 없음.
  * v1.2.0 (2026-08-09)
@@ -325,11 +333,19 @@ const BOFU = {
 
 /**
  * ==========================================================
- * BOFU_Engine Sheet Header (Lead Source Detail + GROUP_4_COMPUTED)
+ * BOFU_Engine Sheet Header (Lead Source Detail + Earliest Lead Date +
+ * GROUP_4_COMPUTED)
  *
- * Events와 달리 "UTM"/"Event Date" 컬럼 없음 — BOFU의 Start Date는
- * Meta Ads 원본을 그대로 수동 입력하는 Manual 필드라(Group3), SF
- * 터치 데이터에서 날짜를 추정할 필요 자체가 없음.
+ * "Earliest Lead Date"(2026-08-19 신규) — BOFU의 Start Date는 원래
+ * Meta Ads 원본을 그대로 수동 입력하는 Manual 필드라 SF 터치 데이터에서
+ * 날짜를 추정할 필요가 없다는 설계였으나, 신규 런칭 프로그램은 Ops가
+ * Start Date를 아직 안 채운 동안 정렬(compareByStartDateBlankLast_)상
+ * 최하단으로 밀려 눈에 안 띄는 문제가 발견됨(사용자 요청) — Events의
+ * "Event Date" 보조 컬럼과 동일한 패턴으로, Start Date가 비어있을 때만
+ * 채우는 fallback 값을 Engine에 같이 실어 보낸다(BOFU.GROUP_4_COMPUTED에는
+ * 넣지 않음 — 그건 매번 무조건 덮어쓰는 값들이라 Manual 필드인 Start
+ * Date에는 안 맞음). 소비처: BOFU_004_Merge.js
+ * applyBOFUAutoDerivedFieldsIfBlank_().
  * ==========================================================
  */
-const BOFU_ENGINE_HEADERS = ["Lead Source Detail"].concat(BOFU.GROUP_4_COMPUTED);
+const BOFU_ENGINE_HEADERS = ["Lead Source Detail", "Earliest Lead Date"].concat(BOFU.GROUP_4_COMPUTED);

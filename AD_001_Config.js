@@ -21,9 +21,17 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.20.0
+ * v1.21.0
  *
  * Change Log
+ * v1.21.0 (2026-08-19)
+ * - `META.COLUMNS`에 `CLICKS`("Link clicks")/`RESULTS`("Results") 추가 —
+ *   Events_OPS의 Clicks/Results 자동 집계용(`EVENTS_002_Engine.js` 참고).
+ *   실제 Meta_Raw 헤더는 `runDebugMetaRawFirstRow()`로 확인(사용자 실행,
+ *   2026-08-19). CVR은 Meta 자체 "Click to Lead CvR" 필드 대신
+ *   Events_OPS 쪽에서 우리가 합산한 Results÷Clicks로 재계산하기로 해
+ *   (여러 캠페인이 한 프로그램으로 뭉칠 때 단순 평균/합산이 아니라
+ *   가중 재계산이 정확하므로) 별도 매핑 안 함.
  * v1.20.0 (2026-08-19)
  * - `SPEND_CACHE.WEEKLY_CACHE_SHEET`("Ad_Spend_Cache_Weekly") 신규 — Target_REP
  *   주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되던 문제 해소용 신규 주(월~일)
@@ -248,7 +256,9 @@ const AD = {
       CAMPAIGN_START: "Date created",
       CAMPAIGN_END: "Ends",
       SPENT: "Amount spent (NZD)",
-      ACCOUNT_ID: "Account ID"
+      ACCOUNT_ID: "Account ID",
+      CLICKS: "Link clicks",
+      RESULTS: "Results"
     },
 
     /*

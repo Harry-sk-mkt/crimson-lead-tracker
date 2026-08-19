@@ -15,9 +15,17 @@
  * "Start Date" 기준이라 이름이 달라 새로 작성).
  *
  * Version
- * v1.3.1
+ * v1.3.2
  *
  * Change Log
+ * v1.3.2 (2026-08-19)
+ * - `applyBOFUAutoDerivedFieldsIfBlank_()` 신규(사용자 요청) — Start Date가
+ *   비어있으면 engineRow["Earliest Lead Date"](BOFU_002_Engine.js
+ *   earliestCreateDate)로 채움, 값이 있으면 그대로 유지(Events의
+ *   applyAutoDerivedFieldsIfBlank_()와 동일 원칙). `mergeBOFUOPS_()`에서
+ *   `applyBOFUGroup4Computed_()` 직후, `applyBOFUDerivedDateColumns_()`
+ *   직전에 호출(FY/Month가 Start Date에서 파생되므로 순서 중요). 신규
+ *   테스트 `testApplyBOFUAutoDerivedFieldsIfBlank` 추가.
  * v1.3.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `63_BOFU_Merge.js` → 신규 `BOFU_004_Merge.js`, 코드 내용 변경 없음.
  * v1.3.0 (2026-08-09)
@@ -87,6 +95,7 @@ function mergeBOFUOPS_(existingOps, engineMap) {
     }
 
     applyBOFUGroup4Computed_(row, engineRow);
+    applyBOFUAutoDerivedFieldsIfBlank_(row, engineRow);
     applyBOFUDerivedDateColumns_(row);
 
     summary.merged++;
@@ -142,6 +151,75 @@ function applyBOFUGroup4Computed_(row, engineRow) {
   BOFU.GROUP_4_COMPUTED.forEach(function (col) {
     row[col] = (engineRow && Number(engineRow[col])) || 0;
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply BOFU Auto-Derived Fields If Blank (Start Date fallback)
+ *
+ * WHY (2026-08-19, 사용자 요청)
+ * Start Date는 원래 Meta Ads 원본을 사람이 그대로 옮겨 적는 Manual
+ * 필드지만, 신규 런칭 프로그램은 Ops가 아직 안 채운 동안
+ * compareByStartDateBlankLast_() 때문에 시트 맨 아래로 밀려 눈에 잘
+ * 안 띈다는 문제가 실제로 발생함("WF-2026-08-KOR-BOFU-Core Duke CAO
+ * advise" 사례, 리드는 이미 있는데 Start Date가 비어있어 못 찾음).
+ * Events의 applyAutoDerivedFieldsIfBlank_()와 동일 원칙 — **값이 있으면
+ * 절대 덮어쓰지 않고, 비어있을 때만** Engine이 계산해 보낸
+ * "Earliest Lead Date"(이 프로그램으로 들어온 가장 이른 New Registered
+ * 리드의 Create Date, BOFU_002_Engine.js aggregateBOFULeadsRecords_
+ * earliestCreateDate 참고)로 채운다. 한 번 사람이 실제 Meta 캠페인
+ * 시작일로 값을 채우면 그 다음부턴 그 값이 우선(정확도가 더 높음).
+ *
+ * INPUT
+ * row       : Object  (in-place 수정)
+ * engineRow : Object|undefined  (readBOFUEngineMap_() 결과의 해당 key 행)
+ *
+ * TEST
+ * testApplyBOFUAutoDerivedFieldsIfBlank 참고
+ * ==========================================================
+ */
+function applyBOFUAutoDerivedFieldsIfBlank_(row, engineRow) {
+
+  const hasStartDate = row["Start Date"] instanceof Date && !isNaN(row["Start Date"].getTime());
+
+  if (hasStartDate) return;
+
+  const earliestDate = engineRow && engineRow["Earliest Lead Date"];
+  const hasEarliestDate = earliestDate instanceof Date && !isNaN(earliestDate.getTime());
+
+  if (hasEarliestDate) {
+    row["Start Date"] = earliestDate;
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyBOFUAutoDerivedFieldsIfBlank_()
+ * ==========================================================
+ */
+function testApplyBOFUAutoDerivedFieldsIfBlank() {
+
+  const earliestDate = new Date(2026, 7, 15);
+
+  const rowBlank = { "Start Date": "" };
+  applyBOFUAutoDerivedFieldsIfBlank_(rowBlank, { "Earliest Lead Date": earliestDate });
+
+  const rowFilled = { "Start Date": new Date(2026, 0, 1) };
+  applyBOFUAutoDerivedFieldsIfBlank_(rowFilled, { "Earliest Lead Date": earliestDate });
+
+  const rowNoEngine = { "Start Date": "" };
+  applyBOFUAutoDerivedFieldsIfBlank_(rowNoEngine, undefined);
+
+  const pass =
+    rowBlank["Start Date"].getTime() === earliestDate.getTime() &&    // 공란 → 채움
+    rowFilled["Start Date"].getTime() === new Date(2026, 0, 1).getTime() && // 값 있음 → 유지
+    rowNoEngine["Start Date"] === "";                                  // engineRow 없음 → 그대로 공란
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

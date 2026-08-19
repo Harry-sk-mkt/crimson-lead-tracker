@@ -37,9 +37,18 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.3.1
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-19)
+ * - `readLeadsMasterUtmProgramPairs_()` 신규(Leads_Master `First MKT UTM
+ *   Campaign`↔`First Touch Detail`, 리드 단위) — 사용자 요청으로 v1.0.0에서
+ *   "정보량이 적어 1차 소스에서 제외"했던 Leads_Master를 2차 소스로 추가.
+ *   `refreshUtmProgramDictionary_()`가 이제 MTA_Master + Leads_Master 두
+ *   소스의 pair를 합쳐서 채굴(additive, 기존 소스 대체 아님) — Meta 광고
+ *   캠페인명처럼 MTA_Master 터치 매칭만으로는 커버가 안 되던 경우까지
+ *   딕셔너리 범위를 넓히기 위함(EVENTS_002_Engine.js의 Meta 지출 자동
+ *   매칭 확장 작업 중 발견).
  * v1.3.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `17_UtmProgramDictionary.js` → 신규 `UTIL_002_UtmProgramDictionary.js`, 코드 내용 변경 없음.
  * v1.3.0 (2026-08-08)
@@ -96,9 +105,12 @@ const UTM_PROGRAM_DICT_HEADERS = [
  * WHY
  * MTA_Master는 터치 단위라 한 행에 `MKT UTM Campaign`(그 터치의 실제
  * 캠페인)과 `Lead Source Detail`(실제 Marketo Program명)이 항상 같이
- * 있다 — 딕셔너리 채굴 소스로 적합(Leads_Master는 리드 단위 첫 터치
- * 스냅샷이라 정보량이 더 적어 이번 1차 소스에서 제외). 헤더 이름 기준으로
- * 읽어(readKakaoSMSRawRows_() 스타일) 컬럼 순서 변경에 안전하게 대응.
+ * 있다 — 딕셔너리 채굴 소스로 적합(1차 소스, 2026-08-08). 헤더 이름
+ * 기준으로 읽어(readKakaoSMSRawRows_() 스타일) 컬럼 순서 변경에 안전하게
+ * 대응. **2026-08-19부터 `readLeadsMasterUtmProgramPairs_()`(리드 단위
+ * 첫 터치 스냅샷)를 2차 소스로 함께 사용** — Meta 캠페인명처럼 MTA_Master
+ * 터치로 안 잡히는 경우도 커버 범위를 넓히기 위함(사용자 요청,
+ * `refreshUtmProgramDictionary_()` 참고).
  *
  * OUTPUT
  * Array<{utm:string, program:string}>  둘 다 비어있지 않은 행만
@@ -125,6 +137,62 @@ function readMtaMasterUtmProgramPairs_(){
   if(utmCol === -1 || programCol === -1){
     throw new Error(
       "MTA_Master에서 'MKT UTM Campaign'/'Lead Source Detail' 컬럼을 못 찾음 — " +
+      "실제 헤더: " + JSON.stringify(headers)
+    );
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  return values
+    .map(function(row){
+      return {
+        utm: String(row[utmCol] || "").trim(),
+        program: String(row[programCol] || "").trim()
+      };
+    })
+    .filter(function(pair){ return !!pair.utm && !!pair.program; });
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Leads Master UTM/Program Pairs (IO 래퍼, 2026-08-19 신규)
+ *
+ * WHY
+ * Leads_Master는 리드 단위 첫 터치 스냅샷이라 `First MKT UTM Campaign`
+ * (그 리드의 최초 터치 캠페인)과 `First Touch Detail`(실제 Marketo
+ * Program명)이 한 행에 같이 있다 — readMtaMasterUtmProgramPairs_()와
+ * 동일한 원리의 2차 소스(사용자 요청, Meta 지출 캠페인명처럼 MTA_Master
+ * 터치로는 안 잡히는 경우까지 커버하기 위함). MTA_Master보다 정보량이
+ * 적지만(리드당 1개 스냅샷 vs 터치마다 N개) 완전히 다른 리드 표본은
+ * 아니라서 순수 추가(additive) — 기존 MTA_Master 소스를 대체하지 않음.
+ *
+ * OUTPUT
+ * Array<{utm:string, program:string}>  둘 다 비어있지 않은 행만
+ * ==========================================================
+ */
+function readLeadsMasterUtmProgramPairs_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < 2 || lastCol === 0) return [];
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function(h){ return String(h).trim(); });
+
+  const utmCol = headers.indexOf("First MKT UTM Campaign");
+  const programCol = headers.indexOf("First Touch Detail");
+
+  if(utmCol === -1 || programCol === -1){
+    throw new Error(
+      "Leads_Master에서 'First MKT UTM Campaign'/'First Touch Detail' 컬럼을 못 찾음 — " +
       "실제 헤더: " + JSON.stringify(headers)
     );
   }
@@ -312,7 +380,7 @@ function testResolveUtmProgramDictionaryEntries(){
  */
 function refreshUtmProgramDictionary_(){
 
-  const pairs = readMtaMasterUtmProgramPairs_();
+  const pairs = readMtaMasterUtmProgramPairs_().concat(readLeadsMasterUtmProgramPairs_());
   const counts = aggregateUtmProgramCounts_(pairs);
   const entries = resolveUtmProgramDictionaryEntries_(counts);
 

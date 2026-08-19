@@ -34,9 +34,14 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-19)
+ * - `readMetaRawRows_()`가 `clicks`("Link clicks")/`results`("Results")도
+ *   반환하도록 확장(additive, 기존 필드 변경 없음) — Events_OPS Clicks/
+ *   Results 자동 집계용(`AD_001_Config.js` v1.21.0/`EVENTS_002_Engine.js`
+ *   참고).
  * v1.7.0 (2026-08-19)
  * - Target_REP 주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되는 문제(사용자
  *   리포트) 해소용 — 월 대신 주(월~일) 단위 지출 분배 신규: `generateAdSpendWeekRange_()`
@@ -584,6 +589,8 @@ function readMetaRawRows_(){
       campaignName: raw[cols.CAMPAIGN_NAME],
       accountId: String(raw[cols.ACCOUNT_ID] || ""),
       spent: raw[cols.SPENT],
+      clicks: raw[cols.CLICKS],
+      results: raw[cols.RESULTS],
       reportStart: normalizeDate(raw[cols.REPORT_START]),
       reportEnd: normalizeDate(raw[cols.REPORT_END]),
       campaignStart: normalizeDate(raw[cols.CAMPAIGN_START]),

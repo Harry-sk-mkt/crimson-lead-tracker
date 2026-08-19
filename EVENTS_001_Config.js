@@ -12,9 +12,18 @@
  * OPS.SHEET.OPS(Leads_OPS)를 그대로 참조 — 여기서 재정의하지 않는다.
  *
  * Version
- * v1.10.1
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-08-19)
+ * - **CVR/Clicks/Results를 Manual → Meta 자동 집계로 전환(사용자 요청)**.
+ *   `GROUP_3_MANUAL`이 이제 빈 배열(기존 3개 컬럼이 전부 이동) —
+ *   Clicks/Results는 `GROUP_4_COMPUTED`로 이동(Meta_Raw "Link clicks"/
+ *   "Results" 자동 합산, `EVENTS_002_Engine.js` 참고), CVR은 저장값
+ *   대신 `GROUP_5_DERIVED`로 이동해 Match Rate/Success % 등과 동일하게
+ *   `RATIO_FORMULAS`(Results÷Clicks) 실제 시트 수식으로 전환(Spent/
+ *   CPNP1/ROAS와 동일 패턴 — 수동 수정 시 자동 재계산). HEADER_COLOR_GROUPS.META
+ *   는 이미 이 세 컬럼을 포함하고 있어 변경 불필요.
  * v1.10.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `50_Events_Config.js` → 신규 `EVENTS_001_Config.js`, 코드 내용 변경 없음.
  * v1.10.0 (2026-08-09)
@@ -256,10 +265,6 @@ const EVENTS = {
 
   GROUP_3_MANUAL: [
 
-    "CVR",
-    "Clicks",
-    "Results"
-
   ],
 
   GROUP_4_COMPUTED: [
@@ -273,7 +278,9 @@ const EVENTS = {
     "IC Complete",
     "#Deals",
     "Revenue",
-    "Spent"
+    "Spent",
+    "Clicks",
+    "Results"
 
   ],
 
@@ -284,7 +291,8 @@ const EVENTS = {
     "SP1%",
     "SNP1%",
     "CPNP1",
-    "ROAS"
+    "ROAS",
+    "CVR"
 
   ],
 
@@ -305,7 +313,8 @@ const EVENTS = {
     { column: "SP1%", numerator: "SP1", denominator: "SF P1s" },
     { column: "SNP1%", numerator: "SNPL1", denominator: "SF NLP1s" },
     { column: "CPNP1", numerator: "Spent", denominator: "SF NLP1s" },
-    { column: "ROAS", numerator: "Revenue", denominator: "Spent" }
+    { column: "ROAS", numerator: "Revenue", denominator: "Spent" },
+    { column: "CVR", numerator: "Results", denominator: "Clicks" }
 
   ],
 

@@ -1,5 +1,48 @@
 # Changelog — 2026-08-19
 
+## Events_OPS EXPO 통합 + Meta 지출 자동화 + BOFU_OPS Business Segment 누수 버그 수정
+
+**Events_OPS "Kor-EXPO-Master" 통합**: 사용자 요청으로 같은 행사가 채널/타겟팅별
+38개 Marketo Program으로 쪼개져 있던 걸 하나로 통합. `EVENTS_PROGRAM_KEY_OVERRIDE`
+(`EVENTS_002_Engine.js`) 신규 — 38개 프로그램명을 "Kor-EXPO-Master"로 매핑, MTA/
+Leads/Deal Tracker/Kakao Spend 4개 집계 지점 전부 적용. `EVENTS_004_Merge.js`의
+`createEventsKeyMap_()`도 같은 override로 기존 OPS 행 병합 — 충돌 시 숫자 컬럼
+합산, Notes " / " 연결, 나머지는 첫 발견 값 유지(`mergeExistingEventsRows_()` 신규,
+Search_OPS의 Naver 캠페인 키 충돌 합산 패턴 재사용).
+
+**Meta 광고비 자동 집계 확장**: EXPO Meta 지출이 너무 낮다는 사용자 지적으로 조사한
+결과, `Spent`가 그동안 Kakao Moments 비용만 집계하고 Meta는 전혀 연결이 안 돼있던
+구조적 갭 발견(2026-08-06부터). 처음엔 EXPO 3개 캠페인만 수동 매핑
+(`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`)했으나, 전체 Meta_Raw 실측 결과
+752개 캠페인·$1,828,805.85 중 2%뿐이라 전체 캠페인 육안 대조가 비현실적임을
+확인 — 사용자 요청으로 기존 `UTIL_002_UtmProgramDictionary.js`(Kakao Moments용
+UTM↔Marketo Program 자동 채굴 딕셔너리)를 재사용하는 방향으로 전환.
+`readLeadsMasterUtmProgramPairs_()` 신규(Leads_Master `First MKT UTM Campaign`↔
+`First Touch Detail`, 2차 소스 추가) + `resolveMetaCampaignEventsKey_()`(수동
+override 최우선, 없으면 딕셔너리+eligibility 체크). 이어서 Clicks/Results도 자동화
+(Meta_Raw "Link clicks"/"Results" 실제 헤더 확인 후 매핑) — `EVENTS_001_Config.js`에서
+Clicks/Results는 GROUP_4_COMPUTED로, CVR은 저장값 대신 GROUP_5_DERIVED(Results÷
+Clicks 시트 수식, 여러 캠페인 합산 시 CVR 자체를 합/평균 내면 틀리므로)로 이동.
+AE(Spent)/AH(CPNP1) 컬럼 $ 표시 서식 추가.
+
+**BOFU_OPS 버그 발견·수정 3건(사용자 발견)**: (1) 신규 런칭 프로그램("Duke CAO
+advise")에 리드가 있는데도 행이 안 보임 조사 중, `computeBOFUDealAggregates_()`
+(Deal Tracker 집계 경로)에 Business Segment 게이트가 아예 빠져있던 버그 발견 —
+MTA/Leads 경로는 BOFU만 통과시키는데 이 경로만 KOR 프로그램이면 다 통과시켜서
+Webinar/Seminar(WB-/EV-) 프로그램의 딜이 BOFU_OPS에 새어 들어오고 있었음(실측
+169개 죽은 행). Deal Tracker `businessSegment`로 동일 게이트 추가 후,
+`runDeleteDeadBOFUOPSRows()`(Search_OPS의 `runDeleteDeadSearchOPSRows()` 전례와
+동일 패턴, `mergeBOFUOPS_()`가 기존 키를 합집합 보존하는 구조라 코드만 고쳐선
+기존 행이 안 지워짐) 신규로 169건 정리. 잔여 소수(WB 2건/WF 1건)는 진단 결과
+전부 Deal Tracker 수동 오분류(사용자가 직접 Segment 열 수정 완료) 또는 프로그램명
+자체에 "-BOFU-Core-"가 포함된 정당한 분류로 확인 — 코드 버그 아님. (2) Start
+Date가 비어있는 신규 행이 정렬(빈 날짜 최하단)로 안 보이는 문제 — "Earliest Lead
+Date" 자동 채움 추가했으나 Leads_Master(New Registered, 첫 터치만) 단일 소스로는
+부족함을 재발견(BOFU 프로그램은 리드의 첫 터치가 아닌 경우가 흔함) — MTA_Master
+전체 터치도 2차 소스로 추가(`pickEarliestDate_()`). (3) 진단 과정에서 남은 스냅샷
+데이터 문제(MTA_Master 오래된 Business Segment 스냅샷 1건) 발견, Full Rebuild
+필요 여부는 보류.
+
 ## Sales Accepted Date 오염 — docs drift 정정 + 잔여 3건 원인 조사
 
 `docs/OpenItems.md` #26 점검 요청으로 시작. `docs/OpenItems.md` #26/`docs/DateParsing.md`가

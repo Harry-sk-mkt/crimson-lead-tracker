@@ -15,9 +15,67 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.11.1
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-08-19)
+ * - **Clicks/Results도 Meta에서 자동 집계(사용자 요청)**. `aggregateMetaSpendByEventsProgram_()`/
+ *   `computeEventsMetaSpendAggregates_()`를 `aggregateMetaMetricsByEventsProgram_()`/
+ *   `computeEventsMetaMetricsAggregates_()`로 교체(spend/clicks/results
+ *   한 번의 순회로 같이 집계 — 셋 다 같은 키 해석 로직을 타므로 중복 순회
+ *   방지) — `readMetaRawRows_()`가 이제 clicks/results도 반환
+ *   (`AD_002_Meta.js` v1.8.0). CVR은 여기서 안 만듦 — GROUP_5_DERIVED로
+ *   이동해 Results÷Clicks 시트 수식으로 계산(`EVENTS_001_Config.js`
+ *   v1.11.0, 여러 캠페인이 한 프로그램으로 뭉칠 때 CVR 자체를 합산/평균
+ *   내면 틀리기 때문). `refreshEventsEngine_()`의 rows 배열에 Clicks/
+ *   Results 추가(GROUP_4_COMPUTED 순서와 일치하도록 Spent 바로 뒤에 배치).
+ *   신규 테스트 `testAggregateMetaMetricsByEventsProgram`(기존
+ *   `testAggregateMetaSpendByEventsProgram_` 대체).
+ * v1.14.0 (2026-08-19)
+ * - **Meta 지출 매칭을 UTM_Program_Dictionary 기반으로 확장(사용자 결정)**.
+ *   전체 Meta_Raw 실측 결과 752개 캠페인·$1,828,805.85 중 수동 override
+ *   3건(EXPO, $39,374.62)은 2%뿐이라 캠페인별 육안 대조가 비현실적임을
+ *   확인 — `UTIL_002_UtmProgramDictionary.js`(Kakao Moments용으로 이미
+ *   있던 UTM↔Marketo Program 자동 채굴 딕셔너리, MTA_Master + 신규
+ *   Leads_Master 2개 소스, v1.4.0)를 재사용하기로 사용자 확정. 신규
+ *   `resolveMetaCampaignEventsKey_()`(순수 함수) — 수동 override 최우선,
+ *   없으면 딕셔너리(`readUtmProgramDictionaryMap_()`, 이미 모호한 UTM은
+ *   제외돼 있음) + `isEligibleEventProgram_()`(비-이벤트 프로그램 오귀속
+ *   방지) + `applyEventsProgramKeyOverride_()`(EXPO류 재정규화) 순으로
+ *   해석. `aggregateMetaSpendByEventsProgram_()`가 `utmProgramDictionaryMap`
+ *   파라미터를 받도록 확장(생략 시 override만, 기존 호출 하위 호환),
+ *   `computeEventsMetaSpendAggregates_()`가 `readUtmProgramDictionaryMap_()`
+ *   전달하도록 배선. 신규 테스트 `testResolveMetaCampaignEventsKey` 추가,
+ *   기존 `testAggregateMetaSpendByEventsProgram_`도 딕셔너리 경유 케이스
+ *   포함하도록 갱신.
+ * v1.13.0 (2026-08-19)
+ * - **Meta 광고비 자동 집계 신규(사용자 발견 — "Kor-EXPO-Master" Spent가
+ *   너무 낮음)**. Spent(GROUP_4_COMPUTED)가 지금까지 Kakao Moments 비용만
+ *   집계하고 있었음(v1.10.0부터, Meta는 "향후 예정"으로 미착수 상태였음).
+ *   `TEMPQA_014_MetaExpoSpendAudit.js`로 Meta_Raw를 캠페인명 "expo"
+ *   키워드로 실측한 결과 3개 캠페인·합계 $39,374.62(NZD) 확인(사용자
+ *   확인). 신규 `META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`(이 3개만
+ *   매핑, Kakao처럼 프로그램 단위 매핑 컬럼이 없어 Naver 캠페인명 override와
+ *   동일 관행 — 다른 프로그램 Meta 지출을 반영하려면 육안 대조 후 추가
+ *   필요)/`aggregateMetaSpendByEventsProgram_()`(순수 함수)/
+ *   `computeEventsMetaSpendAggregates_()`(IO 래퍼, `readMetaRawRows_()`
+ *   재사용, "Amount spent (NZD)"가 이미 NZD라 환율 변환 불필요). `refreshEventsEngine_()`가
+ *   이제 `kakaoSpendAgg[key] + metaSpendAgg[key]`를 Spent로 기록. 신규
+ *   테스트 `testAggregateMetaSpendByEventsProgram_` 추가.
+ * v1.12.0 (2026-08-19)
+ * - `EVENTS_PROGRAM_KEY_OVERRIDE`/`applyEventsProgramKeyOverride_()` 신규
+ *   (사용자 요청) — "Kor-EXPO-Master" 행사 하나가 채널/타겟팅별로 38개
+ *   별도 Marketo Program으로 쪼개져 Events_OPS에 38개 행으로 나타나던
+ *   문제. `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(SEARCH_002_Engine.js)와 동일
+ *   관행 — 사용자가 육안 대조해준 38개 프로그램명을 "Kor-EXPO-Master"로
+ *   통합. `aggregateMTATouchRecords_()`/`aggregateLeadsRecords_()`/
+ *   `computeEventsDealAggregates_()`/`aggregateKakaoSpendByProgram_()`
+ *   4곳의 키 추출 단계(eligibility 체크 통과 직후)에 적용 — override
+ *   대상은 원래도 전부 "EV-...-KOR-..." 패턴이라 eligibility 체크는
+ *   override 이전 원본 키로 수행(override 결과인 "Kor-EXPO-Master" 자체는
+ *   이 패턴이 아니라 eligibility를 통과 못 하므로 순서가 중요함). 기존
+ *   Events_OPS에 이미 있는 38개 행의 Manual 컬럼 병합은 EVENTS_004_Merge.js
+ *   쪽에서 처리(사용자 확정 — 숫자 컬럼은 합산, Notes는 연결).
  * v1.11.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `51_Events_Engine.js` → 신규 `EVENTS_002_Engine.js`, 코드 내용 변경 없음.
  * v1.11.0 (2026-08-06)
@@ -122,6 +180,7 @@ function refreshEventsEngine_() {
   const funnelAgg = computeFunnelAggregates_(leadsAgg.leadIdToKey);
   const dealAgg = computeEventsDealAggregates_();
   const kakaoSpendAgg = computeEventsKakaoSpendAggregates_();
+  const metaAgg = computeEventsMetaMetricsAggregates_();
 
   const allKeys = {};
 
@@ -130,7 +189,7 @@ function refreshEventsEngine_() {
     leadsAgg.newRegistered, leadsAgg.nlP1,
     funnelAgg.icRequest, funnelAgg.icBooked,
     funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue,
-    kakaoSpendAgg
+    kakaoSpendAgg, metaAgg.spend, metaAgg.clicks, metaAgg.results
   ].forEach(function (map) {
     Object.keys(map).forEach(function (key) {
       allKeys[key] = true;
@@ -154,7 +213,9 @@ function refreshEventsEngine_() {
       funnelAgg.icComplete[key] || 0,
       dealAgg.dealsWon[key] || 0,
       dealAgg.revenue[key] || 0,
-      kakaoSpendAgg[key] || 0
+      (kakaoSpendAgg[key] || 0) + (metaAgg.spend[key] || 0),
+      metaAgg.clicks[key] || 0,
+      metaAgg.results[key] || 0
     ];
 
   });
@@ -230,9 +291,11 @@ function aggregateMTATouchRecords_(records, allRegistered, p1All, eventDateCandi
 
     if (EVENTS.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.MTA]));
+    const rawKey = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.MTA]));
 
-    if (!key || !isEligibleEventProgram_(key)) return;
+    if (!rawKey || !isEligibleEventProgram_(rawKey)) return;
+
+    const key = applyEventsProgramKeyOverride_(rawKey);
 
     allRegistered[key] = (allRegistered[key] || 0) + 1;
 
@@ -352,9 +415,11 @@ function aggregateLeadsRecords_(records, newRegistered, nlP1, leadIdToKey) {
 
     if (EVENTS.SEGMENTS.indexOf(r["Business Segment"]) === -1) return;
 
-    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.LEADS]));
+    const rawKey = stripLGSuffix_(stripRegistrationFormSuffix_(r[EVENTS.MATCH_FIELD.LEADS]));
 
-    if (!key || !isEligibleEventProgram_(key)) return;
+    if (!rawKey || !isEligibleEventProgram_(rawKey)) return;
+
+    const key = applyEventsProgramKeyOverride_(rawKey);
 
     newRegistered[key] = (newRegistered[key] || 0) + 1;
 
@@ -551,9 +616,9 @@ function computeEventsDealAggregates_() {
 
   return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
 
-    const key = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
+    const rawKey = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
 
-    return (key && isEligibleEventProgram_(key)) ? key : null;
+    return (rawKey && isEligibleEventProgram_(rawKey)) ? applyEventsProgramKeyOverride_(rawKey) : null;
 
   });
 
@@ -623,9 +688,11 @@ function aggregateKakaoSpendByProgram_(records) {
 
   (records || []).forEach(function (r) {
 
-    const key = stripLGSuffix_(stripRegistrationFormSuffix_(r.marketoProgram));
+    const rawKey = stripLGSuffix_(stripRegistrationFormSuffix_(r.marketoProgram));
 
-    if (!key || !isEligibleEventProgram_(key)) return;
+    if (!rawKey || !isEligibleEventProgram_(rawKey)) return;
+
+    const key = applyEventsProgramKeyOverride_(rawKey);
 
     spend[key] = (spend[key] || 0) + (Number(r.cost) || 0);
 
@@ -687,6 +754,216 @@ function computeEventsKakaoSpendAggregates_() {
   const rate = fetchKrwToNzdRate_();
 
   return convertSpendSummaryCurrency_(spendKRW, rate);
+
+}
+
+
+/**
+ * ==========================================================
+ * Meta Campaign Name → Events Key Override
+ *
+ * WHY
+ * Kakao(KakaoSMS_Raw)는 "Marketo program"이라는 수동 매핑 컬럼이 있어
+ * 프로그램 단위로 바로 집계 가능하지만, Meta_Raw는 Meta Ads Manager
+ * 자체 캠페인명(`AD.META.COLUMNS.CAMPAIGN_NAME`)만 있고 Marketo Program
+ * 이름과 네임스페이스가 전혀 다르다(SEARCH_004_Merge.js의 Naver 캠페인명
+ * 불일치와 동일 패턴) — 그래서 지금까지 Meta는 Events_OPS Spent 자동
+ * 집계에서 완전히 빠져있었다(51_Events_Engine.js v1.10.0 changelog
+ * "향후 다른 플랫폼(Meta 등) 자동화 시 같은 패턴으로 합산 예정" 참고).
+ *
+ * 사용자가 "Kor-EXPO-Master" Meta 지출이 실제보다 너무 낮게 보인다고
+ * 지적(2026-08-19) — `TEMPQA_014_MetaExpoSpendAudit.js`로 Meta_Raw를
+ * 캠페인명 "expo" 키워드로 훑어 실측한 결과 아래 3개 캠페인, 합계
+ * $39,374.62(NZD)를 확인(사용자 확인). **2026-08-19 규모 재확인**: Meta_Raw
+ * 전체는 752개 distinct 캠페인·$1,828,805.85(NZD)로, 이 3개(2%)만으로는
+ * 턱없이 부족 — 캠페인 하나하나 육안 대조로 750개 가까이 처리하는 건
+ * 비현실적이라고 판단, `UTIL_002_UtmProgramDictionary.js`(원래 Kakao
+ * Moments용으로 만든 UTM↔Marketo Program 자동 채굴 딕셔너리, MTA_Master +
+ * Leads_Master `First MKT UTM Campaign`↔`First Touch Detail`도 v1.4.0에서
+ * 2차 소스로 추가됨)를 재사용해 스케일 문제 해결(사용자 결정) — 아래
+ * `resolveMetaCampaignEventsKey_()` 참고. 이 override 맵은 **사람이 직접
+ * 눈으로 확인한 3건만** 담고, 딕셔너리로 못 찾는 나머지에 대한 안전망
+ * 역할로 남긴다(딕셔너리가 모호하거나 못 찾을 때도 이 3건은 항상 정확).
+ *
+ * TEST
+ * testResolveMetaCampaignEventsKey 참고
+ * ==========================================================
+ */
+const META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE = {
+  "KR_core_2026-05-30_kr-expo-event_traffic": "Kor-EXPO-Master",
+  "KR_core_2026-05-30_crimson-expo-meta_event-offline-fbiglg": "Kor-EXPO-Master",
+  "KR_core_2026-05-30_crimson-expo-meta_event-offline": "Kor-EXPO-Master"
+};
+
+
+/**
+ * ==========================================================
+ * Resolve Meta Campaign Events Key (순수 함수)
+ *
+ * WHY
+ * 캠페인명(Meta Ads Manager 자체 이름)을 Events_OPS 키(Marketo Program명,
+ * override 적용 후)로 변환하는 단일 지점. 우선순위: (1) 사람이 직접 확인한
+ * META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE(항상 정확, 최우선) → (2)
+ * UTM_Program_Dictionary(자동 채굴, `readUtmProgramDictionaryMap_()`가
+ * 이미 distinctProgramCount===1인 것만 반환하므로 모호한 건 여기 안 옴) —
+ * 다만 이 프로젝트 Marketo Program 명명 규칙(`{TYPE}-{YYYY}-{MM}-{COUNTRY}-...`)에
+ * 안 맞는(비-이벤트 콘텐츠 등) 딕셔너리 결과는 isEligibleEventProgram_()로
+ * 걸러낸다 — 어차피 Events_OPS 대상이 아닌 프로그램에 지출이 잘못
+ * 붙는 걸 방지. 마지막으로 applyEventsProgramKeyOverride_()를 한 번 더
+ * 통과시켜(예: 딕셔너리가 EXPO 38개 변형 중 하나를 찾아내도) 최종
+ * 통합 키로 정규화.
+ *
+ * INPUT
+ * campaignName            : string
+ * utmProgramDictionaryMap : Object  (readUtmProgramDictionaryMap_() 결과,
+ *                             {utmKeyLower: Marketo Program명})
+ *
+ * OUTPUT
+ * string|null  (매칭 실패 시 null)
+ *
+ * TEST
+ * testResolveMetaCampaignEventsKey 참고
+ * ==========================================================
+ */
+function resolveMetaCampaignEventsKey_(campaignName, utmProgramDictionaryMap) {
+
+  const name = String(campaignName || "").trim();
+
+  if (!name) return null;
+
+  const manualKey = META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE[name];
+
+  if (manualKey) return manualKey;
+
+  const dict = utmProgramDictionaryMap || {};
+  const dictProgram = dict[name.toLowerCase()];
+
+  if (!dictProgram || !isEligibleEventProgram_(dictProgram)) return null;
+
+  return applyEventsProgramKeyOverride_(dictProgram);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveMetaCampaignEventsKey_()
+ * ==========================================================
+ */
+function testResolveMetaCampaignEventsKey() {
+
+  const dict = {
+    "kr_core_2026-05-30_some-other-expo-variant_lead": "EV-2026-05-KOR-MOFU-Core Expo Naver DA-General", // 딕셔너리 경유 → override로 재정규화
+    "kr_core_2026-01-01_some-program_lead": "EV-2026-01-KOR-MOFU-Core Some Program",                     // 딕셔너리 경유, override 대상 아님
+    "kr_core_2026-01-01_wf-content_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook"                          // WF라 이벤트 부적격 — 제외돼야 함
+  };
+
+  const pass =
+    resolveMetaCampaignEventsKey_("KR_core_2026-05-30_kr-expo-event_traffic", dict) === "Kor-EXPO-Master" && // 수동 override 최우선
+    resolveMetaCampaignEventsKey_("KR_core_2026-05-30_some-other-expo-variant_lead", dict) === "Kor-EXPO-Master" && // 딕셔너리 → override 재정규화
+    resolveMetaCampaignEventsKey_("KR_core_2026-01-01_some-program_lead", dict) === "EV-2026-01-KOR-MOFU-Core Some Program" &&
+    resolveMetaCampaignEventsKey_("KR_core_2026-01-01_wf-content_lead", dict) === null &&
+    resolveMetaCampaignEventsKey_("KR_core_2026-01-01_unmatched_lead", dict) === null &&
+    resolveMetaCampaignEventsKey_("", dict) === null;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Meta Metrics By Events Program (순수 함수)
+ *
+ * WHY
+ * Spent/Clicks/Results 셋 다 같은 캠페인→Events 키 해석
+ * (resolveMetaCampaignEventsKey_())을 거쳐야 하므로, 한 번의 순회로
+ * 셋 다 같이 합산(각각 따로 순회하지 않음). CVR은 여기서 만들지 않음 —
+ * 여러 캠페인이 한 프로그램으로 뭉칠 때(EXPO 등) 개별 CVR을 합치거나
+ * 평균 내면 통계적으로 틀리므로, Results÷Clicks를 Events_OPS 쪽에서
+ * 시트 수식(GROUP_5_DERIVED, RATIO_FORMULAS)으로 매번 다시 계산한다
+ * (`EVENTS_001_Config.js` v1.11.0).
+ *
+ * INPUT
+ * records                 : Object[]  (readMetaRawRows_() 결과,
+ *                             {campaignName, spent, clicks, results, ...})
+ * utmProgramDictionaryMap : Object  (readUtmProgramDictionaryMap_() 결과, 선택 —
+ *                             생략 시 수동 override만 사용)
+ *
+ * OUTPUT
+ * { spend: {eventsKey: totalSpentNZD}, clicks: {eventsKey: totalClicks},
+ *   results: {eventsKey: totalResults} }  (Meta의 "Amount spent (NZD)"는
+ * 이미 NZD라 Kakao와 달리 환율 변환 불필요)
+ *
+ * TEST
+ * testAggregateMetaMetricsByEventsProgram 참고
+ * ==========================================================
+ */
+function aggregateMetaMetricsByEventsProgram_(records, utmProgramDictionaryMap) {
+
+  const spend = {};
+  const clicks = {};
+  const results = {};
+
+  (records || []).forEach(function (r) {
+
+    const key = resolveMetaCampaignEventsKey_(r.campaignName, utmProgramDictionaryMap);
+
+    if (!key) return;
+
+    spend[key] = (spend[key] || 0) + (Number(r.spent) || 0);
+    clicks[key] = (clicks[key] || 0) + (Number(r.clicks) || 0);
+    results[key] = (results[key] || 0) + (Number(r.results) || 0);
+
+  });
+
+  return { spend: spend, clicks: clicks, results: results };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateMetaMetricsByEventsProgram_()
+ * ==========================================================
+ */
+function testAggregateMetaMetricsByEventsProgram() {
+
+  const dict = {
+    "kr_core_2026-06-01_some-other-program_lead": "EV-2026-06-KOR-MOFU-Core Some Other Program"
+  };
+
+  const records = [
+    { campaignName: "KR_core_2026-05-30_kr-expo-event_traffic", spent: 3137.98, clicks: 100, results: 20 },
+    { campaignName: "KR_core_2026-05-30_crimson-expo-meta_event-offline-fbiglg", spent: 26098.17, clicks: 800, results: 150 },
+    { campaignName: "KR_core_2026-05-30_crimson-expo-meta_event-offline", spent: 10138.47, clicks: 300, results: 50 },
+    { campaignName: "KR_core_2026-06-01_some-other-program_lead", spent: 500, clicks: 10, results: 2 },
+    { campaignName: "KR_core_2026-05-30_unrelated_campaign", spent: 999, clicks: 5, results: 1 }
+  ];
+
+  const result = aggregateMetaMetricsByEventsProgram_(records, dict);
+
+  const pass =
+    Math.abs(result.spend["Kor-EXPO-Master"] - 39374.62) < 0.01 &&
+    result.clicks["Kor-EXPO-Master"] === 1200 &&
+    result.results["Kor-EXPO-Master"] === 220 &&
+    Math.abs(result.spend["EV-2026-06-KOR-MOFU-Core Some Other Program"] - 500) < 0.01 &&
+    result.clicks["EV-2026-06-KOR-MOFU-Core Some Other Program"] === 10 &&
+    Object.keys(result.spend).length === 2;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Events Meta Metrics Aggregates (IO 래퍼)
+ * ==========================================================
+ */
+function computeEventsMetaMetricsAggregates_() {
+
+  return aggregateMetaMetricsByEventsProgram_(readMetaRawRows_(), readUtmProgramDictionaryMap_());
 
 }
 
@@ -812,6 +1089,94 @@ function testStripLGSuffix() {
       "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love"
     ) === "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love" &&
     stripLGSuffix_("") === "";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Events Program Key Override (Marketo Program명 여러 개 → 단일 키 통합)
+ *
+ * WHY
+ * "Kor-EXPO-Master"(2026 KOR 오프라인 EXPO 행사)가 채널/날짜/타겟팅별로
+ * Marketo Program이 38개나 별도로 생성돼(META/META UK/Naver DA 세부
+ * 타겟팅/Kakao Channel/Webinar/Seminar 등, 실제로는 전부 같은 행사)
+ * Events_OPS에 38개 행으로 쪼개져 나타나는 문제 — 사용자가 육안으로
+ * 확인한 목록을 그대로 반영(SEARCH_UTM_TO_PROGRAM_OVERRIDE/
+ * NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE와 동일 관행,
+ * SEARCH_004_Merge.js 참고). stripLGSuffix_/stripRegistrationFormSuffix_로
+ * 정제된 canonical 키에 적용 — 이 목록에 없는 프로그램명은 원래 키 그대로
+ * 통과(안전망).
+ *
+ * TEST
+ * testApplyEventsProgramKeyOverride 참고
+ * ==========================================================
+ */
+const EVENTS_PROGRAM_KEY_OVERRIDE = {
+
+  "EV-2026-04-KOR-MOFU-Core EXPO META": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO META UK": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Indigo": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core Expo Naver Blog": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core EXPO Kakao Channel": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core Expo Naver DA-General": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core Expo Naver DA-Retargeting": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core Expo Naver DA-HS to Harvard": "Kor-EXPO-Master",
+  "EV-2026-05-KOR-MOFU-Core Expo Naver DA-FAO Martin": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Naver DA-FAO Martin": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Naver Cafe 2": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Seminar 2": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Naver DA-HS to Harvard (Sunday)": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Naver DA-HS to Stanford": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Naver DA-HS to Harvard": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Webinar 2": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Naver DA-HS to Harvard (Date)": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Seminar": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core Expo Invitation": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Kakao Channel": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Naver Cafe": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Kakao DA Hs to DS": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO Kakao Channel.": "Kor-EXPO-Master",
+  "EV-2026-04-KOR-MOFU-Core EXPO META.": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-Grade 7 to Yale": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core EXPO Kakao DA UHak GPA": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-HS to Yale": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-HS to Princeton": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-Grade 7 to Harvard": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-Grade 7 to Stanford": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Webinar": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-HS to Stanford": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-HS to DS Value LP": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Webinar (3/11)": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core Expo Naver DA-HS to DS": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core EXPO Kakao DA Native": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core EXPO Naver DA-UHak Guarantee (Student)": "Kor-EXPO-Master",
+  "EV-2026-03-KOR-MOFU-Core EXPO Kakao DA": "Kor-EXPO-Master"
+
+};
+
+
+function applyEventsProgramKeyOverride_(key) {
+
+  return EVENTS_PROGRAM_KEY_OVERRIDE[key] || key;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyEventsProgramKeyOverride_()
+ * ==========================================================
+ */
+function testApplyEventsProgramKeyOverride() {
+
+  const pass =
+    applyEventsProgramKeyOverride_("EV-2026-04-KOR-MOFU-Core EXPO META") === "Kor-EXPO-Master" &&
+    applyEventsProgramKeyOverride_("EV-2026-03-KOR-MOFU-Core EXPO Kakao DA") === "Kor-EXPO-Master" &&
+    applyEventsProgramKeyOverride_("EV-2025-07-KOR-MOFU-Core Unrelated Program") === "EV-2025-07-KOR-MOFU-Core Unrelated Program" &&
+    applyEventsProgramKeyOverride_("") === "";
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

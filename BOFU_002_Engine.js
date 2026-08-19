@@ -32,9 +32,45 @@
  * 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.1.1
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-19)
+ * - **Start Date 자동 채움이 여전히 공란인 사례 다수 발견(사용자 보고,
+ *   "Duke CAO advise" 등 20건+) — 원인: 1차 소스였던 Leads_Master
+ *   "New Registered"는 "이 프로그램이 리드의 첫 터치"인 경우만 잡는데,
+ *   BOFU 프로그램(Contact/Consult 성격상 후반부 터치)은 리드의 진짜 첫
+ *   터치가 훨씬 이전의 다른 프로그램인 경우가 흔함 — SF Reg.(MTA 전체
+ *   터치)는 있는데 SF NL(첫 터치)은 0인 프로그램이 많아서였음.** MTA_Master
+ *   전체 터치("MTA Created Date")도 2차 소스로 집계
+ *   (`aggregateBOFUMTATouchRecords_()`의 신규 `earliestTouchDate` 파라미터)
+ *   — 신규 `pickEarliestDate_()`(순수 함수)로 두 소스 중 더 이른 날짜
+ *   채택. `refreshBOFUEngine_()` 배선 변경. 신규 테스트
+ *   `testAggregateBOFUMTATouchRecordsEarliestTouchDate`/
+ *   `testPickEarliestDate` 추가.
+ * v1.3.0 (2026-08-19)
+ * - `runDeleteDeadBOFUOPSRows()` 신규(수동 실행 전용) — v1.2.0의
+ *   `computeBOFUDealAggregates_()` 버그 수정만으로는 이미 새어 들어온
+ *   WB-/EV- 행이 안 지워짐(`mergeBOFUOPS_()`가 기존 키를 항상 합집합
+ *   보존하는 구조라서) — `71_Search_Engine.js`의
+ *   `runDeleteDeadSearchOPSRows()`(Search_OPS에서 동일 문제 116건 정리한
+ *   전례)와 동일 패턴으로 신규 작성. **반드시 `refreshBOFUEngine_()`를
+ *   먼저 실행한 뒤 이 함수를 실행할 것.**
+ * v1.2.0 (2026-08-19)
+ * - **버그 수정(사용자 발견) — `computeBOFUDealAggregates_()`에 Business
+ *   Segment 게이트가 아예 빠져있었음**. MTA/Leads 경로는 둘 다
+ *   `BOFU.SEGMENTS.indexOf(...)`로 Business Segment=BOFU만 통과시키는데
+ *   이 Deal Tracker 경로만 KOR 프로그램이기만 하면 통과돼, 실제로는
+ *   Webinar/Seminar인 WB-/EV- 프로그램의 딜이 BOFU_OPS에 수백 개 행으로
+ *   새어 들어오고 있었음 — Deal Tracker의 `businessSegment`(Segment 열
+ *   원본)로 동일하게 게이트해 수정. 회귀 방지 테스트 케이스 추가
+ *   (`testComputeBOFUDealAggregates_`).
+ * - `aggregateBOFULeadsRecords_()`/`computeBOFULeadsAggregates_()`에
+ *   `earliestCreateDate` 신규(선택 파라미터, 기존 호출 하위 호환) —
+ *   Start Date 자동 채움용(사용자 요청, `BOFU_001_Config.js` v1.3.0/
+ *   `BOFU_004_Merge.js` 참고). `refreshBOFUEngine_()`의 rows 배열에
+ *   "Earliest Lead Date" 추가. 신규 테스트
+ *   `testAggregateBOFULeadsRecordsEarliestCreateDate` 추가.
  * v1.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `61_BOFU_Engine.js` → 신규 `BOFU_002_Engine.js`, 코드 내용 변경 없음.
  * v1.1.0 (2026-07-28)
@@ -84,6 +120,7 @@ function refreshBOFUEngine_() {
 
     return [
       key,
+      pickEarliestDate_(leadsAgg.earliestCreateDate[key], mtaAgg.earliestTouchDate[key]),
       mtaAgg.allRegistered[key] || 0,
       leadsAgg.newRegistered[key] || 0,
       mtaAgg.p1All[key] || 0,
@@ -105,6 +142,56 @@ function refreshBOFUEngine_() {
     CONFIG.LOG.PREFIX + " BOFU Engine Refresh Completed : " +
     rows.length + " rows (" + seconds + "s)"
   );
+
+}
+
+
+/**
+ * ==========================================================
+ * Pick Earliest Date (순수 함수)
+ *
+ * WHY
+ * "Earliest Lead Date"(Start Date 자동 채움 후보) 소스가 두 곳(Leads_Master
+ * New Registered / MTA_Master 전체 터치) — 둘 중 더 이른 날짜를 채택.
+ * 둘 다 없으면 ""(공란, Events의 Event Date 패턴과 동일하게 시트에 빈
+ * 문자열로 기록).
+ *
+ * TEST
+ * testPickEarliestDate 참고
+ * ==========================================================
+ */
+function pickEarliestDate_(dateA, dateB) {
+
+  const validA = dateA instanceof Date && !isNaN(dateA.getTime());
+  const validB = dateB instanceof Date && !isNaN(dateB.getTime());
+
+  if (validA && validB) return dateA < dateB ? dateA : dateB;
+  if (validA) return dateA;
+  if (validB) return dateB;
+
+  return "";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — pickEarliestDate_()
+ * ==========================================================
+ */
+function testPickEarliestDate() {
+
+  const early = new Date(2026, 0, 1);
+  const late = new Date(2026, 5, 1);
+
+  const pass =
+    pickEarliestDate_(late, early) === early &&
+    pickEarliestDate_(early, late) === early &&
+    pickEarliestDate_(early, undefined) === early &&
+    pickEarliestDate_(undefined, early) === early &&
+    pickEarliestDate_(undefined, undefined) === "";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -156,7 +243,8 @@ function testIsEffectiveBOFUP1_() {
  * 재사용.
  *
  * OUTPUT
- * { allRegistered: {key: count}, p1All: {key: count} }
+ * { allRegistered: {key: count}, p1All: {key: count},
+ *   earliestTouchDate: {key: Date} }
  *
  * TEST
  * testComputeBOFUMTAAggregates_ 참고
@@ -166,15 +254,16 @@ function computeBOFUMTAAggregates_() {
 
   const allRegistered = {};
   const p1All = {};
+  const earliestTouchDate = {};
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
 
-  if (!sheet) return { allRegistered, p1All };
+  if (!sheet) return { allRegistered, p1All, earliestTouchDate };
 
-  aggregateBOFUMTATouchRecords_(sheetToObjects(sheet), allRegistered, p1All);
+  aggregateBOFUMTATouchRecords_(sheetToObjects(sheet), allRegistered, p1All, earliestTouchDate);
 
-  return { allRegistered, p1All };
+  return { allRegistered, p1All, earliestTouchDate };
 
 }
 
@@ -182,9 +271,20 @@ function computeBOFUMTAAggregates_() {
 /**
  * ==========================================================
  * Aggregate BOFU MTA Touch Records (순수 함수, 테스트용으로 분리)
+ *
+ * WHY (earliestTouchDate, 2026-08-19 신규)
+ * Start Date 자동 채움(applyBOFUAutoDerivedFieldsIfBlank_(), BOFU_004_Merge.js)
+ * 의 1차 소스였던 Leads_Master "New Registered"(aggregateBOFULeadsRecords_
+ * earliestCreateDate)는 "이 프로그램이 리드의 첫 터치인 경우"만 잡는다 —
+ * 신규 캠페인에 기존 리드가 재참여(첫 터치는 예전 다른 프로그램)한
+ * 경우엔 SF Reg.(이 함수)는 잡히는데 SF NL은 0이라 Start Date 후보가
+ * 안 나오는 사례를 실측으로 확인("WF-2026-08-KOR-BOFU-Core Duke CAO
+ * advise" — 리드는 있는데 Start Date가 계속 공란). 그래서 MTA_Master
+ * (모든 터치, "MTA Created Date")도 2차 소스로 같이 집계 —
+ * BOFU_004_Merge.js가 둘 중 더 이른 날짜를 채택.
  * ==========================================================
  */
-function aggregateBOFUMTATouchRecords_(records, allRegistered, p1All) {
+function aggregateBOFUMTATouchRecords_(records, allRegistered, p1All, earliestTouchDate) {
 
   records.forEach(function (r) {
 
@@ -198,6 +298,18 @@ function aggregateBOFUMTATouchRecords_(records, allRegistered, p1All) {
 
     if (isEffectiveBOFUP1_(r["Lead Priority"])) {
       p1All[key] = (p1All[key] || 0) + 1;
+    }
+
+    if (earliestTouchDate) {
+
+      const touchDate = r["MTA Created Date"];
+
+      if (touchDate instanceof Date && !isNaN(touchDate.getTime())) {
+        if (!earliestTouchDate[key] || touchDate < earliestTouchDate[key]) {
+          earliestTouchDate[key] = touchDate;
+        }
+      }
+
     }
 
   });
@@ -238,11 +350,39 @@ function testComputeBOFUMTAAggregates_() {
 
 /**
  * ==========================================================
+ * TEST — aggregateBOFUMTATouchRecords_()의 earliestTouchDate
+ * ==========================================================
+ */
+function testAggregateBOFUMTATouchRecordsEarliestTouchDate() {
+
+  const records = [
+    { "Business Segment": "BOFU", "Lead Source Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "MTA Created Date": new Date(2026, 7, 17) },
+    { "Business Segment": "BOFU", "Lead Source Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "MTA Created Date": new Date(2026, 7, 14) }, // 더 이른 날짜 — 채택돼야 함
+    { "Business Segment": "Search", "Lead Source Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "MTA Created Date": new Date(2026, 6, 1) } // segment 필터로 제외
+  ];
+
+  const allRegistered = {};
+  const p1All = {};
+  const earliestTouchDate = {};
+
+  aggregateBOFUMTATouchRecords_(records, allRegistered, p1All, earliestTouchDate);
+
+  const pass =
+    earliestTouchDate["WF-2026-08-KOR-BOFU-Core Duke CAO advise"].getTime() === new Date(2026, 7, 14).getTime();
+
+  Logger.log("Result: " + JSON.stringify(earliestTouchDate));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute BOFU Leads Aggregates (SF NL / SF NLP1s)
  *
  * OUTPUT
  * { newRegistered: {key: count}, nlP1: {key: count},
- *   leadIdToKey: {leadId: key} }
+ *   leadIdToKey: {leadId: key}, earliestCreateDate: {key: Date} }
  *
  * TEST
  * testComputeBOFULeadsAggregates_ 참고
@@ -253,15 +393,16 @@ function computeBOFULeadsAggregates_() {
   const newRegistered = {};
   const nlP1 = {};
   const leadIdToKey = {};
+  const earliestCreateDate = {};
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
 
-  if (!sheet) return { newRegistered, nlP1, leadIdToKey };
+  if (!sheet) return { newRegistered, nlP1, leadIdToKey, earliestCreateDate };
 
-  aggregateBOFULeadsRecords_(sheetToObjects(sheet), newRegistered, nlP1, leadIdToKey);
+  aggregateBOFULeadsRecords_(sheetToObjects(sheet), newRegistered, nlP1, leadIdToKey, earliestCreateDate);
 
-  return { newRegistered, nlP1, leadIdToKey };
+  return { newRegistered, nlP1, leadIdToKey, earliestCreateDate };
 
 }
 
@@ -269,9 +410,18 @@ function computeBOFULeadsAggregates_() {
 /**
  * ==========================================================
  * Aggregate BOFU Leads Records (순수 함수, 테스트용으로 분리)
+ *
+ * WHY (earliestCreateDate, 2026-08-19 신규)
+ * "Start Date"(BOFU_OPS Manual)를 사용자가 아직 안 채운 신규 프로그램은
+ * 정렬(compareByStartDateBlankLast_)상 항상 최하단으로 밀려 눈에 잘 안
+ * 띈다는 문제가 있어(사용자 발견, "WF-2026-08-KOR-BOFU-Core Duke CAO
+ * advise" 사례) — 이 프로그램으로 맨 처음 들어온 리드의 Create Date를
+ * "Earliest Lead Date"로 같이 집계해, Start Date가 비어있을 때 자동
+ * prefill 후보로 쓴다(BOFU_004_Merge.js 참고). 파라미터가 없으면(기존
+ * 테스트 호환) 이 부분은 그냥 건너뜀.
  * ==========================================================
  */
-function aggregateBOFULeadsRecords_(records, newRegistered, nlP1, leadIdToKey) {
+function aggregateBOFULeadsRecords_(records, newRegistered, nlP1, leadIdToKey, earliestCreateDate) {
 
   records.forEach(function (r) {
 
@@ -291,6 +441,18 @@ function aggregateBOFULeadsRecords_(records, newRegistered, nlP1, leadIdToKey) {
 
     if (leadId) {
       leadIdToKey[leadId] = key;
+    }
+
+    if (earliestCreateDate) {
+
+      const createDate = r["Create Date"];
+
+      if (createDate instanceof Date && !isNaN(createDate.getTime())) {
+        if (!earliestCreateDate[key] || createDate < earliestCreateDate[key]) {
+          earliestCreateDate[key] = createDate;
+        }
+      }
+
     }
 
   });
@@ -325,6 +487,35 @@ function testComputeBOFULeadsAggregates_() {
     leadIdToKey["L3"] === undefined;
 
   Logger.log("Result: " + JSON.stringify({ newRegistered, nlP1, leadIdToKey }));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateBOFULeadsRecords_()의 earliestCreateDate
+ * ==========================================================
+ */
+function testAggregateBOFULeadsRecordsEarliestCreateDate() {
+
+  const records = [
+    { "Business Segment": "BOFU", "First Touch Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "Lead ID": "L1", "Create Date": new Date(2026, 7, 17) },
+    { "Business Segment": "BOFU", "First Touch Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "Lead ID": "L2", "Create Date": new Date(2026, 7, 15) }, // 더 이른 날짜 — 채택돼야 함
+    { "Business Segment": "Search", "First Touch Detail": "WF-2026-08-KOR-BOFU-Core Duke CAO advise", "Lead Priority": "Priority 3", "Lead ID": "L3", "Create Date": new Date(2026, 7, 1) } // segment 필터로 제외 — 날짜도 반영 안 돼야 함
+  ];
+
+  const newRegistered = {};
+  const nlP1 = {};
+  const leadIdToKey = {};
+  const earliestCreateDate = {};
+
+  aggregateBOFULeadsRecords_(records, newRegistered, nlP1, leadIdToKey, earliestCreateDate);
+
+  const pass =
+    earliestCreateDate["WF-2026-08-KOR-BOFU-Core Duke CAO advise"].getTime() === new Date(2026, 7, 15).getTime();
+
+  Logger.log("Result: " + JSON.stringify(earliestCreateDate));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -439,15 +630,31 @@ function testComputeBOFUFunnelAggregates_() {
  * 단위)로 계산하지 않는다 — Deal Tracker 자체의 Lead Source Detail(프로그램명)
  * 을 기존 매칭 키와 동일하게 정규화(stripRegistrationFormSuffix_ +
  * isKoreanProgram_, 51_Events_Engine.js 재사용)해서 바로 집계한다. BOFU는
- * Events와 달리 EVENT_TYPE_PREFIXES 필터가 없다(단일 세그먼트라 불필요).
+ * Events와 달리 EVENT_TYPE_PREFIXES 필터가 없다(단일 세그먼트라 불필요) —
+ * **단, 그렇다고 Business Segment 체크 자체를 생략해도 된다는 뜻은 아니었음
+ * (2026-08-19 버그 발견·수정)**: MTA/Leads 경로(aggregateBOFUMTATouchRecords_/
+ * aggregateBOFULeadsRecords_)는 둘 다 `BOFU.SEGMENTS.indexOf(...)`로
+ * Business Segment=BOFU만 통과시키는데, 이 Deal Tracker 경로만 그 체크가
+ * 아예 빠져있어 KOR 프로그램이기만 하면 Business Segment와 무관하게
+ * 전부 통과하고 있었음 — 그 결과 실제로는 Webinar/Seminar인 WB-/EV- 프로그램의
+ * 딜(Deal Tracker "Segment" 열이 그 딜을 Webinar/Seminar로 정확히 분류해뒀어도)
+ * 이 여기서 새어 들어와 BOFU_OPS에 수백 개 엉뚱한 행으로 나타남(사용자
+ * 발견). Deal Tracker의 `businessSegment`(row.businessSegment, "Segment"
+ * 열 원본, getBusinessSegment()와 동일 taxonomy — TARGET_001_Engine.js
+ * readDealTrackerRawRows_() 참고)로 동일하게 게이트해 수정.
  *
  * OUTPUT
  * { dealsWon: {utmKey: count}, revenue: {utmKey: sum} }
+ *
+ * TEST
+ * testComputeBOFUDealAggregates_ 참고
  * ==========================================================
  */
 function computeBOFUDealAggregates_() {
 
   return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
+
+    if (BOFU.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
 
     const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
 
@@ -466,11 +673,13 @@ function computeBOFUDealAggregates_() {
 function testComputeBOFUDealAggregates_() {
 
   const dealRows = [
-    { leadSourceDetail: "WF-2025-07-KOR-BOFU-Core A", revenue: 500 },
-    { leadSourceDetail: "WF-2025-07-US-BOFU-Core B", revenue: 999 }  // KOR 아님, 제외
+    { leadSourceDetail: "WF-2025-07-KOR-BOFU-Core A", revenue: 500, businessSegment: "BOFU" },
+    { leadSourceDetail: "WF-2025-07-US-BOFU-Core B", revenue: 999, businessSegment: "BOFU" },     // KOR 아님, 제외
+    { leadSourceDetail: "WB-2026-07-KOR-MOFU-Core Webinar C", revenue: 777, businessSegment: "Webinar" } // BOFU 아님, 제외(회귀 방지)
   ];
 
   const keyFn = function (row) {
+    if (BOFU.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
     const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
     return (key && isKoreanProgram_(key)) ? key : null;
   };
@@ -483,6 +692,96 @@ function testComputeBOFUDealAggregates_() {
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Delete Dead BOFU_OPS Rows (합집합 병합으로 안 지워지는 죽은 키 정리,
+ * 수동 실행 전용)
+ *
+ * WHY (2026-08-19, 사용자 발견)
+ * `computeBOFUDealAggregates_()` Business Segment 게이트 누락 버그(위
+ * changelog 참고)로 그동안 BOFU_OPS에 새어 들어온 WB-/EV- 프로그램 행이,
+ * 코드를 고쳐 `refreshBOFUEngine_()`를 다시 돌려도 저절로 없어지지
+ * 않는다 — `mergeBOFUOPS_()`가 기존 OPS 키를 항상 합집합으로 유지하는
+ * 구조(Kor-EXPO-Master처럼 정당한 수동 행을 보존하기 위한 의도적 설계)라
+ * Engine이 더 이상 그 키를 만들지 않아도 행 자체는 그대로 남기 때문.
+ * `71_Search_Engine.js`의 `runDeleteDeadSearchOPSRows()`(Search_OPS에서
+ * 동일한 문제로 죽은 키 116건 정리한 전례)와 완전히 동일한 패턴 — 지금의
+ * BOFU_Engine(refreshBOFUEngine_() 실행 후 기준)에 없는 키를 BOFU_OPS에서
+ * 찾아 삭제. **주의**: 반드시 `refreshBOFUEngine_()`를 먼저 실행해 Engine을
+ * 최신 상태로 만든 뒤 이 함수를 실행할 것 — 안 그러면 아직 살아있는 정상
+ * 키까지 죽은 걸로 오판할 수 있음.
+ * ==========================================================
+ */
+function runDeleteDeadBOFUOPSRows() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(BOFU.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(BOFU.SHEET.OPS);
+
+  if (!opsSheet) {
+    Logger.log(BOFU.SHEET.OPS + " sheet not found.");
+    return;
+  }
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r["Lead Source Detail"] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  const values = opsSheet.getDataRange().getValues();
+  const headers = values[BOFU.ROWS.HEADER - 1];
+  const keyColIndex = headers.indexOf(BOFU.KEY);
+
+  const rowsToDelete = [];
+
+  for (let r = BOFU.ROWS.DATA_START - 1; r < values.length; r++) {
+
+    const key = String(values[r][keyColIndex] || "").trim();
+
+    if (!key) continue;
+    if (liveKeys[key.toLowerCase()]) continue; // 살아있음 — 스킵
+
+    rowsToDelete.push(r + 1); // 1-based 시트 행 번호
+
+  }
+
+  Logger.log("======================================");
+  Logger.log("Delete Dead BOFU_OPS Rows");
+  Logger.log("======================================");
+  Logger.log("BOFU_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - BOFU.ROWS.DATA_START + 1));
+
+  if (rowsToDelete.length === 0) {
+    Logger.log("삭제할 죽은 키 없음.");
+    return;
+  }
+
+  Logger.log("삭제 대상 행 수: " + rowsToDelete.length);
+  Logger.log("삭제 대상 시트 행 번호(오름차순): " + rowsToDelete.join(", "));
+
+  rowsToDelete
+    .sort(function (a, b) { return b - a; }) // 내림차순 — 삭제 시 인덱스 안 밀리도록
+    .forEach(function (rowIndex) {
+      opsSheet.deleteRow(rowIndex);
+    });
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
+    "BOFU_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - BOFU.ROWS.DATA_START + 1)
+  );
+
+  Logger.log("======================================");
 
 }
 

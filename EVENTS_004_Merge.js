@@ -9,9 +9,28 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.12.0
+ * v1.13.1
  *
  * Change Log
+ * v1.13.1 (2026-08-19)
+ * - `testCreateEventsKeyMapMergesOverrideCollisions`/`testMergeExistingEventsRows`
+ *   테스트 데이터 갱신 — CVR/Clicks가 `EVENTS_001_Config.js` v1.11.0에서
+ *   GROUP_3_MANUAL(빈 배열이 됨)을 벗어나 GROUP_4_COMPUTED/GROUP_5_DERIVED로
+ *   이동하면서 더 이상 `mergeExistingEventsRows_()`의 합산 대상이 아니게 됨
+ *   (Engine이 매번 새로 계산하므로 기존 행 병합 대상일 필요가 없어짐, 정상
+ *   동작 변경) — 테스트를 여전히 GROUP_2_MANUAL로 남아있는 "Success"
+ *   필드로 교체해 실제 동작과 다시 일치시킴. 로직 자체(`mergeExistingEventsRows_`/
+ *   `createEventsKeyMap_`)는 변경 없음.
+ * v1.13.0 (2026-08-19)
+ * - `createEventsKeyMap_()`가 이제 `applyEventsProgramKeyOverride_()`
+ *   (EVENTS_002_Engine.js v1.12.0)를 기존 Events_OPS 행의 키에도 적용
+ *   — 사용자 요청으로 "Kor-EXPO-Master" 행사 38개 프로그램명 행을 하나로
+ *   통합. 신규 `mergeExistingEventsRows_()`(순수 함수) — 충돌 시
+ *   GROUP_2_MANUAL/GROUP_3_MANUAL 숫자 컬럼 합산, Notes " / " 연결, 나머지
+ *   GROUP_1_MANUAL은 첫 발견 공란 아닌 값 유지(73_Search_Merge.js의 Naver
+ *   캠페인 키 충돌 합산 패턴과 동일 관행). 신규 테스트
+ *   `testCreateEventsKeyMapMergesOverrideCollisions`/
+ *   `testMergeExistingEventsRows` 추가.
  * v1.12.0 (2026-08-09)
  * - `applyRatioFormulas_()` — RATIO_FORMULAS 스펙 컬럼이 header에 없을 때
  *   조용히 건너뛰던 걸 `Logger.log` 경고로 남기도록 수정(qa-review 스킬
@@ -484,7 +503,22 @@ function testCompareByEventDateBlankLast() {
 
 /**
  * ==========================================================
- * Create Key Lookup Map (UTM Key 기준, first-seen-wins)
+ * Create Key Lookup Map (UTM Key 기준, EVENTS_PROGRAM_KEY_OVERRIDE 적용
+ * 후 충돌 시 병합)
+ *
+ * WHY
+ * 51_Events_Engine.js(EVENTS_002_Engine.js) v1.12.0의
+ * `EVENTS_PROGRAM_KEY_OVERRIDE`(예: EXPO 38개 프로그램명 →
+ * "Kor-EXPO-Master")가 Engine 집계 키는 이미 통합하지만, 기존
+ * Events_OPS 시트엔 여전히 그 38개 프로그램명 각각의 행이 남아있고 그
+ * 안에 사람이 직접 입력한 Manual 값(Reg./Success/Spent 관련 수동 컬럼/
+ * Notes 등)이 들어있을 수 있다. 여기서도 같은 override를 적용해 같은
+ * 키로 묶고, 충돌하면 `mergeExistingEventsRows_()`로 합쳐서 데이터
+ * 유실 없이 한 행으로 만든다(사용자 확정, 2026-08-19 — 숫자 컬럼 합산,
+ * Notes는 연결).
+ *
+ * TEST
+ * testCreateEventsKeyMapMergesOverrideCollisions 참고
  * ==========================================================
  */
 function createEventsKeyMap_(rows) {
@@ -493,17 +527,165 @@ function createEventsKeyMap_(rows) {
 
   rows.forEach(function (row) {
 
-    const key = String(row[EVENTS.KEY] || "").trim();
+    const rawKey = String(row[EVENTS.KEY] || "").trim();
 
-    if (!key) return;
+    if (!rawKey) return;
 
-    if (!map[key]) {
-      map[key] = row;
-    }
+    const key = applyEventsProgramKeyOverride_(rawKey);
+
+    map[key] = map[key] ? mergeExistingEventsRows_(map[key], row) : row;
 
   });
 
   return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge Existing Events_OPS Rows (같은 override 키로 묶인 기존 행 병합, 순수 함수)
+ *
+ * WHY
+ * EVENTS.GROUP_2_MANUAL/GROUP_3_MANUAL(Reg./Success/SP1/SNPL1/CVR/
+ * Clicks/Results 등 숫자 수동 입력)은 합산, Notes는 " / "로 연결(공란
+ * 스킵), 나머지 GROUP_1_MANUAL(Event Date/Marketo Campaign name/
+ * Target Market/Division/EventType/PIC/Speaker/Time)은 첫 번째로
+ * 발견된 공란 아닌 값을 유지(사용자 확정, 2026-08-19). ⚠️ CVR은
+ * 원래 비율(%) 값이라 단순 합산이 통계적으로 정확하진 않지만, 사용자가
+ * 명시적으로 다른 숫자 컬럼과 동일하게 합쳐달라고 요청 — 임의로 다른
+ * 처리(평균 등)로 바꾸지 않음. Marketo Campaign name이 override 대상
+ * 원본 키(38개 중 하나) 그대로 병합되는 경우를 대비해 최종적으로
+ * applyEventsProgramKeyOverride_()를 한 번 더 통과시켜 "Kor-EXPO-Master"로
+ * 정규화.
+ *
+ * INPUT
+ * a, b : Object  (병합 대상 두 기존 행 — a가 먼저 발견된 행)
+ *
+ * OUTPUT
+ * Object  (병합된 새 행)
+ *
+ * TEST
+ * testMergeExistingEventsRows 참고
+ * ==========================================================
+ */
+function mergeExistingEventsRows_(a, b) {
+
+  const merged = {};
+
+  merged[EVENTS.KEY] = a[EVENTS.KEY];
+
+  EVENTS.GROUP_2_MANUAL.concat(EVENTS.GROUP_3_MANUAL).forEach(function (col) {
+    merged[col] = (Number(a[col]) || 0) + (Number(b[col]) || 0);
+  });
+
+  EVENTS.GROUP_1_MANUAL.forEach(function (col) {
+
+    if (col === "Notes") {
+
+      const notes = [a["Notes"], b["Notes"]]
+        .map(function (v) { return String(v || "").trim(); })
+        .filter(function (v) { return v; });
+
+      merged["Notes"] = notes.join(" / ");
+
+      return;
+
+    }
+
+    const valA = a[col];
+    const isBlankA = valA === "" || valA === null || valA === undefined;
+
+    merged[col] = isBlankA ? b[col] : valA;
+
+  });
+
+  merged["Marketo Campaign name"] = applyEventsProgramKeyOverride_(merged["Marketo Campaign name"]);
+
+  return merged;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — createEventsKeyMap_()의 override 충돌 병합
+ * ==========================================================
+ */
+function testCreateEventsKeyMapMergesOverrideCollisions() {
+
+  const rows = [
+    {
+      "Lead Source Detail": "EV-2026-04-KOR-MOFU-Core EXPO META",
+      "Marketo Campaign name": "EV-2026-04-KOR-MOFU-Core EXPO META",
+      "Mkt Reg.": 10,
+      "Success": 5,
+      "Notes": "META 채널 메모"
+    },
+    {
+      "Lead Source Detail": "EV-2026-03-KOR-MOFU-Core EXPO Kakao DA",
+      "Marketo Campaign name": "EV-2026-03-KOR-MOFU-Core EXPO Kakao DA",
+      "Mkt Reg.": 7,
+      "Success": 3,
+      "Notes": "Kakao DA 메모"
+    },
+    {
+      "Lead Source Detail": "EV-2025-07-KOR-MOFU-Core Unrelated",
+      "Marketo Campaign name": "EV-2025-07-KOR-MOFU-Core Unrelated",
+      "Mkt Reg.": 100
+    }
+  ];
+
+  const map = createEventsKeyMap_(rows);
+
+  const pass =
+    Object.keys(map).length === 2 &&
+    map["Kor-EXPO-Master"]["Mkt Reg."] === 17 &&
+    map["Kor-EXPO-Master"]["Success"] === 8 &&
+    map["Kor-EXPO-Master"]["Notes"] === "META 채널 메모 / Kakao DA 메모" &&
+    map["Kor-EXPO-Master"]["Marketo Campaign name"] === "Kor-EXPO-Master" &&
+    map["EV-2025-07-KOR-MOFU-Core Unrelated"]["Mkt Reg."] === 100;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeExistingEventsRows_() 개별 필드 정책
+ * ==========================================================
+ */
+function testMergeExistingEventsRows() {
+
+  const a = {
+    "Lead Source Detail": "Kor-EXPO-Master",
+    "Event Date": "",
+    "Division": "Core",
+    "Mkt Reg.": 10,
+    "Success": 3,
+    "Notes": ""
+  };
+
+  const b = {
+    "Lead Source Detail": "EV-2026-04-KOR-MOFU-Core EXPO META",
+    "Event Date": "2026-04-15",
+    "Division": "",
+    "Mkt Reg.": 5,
+    "Success": 2,
+    "Notes": "META 메모"
+  };
+
+  const merged = mergeExistingEventsRows_(a, b);
+
+  const pass =
+    merged["Event Date"] === "2026-04-15" &&   // a가 공란이라 b 값 채택
+    merged["Division"] === "Core" &&            // a가 값 있어 유지
+    merged["Mkt Reg."] === 15 &&                // 합산
+    merged["Success"] === 5 &&                  // 합산
+    merged["Notes"] === "META 메모";             // a 공란 스킵, b만 채택
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
