@@ -1,3 +1,34 @@
+# Changelog — 2026-08-21
+
+## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정
+
+사용자가 Events_OPS에 "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for
+Webinar from FB LG Form" 류의 메인 프로그램 외 행이 SF Reg 0인 채 나타난다고 보고. 조사 결과
+원인 2건 발견·수정:
+
+1. **`EVENTS_004_Merge.js`(v1.14.0→v1.14.1)** — `createEventsKeyMap_()`가 기존 Events_OPS
+   시트에 남아있는 레거시 키(`stripRegistrationFormSuffix_()`/`stripLGSuffix_()` 도입
+   이전에 생성돼 접미사가 안 떼진 원문 키)를 정제 안 하고 있었음. EXPO 통합용
+   `applyEventsProgramKeyOverride_()`만 적용되던 걸 두 strip 함수도 같이 적용하도록 수정 —
+   처음엔 충돌(병합) 케이스만 고쳤다가(v1.14.0), 짝이 없는 단독 dirty 행은 "Marketo
+   Campaign name" 표시 컬럼이 여전히 정제 안 되는 걸 사용자가 rebuild 후 재확인해줘서
+   단독 경로도 마저 수정(v1.14.1).
+2. **`EVENTS_002_Engine.js`(v1.16.0, 진짜 근본 원인)** — `resolveMetaCampaignEventsKey_()`가
+   UTM_Program_Dictionary 경유 프로그램명에 `stripLGSuffix_()`/`stripRegistrationFormSuffix_()`를
+   적용 안 하고 있었음. 다른 모든 키 추출 경로(MTA/Leads/Deal/Kakao 집계)는 이미 정제하고
+   있었는데 Meta 경로만 빠져 있어, Meta 광고비(FB LG Form 캠페인)가 접미사 안 뗀 원문 키로
+   새 Engine 행을 만들고 그 행엔 Spend/Clicks만 있고 SF 지표는 전부 0으로 남는 게 진짜
+   원인이었음. 두 strip 함수 적용해 수정 — `runRefreshEventsEngine()` 재실행 후 Engine
+   Keys 358→355(3개 감소, 문제 행 정확히 소거) 확인.
+
+각 수정마다 TDD 테스트 추가/보강(`testCreateEventsKeyMapNormalizesLegacySuffixes`,
+`testResolveMetaCampaignEventsKey`, `testAggregateMetaMetricsByEventsProgram`) 및 사용자
+실제 rebuild로 최종 검증 완료. 정상 import 파이프라인에서는 `refreshEventsEngine_()`/
+`buildEventsOPS()` 둘 다 이미 자동 배선(MASTER_003/004_*.js, MASTER_002_PipelineAsync.js)돼
+있어, 향후 신규 리드/광고비도 별도 수동 조치 없이 자동으로 정제됨을 확인 — 오늘 두 함수를
+수동으로 순서대로 실행해야 했던 건 Apps Script 편집기에서 자동 파이프라인을 거치지 않고
+직접 실행했기 때문(정상 import 흐름과 무관).
+
 # Changelog — 2026-08-20
 
 ## S&M_REP 전주 대비 증감 하이라이트 추가

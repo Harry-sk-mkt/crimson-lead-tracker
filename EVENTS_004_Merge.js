@@ -9,9 +9,34 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.13.1
+ * v1.14.1
  *
  * Change Log
+ * v1.14.1 (2026-08-21)
+ * - **버그 수정 — v1.14.0 적용 후에도 짝(충돌)이 없는 단독 dirty 행은
+ *   "Marketo Campaign name" 표시 컬럼이 안 정제되고 남아있던 문제(사용자가
+ *   rebuild 후 재확인 중 발견)**. v1.14.0은 내부 매칭 키(`EVENTS.KEY`
+ *   ="Lead Source Detail")만 정제했는데, 화면에 보이는 "Marketo Campaign
+ *   name"은 같은 정규화 키로 병합되는 행이 2개 이상일 때만
+ *   `mergeExistingEventsRows_()` 안에서 정제되고 있었음 — 짝이 되는
+ *   "깨끗한" 행이 따로 없는 단독 dirty 행은 그 병합 경로 자체를 안 타서
+ *   `copyColumns_()`가 원문 그대로 복사해 계속 노출됨. `createEventsKeyMap_()`의
+ *   비병합(단독 발견) 분기에도 동일한 정제를 적용해 병합 여부와 무관하게
+ *   항상 정제되도록 수정. `testCreateEventsKeyMapNormalizesLegacySuffixes`에
+ *   단독 dirty 행("...Ivy Love LG")의 "Marketo Campaign name" 정제
+ *   검증 추가.
+ * v1.14.0 (2026-08-21)
+ * - **버그 수정 — `createEventsKeyMap_()`가 접미사 안 떼진 레거시 Events_OPS
+ *   키를 정제 안 하고 있었음(사용자 발견)**. `stripRegistrationFormSuffix_()`/
+ *   `stripLGSuffix_()`(EVENTS_002_Engine.js)가 Engine 집계 키 추출
+ *   단계에는 적용돼 있었지만 여기(기존 OPS 행 키 읽기)엔 빠져 있어,
+ *   두 함수 도입 이전에 생성된 "...| Registered for Webinar from FB LG
+ *   Form" 류 원문 키 행이 Engine의 정제된 키와 매칭 안 돼 SF Reg 0인
+ *   별도 "유령" 프로그램 행으로 영구히 남아있었음. `createEventsKeyMap_()`/
+ *   `mergeExistingEventsRows_()` 양쪽에 두 strip 함수를 EXPO override와
+ *   같은 순서로 적용해 다음 빌드부터 정제된 메인 프로그램 키로 자동
+ *   병합(숫자 합산)되도록 수정. 신규 테스트
+ *   `testCreateEventsKeyMapNormalizesLegacySuffixes` 추가.
  * v1.13.1 (2026-08-19)
  * - `testCreateEventsKeyMapMergesOverrideCollisions`/`testMergeExistingEventsRows`
  *   테스트 데이터 갱신 — CVR/Clicks가 `EVENTS_001_Config.js` v1.11.0에서
@@ -503,8 +528,8 @@ function testCompareByEventDateBlankLast() {
 
 /**
  * ==========================================================
- * Create Key Lookup Map (UTM Key 기준, EVENTS_PROGRAM_KEY_OVERRIDE 적용
- * 후 충돌 시 병합)
+ * Create Key Lookup Map (UTM Key 기준, 접미사 정규화 + EVENTS_PROGRAM_KEY_OVERRIDE
+ * 적용 후 충돌 시 병합)
  *
  * WHY
  * 51_Events_Engine.js(EVENTS_002_Engine.js) v1.12.0의
@@ -517,8 +542,19 @@ function testCompareByEventDateBlankLast() {
  * 유실 없이 한 행으로 만든다(사용자 확정, 2026-08-19 — 숫자 컬럼 합산,
  * Notes는 연결).
  *
+ * **2026-08-21 추가**: `stripRegistrationFormSuffix_()`/`stripLGSuffix_()`
+ * (EVENTS_002_Engine.js, 각각 2026-07-24/2026-08-06 도입)가 MTA_Master/
+ * Leads_Master/Deal Tracker 집계 키 추출 단계에는 이미 적용돼 있었지만,
+ * 여기(기존 Events_OPS 행 키 읽기)엔 빠져 있었음 — 그 결과 두 함수 도입
+ * 이전에 이미 생성된 Events_OPS 행("...| Registered for Webinar from FB
+ * LG Form" 등 접미사가 안 떼진 원문 키)이 Engine의 정제된 키와 영원히
+ * 매칭되지 않아 SF Reg 0인 별도 "유령" 프로그램 행으로 계속 남는 버그
+ * 발견(사용자 발견, 2026-08-21). EXPO override와 동일하게 여기서도
+ * 정제해 같은 키로 묶이도록 수정.
+ *
  * TEST
  * testCreateEventsKeyMapMergesOverrideCollisions 참고
+ * testCreateEventsKeyMapNormalizesLegacySuffixes 참고
  * ==========================================================
  */
 function createEventsKeyMap_(rows) {
@@ -531,9 +567,26 @@ function createEventsKeyMap_(rows) {
 
     if (!rawKey) return;
 
-    const key = applyEventsProgramKeyOverride_(rawKey);
+    const key = applyEventsProgramKeyOverride_(stripLGSuffix_(stripRegistrationFormSuffix_(rawKey)));
 
-    map[key] = map[key] ? mergeExistingEventsRows_(map[key], row) : row;
+    if (map[key]) {
+
+      map[key] = mergeExistingEventsRows_(map[key], row);
+
+    } else {
+
+      // 충돌(병합) 없이 단독으로 발견된 행도 "Marketo Campaign name" 표시
+      // 컬럼을 동일하게 정제 — mergeExistingEventsRows_()의 정규화 로직은
+      // 충돌 시에만 타므로, 단독 dirty 행은 별도로 처리해야 함(2026-08-21,
+      // 사용자가 rebuild 후에도 접미사 안 떼진 행이 남아있는 걸 발견해서
+      // 추가 수정).
+      const normalizedRow = Object.assign({}, row);
+      normalizedRow["Marketo Campaign name"] = applyEventsProgramKeyOverride_(
+        stripLGSuffix_(stripRegistrationFormSuffix_(row["Marketo Campaign name"]))
+      );
+      map[key] = normalizedRow;
+
+    }
 
   });
 
@@ -600,7 +653,9 @@ function mergeExistingEventsRows_(a, b) {
 
   });
 
-  merged["Marketo Campaign name"] = applyEventsProgramKeyOverride_(merged["Marketo Campaign name"]);
+  merged["Marketo Campaign name"] = applyEventsProgramKeyOverride_(
+    stripLGSuffix_(stripRegistrationFormSuffix_(merged["Marketo Campaign name"]))
+  );
 
   return merged;
 
@@ -646,6 +701,55 @@ function testCreateEventsKeyMapMergesOverrideCollisions() {
     map["Kor-EXPO-Master"]["Marketo Campaign name"] === "Kor-EXPO-Master" &&
     map["EV-2025-07-KOR-MOFU-Core Unrelated"]["Mkt Reg."] === 100;
 
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — createEventsKeyMap_()이 접미사 안 떼진 레거시 키를 정제된
+ * 메인 프로그램 키로 병합하는지 (2026-08-21 버그 수정 검증)
+ * ==========================================================
+ */
+function testCreateEventsKeyMapNormalizesLegacySuffixes() {
+
+  const rows = [
+    {
+      "Lead Source Detail": "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy",
+      "Marketo Campaign name": "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy",
+      "Mkt Reg.": 50,
+      "Success": 20
+    },
+    {
+      "Lead Source Detail": "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for Webinar from FB LG Form",
+      "Marketo Campaign name": "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for Webinar from FB LG Form",
+      "Mkt Reg.": 3,
+      "Success": 0
+    },
+    {
+      "Lead Source Detail": "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love LG",
+      "Marketo Campaign name": "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love LG",
+      "Mkt Reg.": 4,
+      "Success": 1
+    }
+  ];
+
+  const map = createEventsKeyMap_(rows);
+
+  const pass =
+    Object.keys(map).length === 2 &&
+    map["WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy"]["Mkt Reg."] === 53 &&
+    map["WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy"]["Success"] === 20 &&
+    map["WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy"]["Marketo Campaign name"] ===
+      "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy" &&
+    map["WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love"]["Mkt Reg."] === 4 &&
+    // 짝(충돌)이 없는 단독 dirty 행도 "Marketo Campaign name" 표시 컬럼이
+    // 정제돼야 함 — mergeExistingEventsRows_() 병합 경로를 안 타는 케이스
+    map["WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love"]["Marketo Campaign name"] ===
+      "WB-2026-05-KOR-MOFU-Core Profiles HYPS and Ivy Love";
+
+  Logger.log("Keys: " + JSON.stringify(Object.keys(map)));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

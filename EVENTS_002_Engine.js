@@ -15,9 +15,25 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.15.0
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-08-21)
+ * - **버그 수정 — `resolveMetaCampaignEventsKey_()`가 UTM_Program_Dictionary
+ *   경유 프로그램명에 `stripLGSuffix_()`/`stripRegistrationFormSuffix_()`를
+ *   적용 안 하고 있었음(사용자 발견)**. 이 프로젝트의 다른 모든 키 추출
+ *   경로(MTA/Leads/Deal/Kakao 집계, `aggregateMTATouchRecords_()` 등)는
+ *   전부 `stripLGSuffix_(stripRegistrationFormSuffix_(...))`를 거치는데,
+ *   Meta 경로만 `applyEventsProgramKeyOverride_(dictProgram)`만 적용하고
+ *   있어 — UTM_Program_Dictionary가 원문 그대로("...| Registered for
+ *   Webinar from FB LG Form") 채굴해둔 프로그램명이 그대로 Engine 키로
+ *   쓰이는 버그. Meta 지출(Spend/Clicks/Results)만 있고 SF 관련 지표는
+ *   전부 0인 "유령" 프로그램 행이 Events_OPS에 나타나던 근본 원인
+ *   (`EVENTS_004_Merge.js` v1.14.0/v1.14.1은 기존 OPS 시트 쪽만 정제했고,
+ *   이 Engine 쪽 근본 원인은 미발견 상태였음). 두 strip 함수를 다른
+ *   경로와 동일한 순서로 적용해 수정. `testResolveMetaCampaignEventsKey`/
+ *   `testAggregateMetaMetricsByEventsProgram`에 접미사 포함 dictProgram
+ *   케이스 추가.
  * v1.15.0 (2026-08-19)
  * - **Clicks/Results도 Meta에서 자동 집계(사용자 요청)**. `aggregateMetaSpendByEventsProgram_()`/
  *   `computeEventsMetaSpendAggregates_()`를 `aggregateMetaMetricsByEventsProgram_()`/
@@ -813,6 +829,17 @@ const META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE = {
  * 통과시켜(예: 딕셔너리가 EXPO 38개 변형 중 하나를 찾아내도) 최종
  * 통합 키로 정규화.
  *
+ * **2026-08-21 버그 수정**: UTM_Program_Dictionary는 MTA_Master/
+ * Leads_Master의 "Lead Source Detail"/"First Touch Detail" 원본값을
+ * 그대로 채굴하므로("| Registered for Webinar from FB LG Form" 접미사가
+ * 안 떼진 채) `dictProgram`에도 그 접미사가 그대로 남아있을 수 있음 —
+ * 다른 모든 키 추출 경로(MTA/Leads/Deal/Kakao 집계)는 전부
+ * `stripLGSuffix_(stripRegistrationFormSuffix_(...))`를 거치는데 여기만
+ * 빠져 있어, Meta 지출이 이 경로로 들어오면 접미사 안 뗀 원문이 그대로
+ * Engine 키가 돼 SF 지표는 0이고 Spend/Clicks만 있는 "유령" 프로그램
+ * 행이 Events_OPS에 나타나는 버그가 있었음(사용자 발견) — 동일한 순서로
+ * strip 적용해 수정.
+ *
  * INPUT
  * campaignName            : string
  * utmProgramDictionaryMap : Object  (readUtmProgramDictionaryMap_() 결과,
@@ -836,7 +863,7 @@ function resolveMetaCampaignEventsKey_(campaignName, utmProgramDictionaryMap) {
   if (manualKey) return manualKey;
 
   const dict = utmProgramDictionaryMap || {};
-  const dictProgram = dict[name.toLowerCase()];
+  const dictProgram = stripLGSuffix_(stripRegistrationFormSuffix_(dict[name.toLowerCase()]));
 
   if (!dictProgram || !isEligibleEventProgram_(dictProgram)) return null;
 
@@ -855,7 +882,8 @@ function testResolveMetaCampaignEventsKey() {
   const dict = {
     "kr_core_2026-05-30_some-other-expo-variant_lead": "EV-2026-05-KOR-MOFU-Core Expo Naver DA-General", // 딕셔너리 경유 → override로 재정규화
     "kr_core_2026-01-01_some-program_lead": "EV-2026-01-KOR-MOFU-Core Some Program",                     // 딕셔너리 경유, override 대상 아님
-    "kr_core_2026-01-01_wf-content_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook"                          // WF라 이벤트 부적격 — 제외돼야 함
+    "kr_core_2026-01-01_wf-content_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook",                         // WF라 이벤트 부적격 — 제외돼야 함
+    "kr_core_2026-08-01_fb-lg-form_lead": "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for Webinar from FB LG Form" // 접미사 안 떼진 딕셔너리 원본값 — strip 후 매칭돼야 함(2026-08-21 버그 수정)
   };
 
   const pass =
@@ -864,7 +892,9 @@ function testResolveMetaCampaignEventsKey() {
     resolveMetaCampaignEventsKey_("KR_core_2026-01-01_some-program_lead", dict) === "EV-2026-01-KOR-MOFU-Core Some Program" &&
     resolveMetaCampaignEventsKey_("KR_core_2026-01-01_wf-content_lead", dict) === null &&
     resolveMetaCampaignEventsKey_("KR_core_2026-01-01_unmatched_lead", dict) === null &&
-    resolveMetaCampaignEventsKey_("", dict) === null;
+    resolveMetaCampaignEventsKey_("", dict) === null &&
+    resolveMetaCampaignEventsKey_("KR_core_2026-08-01_fb-lg-form_lead", dict) ===
+      "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy";
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
