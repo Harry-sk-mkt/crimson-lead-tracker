@@ -8,9 +8,41 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.16.0
+ * v1.17.0
  *
  * Change Log
+ * v1.17.0 (2026-08-25)
+ * - **getBusinessSegment() — campaign 키 BUSINESS_SEGMENT_EXCEPTIONS에
+ *   "detail이 구체적 프로그램 신호를 주면 양보" 가드 추가**(사용자 확정).
+ *   원인: 이 예외들은 특정 리드/터치를 검토해 캠페인 코드 단위로 확정한
+ *   것인데, 같은 캠페인 코드가 실제로는 여러 서로 다른 프로그램(Webinar
+ *   등록 페이지 등)으로 유입되는 공용 캠페인이라, 그 코드를 공유하는 다른
+ *   프로그램 터치까지 전부 예외값으로 덮어써버림 — Content_OPS에 명백한
+ *   Webinar 프로그램(예: "WB-2026-02-...Application Tips...")이 소수
+ *   터치(1~2건) 때문에 Content로 오분류돼 나타나는 문제로 발견
+ *   (TEMPQA_028_ContentSegmentLeakTrace.js, 2026-08-25 세션). 신규 순수
+ *   헬퍼 `detailIndicatesSpecificProgram_()`(Seminar/Webinar/BOFU 블록의
+ *   detail 전용 조건만 미러링, campaign 조건은 제외)로 "이 터치의 detail
+ *   자체가 구체적 프로그램 신호를 주는지" 판정 — campaign 예외는
+ *   `BUSINESS_SEGMENT_EXCEPTIONS[campaign] && !detailIndicatesSpecificProgram_(detail)`
+ *   일 때만 적용(위치는 원래 최우선 그대로 유지, detail 예외 바로 앞).
+ *   ⚠️ campaign 자체에서만 신호가 오는 경우(예: "NZ_core_2021-06-10_email-
+ *   au-webinar-research" — campaign에 "webinar"가 들어있지만 실제로는
+ *   Content로 확정됐던 케이스)는 이 가드에 안 걸림 — 애초에 그 campaign
+ *   키워드 오탐을 바로잡으려고 예외가 만들어진 것이므로 campaign 신호만
+ *   으로는 예외를 우회하지 않도록 detail 전용으로 한정. 회귀 테스트
+ *   testGetBusinessSegmentCampaignExceptionYieldsToDetailSignal()/
+ *   testDetailIndicatesSpecificProgram() 신규,
+ *   testGetBusinessSegmentHardcodedExceptions() 기존 33개 케이스 전부
+ *   결과 불변 확인. **부수 발견(이번 변경과 무관, 별도 확인 필요)**:
+ *   Node vm으로 전체 테스트 스위트 실행 중 leadSource="Paid Social"
+ *   관련 3개 테스트(testGetBusinessSegmentContentBeatsGenericContactForm/
+ *   testGetBusinessSegmentSearchCampaignSignals/
+ *   testGetBusinessSegmentContactFallbackToBOFU)가 이번 변경 이전
+ *   커밋에서도 이미 FAIL 상태였음이 확인됨(SEARCH_CATCHALL_LEAD_SOURCE_
+ *   OVERRIDES["paid social"]="Other"가 "_contact"/consult 기반 BOFU/Search
+ *   fallback보다 먼저 체크돼 기대값과 다르게 "Other"가 나옴) — 이번
+ *   세션 범위 밖이라 손대지 않음, 임의로 처리하지 말 것.
  * v1.16.0 (2026-08-09)
  * - `BUSINESS_SEGMENT_EXCEPTIONS`에 temp_QA "Other (룰상으로도 Other)" 육안
  *   검토 배치 8건 추가 — 키워드로 일반화 불가능해 사용자가 개별 확정
@@ -930,6 +962,69 @@ const SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES = {
  * @param {string} [category]  First Lead Source Category(Leads)/Lead Source Category(MTA) — 2026-07-25 추가, N/A 판정 전용
  * @return {string}
  */
+
+
+/**
+ * ==========================================================
+ * Detail Indicates Specific Program (순수 함수, 2026-08-25)
+ *
+ * WHY
+ * BUSINESS_SEGMENT_EXCEPTIONS의 campaign 키 예외는 여러 프로그램에 공용으로
+ * 쓰이는 캠페인 코드에 걸릴 수 있어, detail(구체적 프로그램명)이 이미
+ * Seminar/Webinar/BOFU 룰에 명확히 걸리면 그 신호를 우선해야 함
+ * (getBusinessSegment() campaign 예외 가드용). Seminar/Webinar/BOFU 블록의
+ * detail 관련 조건만 그대로 미러링 — campaign 관련 조건은 포함하지 않음
+ * (campaign 키워드 오탐을 바로잡으려고 만들어진 예외도 있어, campaign
+ * 신호만으로 예외를 우회하면 안 됨).
+ *
+ * INPUT
+ * detail : string  이미 소문자로 변환된 값(getBusinessSegment() 내부 호출 기준)
+ *
+ * TEST
+ * testDetailIndicatesSpecificProgram 참고
+ * ==========================================================
+ */
+function detailIndicatesSpecificProgram_(detail) {
+
+  return (
+    detail.includes("ev-") ||
+    detail.includes("expo") ||
+    detail.includes("summit") ||
+    detail.includes("live event") ||
+    detail.includes("seminar") ||
+    detail.includes("세미나") ||
+    detail.includes("wb-") ||
+    detail.includes("webinar") ||
+    detail.includes("book a consult") ||
+    detail.includes("open day") ||
+    detail.includes("bofu") ||
+    detail.includes("ptc") ||
+    detail.includes("consultation request") ||
+    detail.includes("consult page")
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — detailIndicatesSpecificProgram_()
+ * ==========================================================
+ */
+function testDetailIndicatesSpecificProgram(){
+
+  const pass =
+    detailIndicatesSpecificProgram_("wb-2026-02-kor-mofu-core application tips") === true &&
+    detailIndicatesSpecificProgram_("ev-2025-10-kor-mofu-core capstone") === true &&
+    detailIndicatesSpecificProgram_("wf-2022-06-kor-bofu-core cri ebook") === true && // "bofu" 포함
+    detailIndicatesSpecificProgram_("wf-2025-03-kor-mofu-core hyperlocalized ecl ebook") === false &&
+    detailIndicatesSpecificProgram_("") === false;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
 function getBusinessSegment(
   campaign,
   detail,
@@ -943,12 +1038,37 @@ function getBusinessSegment(
   category = String(category || "").toLowerCase();
 
   //----------------------------------------------------------
-  // Hardcoded Exceptions (최우선 — 아래 일반 룰보다 먼저 확인)
+  // Hardcoded Exceptions — campaign 키 (detail이 더 구체적인 프로그램
+  // 신호를 주면 양보, 2026-08-25)
+  //
+  // WHY
+  // campaign 키 예외(예: "kr_core_2025_01_15_sitelink-ext-
+  // bookconsultworkshops_lead" → Content)는 특정 리드/터치를 검토해 확정한
+  // 것인데, 같은 캠페인 코드가 여러 서로 다른 프로그램(Seminar/Webinar/BOFU
+  // 등록 페이지)으로 유입되는 공용 캠페인이라 동일 campaign 값을 가진 다른
+  // 터치까지 전부 그 예외값으로 덮어쓰는 문제가 있었음(사용자 발견,
+  // 2026-08-25 — Content_OPS에 "WB-2026-02-..." 같은 명백한 Webinar
+  // 프로그램이 이 예외 때문에 Content로 오분류돼 나타남). 사용자 확정:
+  // 이 터치의 detail이 Seminar/Webinar/BOFU 룰에 명확히 걸리면 그 신호가
+  // campaign 예외보다 우선해야 함 — detailIndicatesSpecificProgram_()로
+  // "detail 자체가 구체적인 프로그램 신호를 주는 경우"만 양보하도록 가드.
+  // ⚠️ campaign에서만 신호가 오는 경우(예: "NZ_core_2021-06-10_email-au-
+  // webinar-research" — campaign 자체에 "webinar"가 들어있지만 실제로는
+  // Content로 확정됐던 케이스)는 이 가드에 안 걸림 — 애초에 그 campaign
+  // 키워드 오탐을 바로잡으려고 예외가 만들어진 것이므로 그대로 예외값
+  // 유지(회귀 테스트 testGetBusinessSegmentHardcodedExceptions() 참고).
   //----------------------------------------------------------
 
-  if (BUSINESS_SEGMENT_EXCEPTIONS[campaign]) {
+  if (
+    BUSINESS_SEGMENT_EXCEPTIONS[campaign] &&
+    !detailIndicatesSpecificProgram_(detail)
+  ) {
     return BUSINESS_SEGMENT_EXCEPTIONS[campaign];
   }
+
+  //----------------------------------------------------------
+  // Hardcoded Exceptions — detail 키
+  //----------------------------------------------------------
 
   if (BUSINESS_SEGMENT_EXCEPTIONS[detail]) {
     return BUSINESS_SEGMENT_EXCEPTIONS[detail];
@@ -1751,6 +1871,75 @@ function testGetBusinessSegmentHardcodedExceptions(){
     ["KR_core_2023-12-20_2024-early-admissions-result-analysis", "", "", "Webinar"],
     ["KR_core_2023-07-22_major-strategy-part-2-humanity-and-liberal-arts-kuk", "", "", "Webinar"],
     ["KR_core_2021-09-01_contactus", "", "", "Other"] // 재확인(2026-08-09) — 로그 대조 없이 판단한 "bofu"보다 예전 로그 대조 배치("Other")가 신뢰도 높음, 값 유지
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() campaign 키 예외가 detail의 명확한
+ * Seminar/Webinar/BOFU 신호에 양보하는지 (2026-08-25)
+ *
+ * WHY
+ * BUSINESS_SEGMENT_EXCEPTIONS의 campaign 키 예외는 특정 캠페인 코드
+ * 하나로 확정되는데, 그 캠페인 코드가 실제로는 여러 프로그램에 공용으로
+ * 쓰이는 경우(예: "kr_core_2025_01_15_sitelink-ext-bookconsultworkshops_lead")
+ * 그 코드를 공유하는 다른 프로그램(예: 명백한 Webinar 등록 페이지) 터치
+ * 까지 전부 예외값(Content)으로 잘못 덮어써지는 문제 발견(사용자,
+ * Content_OPS에서 발견). 이 테스트는 (1) detail이 명확한 Webinar/Seminar/
+ * BOFU 신호를 주면 그게 이기고, (2) detail에 신호가 없으면(원래 의도된
+ * 케이스) campaign 예외값이 그대로 적용되는지 둘 다 확인.
+ * ==========================================================
+ */
+function testGetBusinessSegmentCampaignExceptionYieldsToDetailSignal(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected, 설명]
+
+    // detail이 명백한 Webinar 신호("wb-") — campaign 예외(Content)보다 우선해야 함
+    [
+      "kr_core_2025_01_15_sitelink-ext-bookconsultworkshops_lead",
+      "WB-2026-02-KOR-MOFU-Core Application Tips and Timeline for 2026 Applicants",
+      "Paid Search", "Webinar"
+    ],
+
+    // detail에 신호 없음(원래 예외가 의도한 케이스) — campaign 예외(Content) 그대로
+    [
+      "kr_core_2025_01_15_sitelink-ext-bookconsultworkshops_lead",
+      "", "Paid Search", "Content"
+    ],
+
+    // 다른 campaign 예외 케이스 — detail이 명백한 Seminar 신호("ev-")
+    [
+      "kr_core_2022-10-_us-faq-with-fao",
+      "EV-2025-10-KOR-MOFU-Core 3 Successful Capstone Projects, Research, and Profiles",
+      "Organic Content", "Seminar"
+    ],
+
+    // 같은 campaign 예외, detail 신호 없음 — 예외값(Content) 그대로
+    [
+      "kr_core_2022-10-_us-faq-with-fao",
+      "", "Organic Content", "Content"
+    ]
   ];
 
   let pass = true;
