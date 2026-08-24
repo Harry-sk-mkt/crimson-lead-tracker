@@ -329,5 +329,8 @@
     확정, 코드 버그 아님. **해결책**: 2026-08-17(최소 하루, 여유 있게 8/16~08/18 권장)을
     다시 export해 "📥 Update"(Leads)로 재업로드 — 2026-08-25에 추가된 Raw 완전동일 중복
     필터(`IMPORT_008_RawDeduplicator.js`) 덕분에 8/18~23 등 기존에 이미 들어간 행과 겹쳐도
-    자동으로 skip되어 안전. **다음 세션에서 재업로드 결과(12건 신규 반영 확인) 및 S&M_REP/
-    ACQ_REP 등 재Generate로 최종 검증할 것.**
+    자동으로 skip되어 안전. **✅ 재업로드 및 검증 완료(2026-08-25)** — 2026-08-17 포함 범위
+    재export→재업로드, 파이프라인 전 단계(Master Update~Target_REP) DONE 확인 후
+    `runCompareSMRepNewP1WeekAgainstSalesforce()` 재실행 결과 **75건 전체 정상 일치, 누락
+    0건**으로 완전히 해소. S&M_REP 화면 재Generate로 Event/BOFU/Content/Organic 30/5/35/3
+    최종 확인은 사용자 진행.
