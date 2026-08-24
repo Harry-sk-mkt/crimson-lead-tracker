@@ -21,9 +21,19 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-25)
+ * - runDumpContentOPSKeysWithLiveStatus() 신규 — TEMPQA_028(원본 값 완전
+ *   일치 → stripRegistrationFormSuffix_() 적용까지 두 차례 수정)로도
+ *   "WB-2026-07-KOR-MOFU-Core EC for Each Year of High School" 등 다수
+ *   프로그램이 Content 오염 0%(전부 정상 Webinar/Seminar)로 나오는데도
+ *   사용자가 Content_OPS 화면에서는 여전히 보인다고 보고 — 사용자가 붙여넣은
+ *   목록이 실제 현재 시트 상태와 다를 가능성(브라우저 캐시/미갱신 등)을
+ *   배제하기 위해, Content_OPS의 현재 전체 키 목록과 Content_Engine
+ *   생존 여부(live/dead)를 라이브로 직접 덤프하는 진단 함수 추가 — 사용자
+ *   추정에 의존하지 않고 시트 자체에서 그라운드 트루스 확인.
  * v1.2.0 (2026-08-25)
  * - runAuditContentSegmentDeadKeys()/runDeleteDeadContentOPSRows() 신규 —
  *   Search_OPS의 "죽은 키" 문제(SEARCH_002_Engine.js
@@ -826,6 +836,72 @@ function runDeleteDeadContentOPSRows() {
     "Content_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - CONTENT.ROWS.DATA_START + 1)
   );
 
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Dump Content_OPS Keys With Live Status (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * TEMPQA_028_ContentSegmentLeakTrace.js로도 다수 프로그램이 Content 오염
+ * 0%(전부 정상 Webinar/Seminar)로 확인됐는데 사용자는 Content_OPS 화면에서
+ * 여전히 보인다고 보고 — 채팅으로 붙여넣은 목록이 실제 현재 시트 상태와
+ * 다를 가능성(브라우저 미갱신/캐시 등)을 배제하기 위해, Content_OPS
+ * 시트를 지금 이 순간 직접 읽어 전체 키 목록과 Content_Engine 생존 여부
+ * (live/dead)를 그대로 덤프한다. 사용자 추정에 의존하지 않는 그라운드
+ * 트루스 확인용.
+ * ==========================================================
+ */
+function runDumpContentOPSKeysWithLiveStatus() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONTENT.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(CONTENT.SHEET.OPS);
+
+  Logger.log("======================================");
+  Logger.log("Dump Content_OPS Keys With Live Status");
+  Logger.log("======================================");
+
+  if (!opsSheet) {
+    Logger.log(CONTENT.SHEET.OPS + " sheet not found.");
+    return;
+  }
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r[CONTENT.KEY] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  const opsRows = readContentOPS_();
+
+  Logger.log("Content_Engine 현재 live 키 수 : " + Object.keys(liveKeys).length);
+  Logger.log("Content_OPS 현재 행 수(readContentOPS_() 기준) : " + opsRows.length);
+  Logger.log("");
+  Logger.log("---- 전체 목록 (LIVE/DEAD) ----");
+
+  opsRows.forEach(function (row) {
+
+    const key = String(row[CONTENT.KEY] || "").trim();
+    if (!key) return;
+
+    const status = liveKeys[key.toLowerCase()] ? "LIVE" : "DEAD";
+
+    Logger.log(status + "\t" + key);
+
+  });
+
+  Logger.log("");
+  Logger.log("======================================");
+  Logger.log("Dump Completed");
   Logger.log("======================================");
 
 }
