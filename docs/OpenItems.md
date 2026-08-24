@@ -310,3 +310,22 @@
     `findExactDuplicateLeadRows_()`(`OPS_006_QA.js`)로 8/17주(Create Date) 관련 Lead ID 중
     완전동일 중복이 있는지 확인, (3) 중복이 원인이면 20번 항목과 동일하게
     `runAutoDeleteExactDuplicateLeadRows()` → `buildLeadsOPS()` → S&M_REP 재Generate로 검증.
+    **✅ 근본 원인 확정(2026-08-25)** — 위 (2)/(3) 완전동일 중복 가설은 이번 세션에
+    `runAutoDeleteExactDuplicateLeadRows()` 재실행 결과 Leads_Master 완전동일 중복 **0건**으로
+    기각. (1) Salesforce 집계 기준도 확인 완료 — 사용자가 UTM Campaign/Detail 키워드로 직접
+    판단(우리 `getBusinessSegment()`와 사실상 동일 기준), 분류 방식 차이도 아님. **결정적 증거**:
+    사용자가 8/17~08/23주 Salesforce New P1 전체 Lead ID 75건을 직접 제공, `TEMPQA_027_
+    SMRepNewP1WeekSalesforceDiff.js`(`runCompareSMRepNewP1WeekAgainstSalesforce()`)로
+    Leads_OPS/Leads_Master와 Lead ID 단위 1:1 대조한 결과: **63건 정상 일치, "다른 주 배정"
+    0건, "P1 아님" 0건, mergeOPS() earliest-wins로 배제된 케이스(Leads_Master엔 있는데
+    Leads_OPS엔 없음) 0건 — 누락 12건 전부 Leads_Master에도 존재 자체가 없음**(Import 자체가
+    안 됨). 즉 집계 로직/타임존/dedup 버그가 전혀 아니라 **순수 Import 공백(gap)** — 이 12개
+    Lead ID(`00QRC00001LKLba/LKZkz/LKzUA/LLlov/LMiAf/LMmnm/LNBZF/LNsJH/LOgL2/LPt6M/LR4R8/
+    LRpt3`)가 애초에 어느 주간 CSV export에도 포함된 적이 없음. **가설(미확정)**: Salesforce
+    ID 순서상 이 12건이 8/17주 안에서 상대적으로 이른 시점 생성 리드 쪽에 몰려있어, 지난주
+    export 마감 시점과 이번주 export 시작 시점 사이에 좁은 날짜 공백이 있었을 가능성 — 확정
+    하려면 이 12건의 실제 Salesforce Create Date 확인 필요(다음 세션 진행). **재발 방지 겸
+    해결책**: 이 12건의 Create Date 범위를 다시 export해 재업로드하면 됨 — 2026-08-25에
+    추가된 Raw 완전동일 중복 필터(`IMPORT_008_RawDeduplicator.js`) 덕분에 기존 export와 날짜
+    범위가 겹쳐도 이미 들어간 행은 자동으로 skip되어 안전하게 재업로드 가능. **임의로 재
+    export 진행하지 말 것** — 사용자가 12건의 정확한 Create Date를 확인해 범위를 정한 뒤 진행.
