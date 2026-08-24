@@ -334,3 +334,26 @@
     `runCompareSMRepNewP1WeekAgainstSalesforce()` 재실행 결과 **75건 전체 정상 일치, 누락
     0건**으로 완전히 해소. S&M_REP 화면 재Generate로 Event/BOFU/Content/Organic 30/5/35/3
     최종 확인은 사용자 진행.
+28. **Events_OPS 기존 데이터 오염 여부 미확인(2026-08-25)** — Content_OPS에서 발견된
+    "Deal Tracker 집계 Business Segment 필터 누락" 버그(`computeContentDealAggregates_()`)와
+    동일한 패턴이 `computeEventsDealAggregates_()`(`EVENTS_002_Engine.js`)에도 있어 코드는
+    함께 수정 완료(v1.17.0, `EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1`이면 제외).
+    다만 **Content_OPS처럼 이미 오염된 행이 Events_OPS에 쌓여있는지는 아직 감사 전** —
+    Content용으로 만든 `runAuditContentSegmentDeadKeys()`/`runDeleteDeadContentOPSRows()`
+    (`CONTENT_002_Engine.js`)와 동일한 패턴의 Events 전용 함수가 아직 없음. 다음 세션에
+    필요 시 Events 버전을 만들어 확인할 것 — 임의로 처리하지 말 것.
+29. **`getBusinessSegment()` leadSource="Paid Social" 관련 회귀 테스트 3개 — 이번 변경과
+    무관하게 이미 실패 상태였음이 발견됨(2026-08-25), 원인/해결 미착수** —
+    `testGetBusinessSegmentContentBeatsGenericContactForm()`/
+    `testGetBusinessSegmentSearchCampaignSignals()`/
+    `testGetBusinessSegmentContactFallbackToBOFU()`(`UTIL_001_TransformHelper.js`) 3개가
+    campaign 예외 가드 수정(v1.17.0) 검증 중 Node vm으로 전체 테스트 스위트를 돌려보다가
+    발견됨 — `git show HEAD:UTIL_001_TransformHelper.js`(이번 세션 변경 전 커밋)로도 동일하게
+    FAIL 확인, 이번 세션 변경과 무관한 기존 버그. **원인(가설)**: leadSource가 "Paid Social"인
+    경우 `SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES["paid social"] = "Other"`가 campaign의
+    "_contact"/"consult" 기반 BOFU/Search fallback(leadSource로 최종 판별하는 블록)보다
+    먼저 체크되어, 테스트가 기대하는 "BOFU"/"Search" 대신 "Other"가 반환됨 — 두 블록의
+    의도된 우선순위가 서로 다른 세션에서 각각 확정된 뒤 조율 안 된 것으로 추정(미확정).
+    실제 라이브 데이터에 영향 있는지(Leads_Master/MTA_Master의 Paid Social 리드가 실제로
+    Other로 잘못 떨어지고 있는지) 아직 확인 안 됨 — 다음 세션에 실측 확인 후 처리 방향
+    결정할 것, 임의로 처리하지 말 것.

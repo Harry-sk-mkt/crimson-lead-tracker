@@ -1,4 +1,68 @@
-# Changelog — 2026-08-24
+# Changelog — 2026-08-25
+
+## Import 단계 완전 동일 Raw 중복 필터링 신규 도입
+
+Master Build 단계 완전동일 중복 정리(`OPS_006_QA.js`)가 데이터가 쌓일수록 무거워진다는
+지적에 따라, byte-identical 행은 Raw에 쓰기 전 걸러내도록 변경. `IMPORT_008_
+RawDeduplicator.js`(신규, 순수 구조적 비교 — 어떤 필드가 snapshot이라 제외되는지 같은
+business logic 없음) + `IMPORT_005_RawWriter.js` v4.1.0/`IMPORT_001_Import.js` v3.8.0 수정.
+"같은 Lead ID/터치인데 일부 필드만 다른" 경우를 하나로 합치는 판단(progression tie-break 등)은
+의도적으로 범위 밖 — 여전히 Master Build 단계(`OPS_006_QA.js`) 책임.
+
+이 김에 Master 단계 완전동일 중복 정리 함수(`runAutoDeleteExactDuplicateLeadRows()`/
+`runAutoDeleteExactDuplicateTouchRows()`)를 지금 상태로 재실행 — 둘 다 0건(이미 파이프라인
+tail로 계속 정리되고 있던 상태 확인).
+
+## S&M_REP 8/17주 New P1 불일치 — 근본 원인 확정 및 해결(`docs/OpenItems.md` #27)
+
+전날 세션에서 타임존 가설이 기각된 채 미해결로 남아있던 건. 사용자가 8/17~08/23주 Salesforce
+New P1 전체 Lead ID 75건 + Create Date를 직접 제공, `TEMPQA_027_
+SMRepNewP1WeekSalesforceDiff.js`로 Leads_OPS/Leads_Master와 1:1 대조한 결과 **63건 정상
+일치, 완전동일 중복/mergeOPS earliest-wins 등 기존 유력 가설 전부 기각 — 누락 12건 전부
+Leads_Master에도 존재 자체가 없음**(Import 자체가 안 됨). 12건 전부 Create Date =
+2026-08-17(그 주 월요일, 첫날)로 확정 — 그 주 export가 8/17을 빼고 8/18부터 시작됐던 순수
+Import 공백. 사용자가 해당 범위 재export→재업로드(위 Raw 중복 필터 덕분에 기존 데이터와
+겹쳐도 안전) 후 재대조 결과 **75건 전체 정상 일치**로 완전히 해소.
+
+## Content_OPS 프로그램 오염 근본 원인 규명 및 수정 (Deal Tracker 집계 Segment 필터 누락)
+
+사용자가 Content_OPS에 "ebook이 아닌" WB-/EV-(Webinar/Seminar) 프로그램 150여 건이 섞여
+있음을 발견. 조사 과정:
+1. **1차 가설(기각)** — Business Segment 재분류 규칙이 개선되기 전 stale 데이터. Node vm으로
+   `getBusinessSegment()`를 직접 실행해 반박(현재 코드로는 대부분 정확히 Webinar/Seminar로
+   분류됨) — 그래도 Full Rebuild(`rebuildLeadsMaster()`/`rebuildMTAMaster()`/
+   `buildLeadsOPS()`) 1차 진행, Leads_Master 완전동일 중복 937건/MTA_Master 1,855건 추가
+   정리(2026-08-20 이후 재발한 것으로 보임 — 별도 조치 없이 이번 Full Rebuild에 포함돼 해소).
+2. **2차 근본 원인(확정)** — `computeContentDealAggregates_()`(`CONTENT_002_Engine.js`)가
+   Deal Tracker 집계 시 Business Segment 필터가 아예 없어서, 어떤 세그먼트로든 귀속된 딜이
+   있으면 프로그램명(`leadSourceDetail`) 문자열만 일치해도 Content_Engine의 살아있는 키로
+   잘못 포함되고 있었음 — `BOFU_002_Engine.js`는 이미 `row.businessSegment` 필터가 있어
+   문제 없었음(대조군으로 발견). `computeEventsDealAggregates_()`(`EVENTS_002_Engine.js`)에도
+   동일 버그 확인, 함께 수정(`EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1`이면 제외).
+   회귀 테스트 갱신, Node vm/Apps Script 양쪽 검증.
+3. **3차 잔여 원인(확정)** — 위 수정 후에도 9개 프로그램이 여전히 Content로 남음.
+   `TEMPQA_028_ContentSegmentLeakTrace.js`로 추적한 결과 `BUSINESS_SEGMENT_EXCEPTIONS`의
+   campaign 키 예외(예: `kr_core_2025_01_15_sitelink-ext-bookconsultworkshops_lead` →
+   Content)가 실제로는 여러 다른 프로그램(Webinar 등록 페이지 등)에 공용으로 쓰이는 캠페인
+   코드라, 그 코드를 공유하는 소수 터치(프로그램당 1~2건)까지 전부 Content로 덮어쓰고
+   있었음. `getBusinessSegment()`(`UTIL_001_TransformHelper.js` v1.17.0)에 신규 헬퍼
+   `detailIndicatesSpecificProgram_()`로 "이 터치의 detail이 Seminar/Webinar/BOFU 신호를
+   명확히 주면 campaign 예외보다 우선" 가드 추가 — campaign 자체의 키워드 오탐을 바로잡던
+   기존 예외 케이스(`NZ_core_..._webinar-research` 등)는 영향 없음. 회귀 테스트 33개+4개
+   전부 Node vm으로 PASS 확인.
+
+**Content_OPS 정리**: 위 수정들을 반영하려 Full Rebuild 2회 진행(Deal 필터 수정 후 1회,
+campaign 예외 가드 수정 후 1회) — 매번 `runAuditContentSegmentDeadKeys()`/
+`runDeleteDeadContentOPSRowsForce()`(신규, `force` 파라미터로 수동 데이터 있어도 삭제 —
+사용자가 명시적으로 "안 보이게 제거" 요청)로 정리. 최종 Content_OPS 301행 → 157행(Deal
+필터 수정) → 144행(campaign 예외 가드 수정, 13건 추가 정리).
+
+**미해결로 남긴 항목(`docs/OpenItems.md` #28/#29)**: (1) Events_OPS도 동일 버그의 영향을
+받았을 가능성 있으나 아직 감사 전(Content용 audit/delete 함수를 Events에도 만들어야 함).
+(2) 검증 중 발견한 무관 사전 버그 — `leadSource="Paid Social"` 관련 회귀 테스트 3개가 이번
+세션 변경 이전부터 이미 실패 상태였음(`git show HEAD`로 확인) — 원인 미착수.
+
+
 
 ## S&M_REP — Leads breakdown New P1 필터 추가, Salesforce 대조 불일치 조사(진행 중)
 
