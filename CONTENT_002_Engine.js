@@ -21,9 +21,18 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-25)
+ * - runDeleteDeadContentOPSRows()에 `force`(기본 false) 파라미터 추가 —
+ *   Deal 필터 버그로 잘못 살아있었던 죽은 키 144건이 전부 수동 컬럼(Off/On
+ *   등)에 실제 값이 있어 기존 안전장치로는 하나도 자동 삭제가 안 됐음.
+ *   사용자가 "Content_OPS에서 안 보이게 제거"를 명시적으로 요청 —
+ *   `force=true`로 호출하면 수동 데이터 여부와 무관하게 죽은 키를 전부
+ *   삭제(그 행의 PIC/TotalReg./Off-On 등 수동 데이터도 함께 영구 삭제됨).
+ *   기본값(false)은 기존 동작 그대로 유지 — 안전장치가 필요 없다고
+ *   명시적으로 확인한 경우에만 우회.
  * v1.4.0 (2026-08-25)
  * - **근본 원인 확정·수정**: runDumpContentOPSKeysWithLiveStatus()로 확인한
  *   결과 Content_OPS에 남아있던 Webinar/Seminar 프로그램들은 Business
@@ -745,7 +754,7 @@ function runAuditContentSegmentDeadKeys() {
  * 확인 후 별도 처리.
  * ==========================================================
  */
-function runDeleteDeadContentOPSRows() {
+function runDeleteDeadContentOPSRows(force) {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const engineSheet = ss.getSheetByName(CONTENT.SHEET.ENGINE);
@@ -809,7 +818,7 @@ function runDeleteDeadContentOPSRows() {
       hasManualData = true;
     }
 
-    if (hasManualData) {
+    if (hasManualData && !force) {
       skippedWithManualData.push(key);
       continue;
     }
@@ -819,7 +828,7 @@ function runDeleteDeadContentOPSRows() {
   }
 
   Logger.log("======================================");
-  Logger.log("Delete Dead Content_OPS Rows");
+  Logger.log("Delete Dead Content_OPS Rows" + (force ? " (force=true — 수동 데이터 있어도 삭제)" : ""));
   Logger.log("======================================");
   Logger.log("Content_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - CONTENT.ROWS.DATA_START + 1));
 
@@ -833,12 +842,12 @@ function runDeleteDeadContentOPSRows() {
 
   if (rowsToDelete.length === 0) {
     Logger.log("");
-    Logger.log("삭제할(완전 공백) 죽은 키 없음.");
+    Logger.log("삭제할 죽은 키 없음.");
     return;
   }
 
   Logger.log("");
-  Logger.log("삭제 대상 행 수(완전 공백): " + rowsToDelete.length);
+  Logger.log("삭제 대상 행 수" + (force ? "(force — 수동 데이터 포함)" : "(완전 공백)") + " : " + rowsToDelete.length);
   Logger.log("삭제 대상 시트 행 번호(오름차순): " + rowsToDelete.join(", "));
 
   rowsToDelete
@@ -855,6 +864,28 @@ function runDeleteDeadContentOPSRows() {
   );
 
   Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Delete Dead Content_OPS Rows — Force (수동 실행 전용 wrapper)
+ *
+ * WHY
+ * Apps Script 편집기의 Run 버튼은 함수에 인자를 넘길 수 없어
+ * runDeleteDeadContentOPSRows(true)를 직접 실행할 방법이 없음 — 사용자가
+ * "Content_OPS에서 안 보이게 제거" 요청(2026-08-25)한 죽은 키 144건(전부
+ * 수동 데이터 있음, computeContentDealAggregates_() Segment 필터 버그로
+ * 잘못 살아있었던 것들)을 삭제하기 위한 인자 없는 진입점.
+ *
+ * ⚠️ 수동 컬럼(PIC/TotalReg./Off-On 등) 데이터가 있어도 전부 삭제한다 —
+ * 되돌릴 수 없음.
+ * ==========================================================
+ */
+function runDeleteDeadContentOPSRowsForce() {
+
+  runDeleteDeadContentOPSRows(true);
 
 }
 
