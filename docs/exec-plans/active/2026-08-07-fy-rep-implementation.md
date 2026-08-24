@@ -200,7 +200,28 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
       그 FY만 자동으로 빈 값 처리(에러 없이 안전), ACQ/Pipeline/Revenue는
       Leads_OPS/Deal Tracker 라이브 데이터라 FY27도 바로 정상 표시될 것으로
       예상. 유닛 테스트 1개 추가 Node로 PASS 확인.
-      재실행 결과 아직 미확인, 완료로 간주하지 말 것.
+      **10차(2026-08-20, 이후 세션 미커밋 상태로 중단됐다가 2026-08-24 재개)**:
+      "전체 구조를 바꾸려고 해" — 4섹션 체크박스/지표 드롭다운/세그먼트·채널별
+      컬럼/FY 블록 세로 반복 전면 폐기, **FY×Month 단일 플랫 테이블**로 교체
+      (Control 1행 + SUBTOTAL 3행 + 헤더 4행 + 데이터, `FYREP_002_Report.js`/
+      `FYREP_003_Styles.js` v4.x). Target 컬럼(회사 전체)도 perfTrackerByFY
+      Quarterly Summary → `Target_Engine`의 "Team Korea" 월별 회사 전체
+      Revenue Target(22행 × VAT)으로 전환(`FYREP_001_Engine.js` v1.6.0). 이
+      상태로 실 시트 검증 전 세션이 끊겨 미커밋으로 남아있었음.
+      **11차(2026-08-24)**: 재개해 `runInspectFYRepComputedMarketingRows()`로
+      실측 — Spent $0 문제는 이미 재현 안 됨(72행 중 65행 정상). 대신 10차의
+      Target 값이 사용자 기대치보다 낮게 나오는 걸 발견 — 22행 "Marketing
+      Revenue Target"이 Referral/Upsell **제외** 마케팅 기여분만 담고 있어
+      FY_REP의 Total Rev(Referral/Upsell 포함 8개 버킷 합)와 범위가 안 맞았음
+      (사용자 실측 확인). Target_Engine에 신규 24행 "Total Revenue Target"
+      (VAT/Referral/Upsell 전부 포함, 사용자가 다른 시트에서 확인한 FY27
+      실측치를 그대로 수동 입력)을 추가해 FY_REP Target 소스를 이 행으로
+      교체, VAT 배수 곱셈 제거(`CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS.
+      TOTAL_REVENUE_TARGET_ROW` 신규, `TARGET_001_Engine.js` v1.27.0,
+      `FYREP_001_Engine.js` v1.7.0, `TARGET_003_Styles.js` v1.8.2,
+      `CORE_001_Config.js` v1.42.0). 1회성 값 입력용
+      `TEMPQA_022_TargetEngineTotalRevenueSeed.js`(`runSeedTargetEngineTotalRevenueRow()`)
+      신규. **재실행 결과 아직 미확인, 완료로 간주하지 말 것.**
 
 ## Surprises & Discoveries
 

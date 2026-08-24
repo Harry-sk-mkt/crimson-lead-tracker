@@ -12,9 +12,13 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.8.1
+ * v1.8.2
  *
  * Change Log
+ * v1.8.2 (2026-08-24)
+ * - `applyTargetEngineInputStyles_()`에 신규 24행(`MONTHLY_COMPANY_INPUTS.
+ *   TOTAL_REVENUE_TARGET_ROW`) 통화 서식($#,##0.00) 추가 — 22/23행과 동일 처리
+ *   (TARGET_001_Engine.js v1.27.0 참고).
  * v1.8.1 (2026-08-19)
  * - 사용자 실측 리포트 2건 수정: (1) Target P1이 0인 주(예: 그 달 Seminar
  *   목표가 없는 주)에서 Actual P1도 0이면 "0≥0"이 참이 돼 달성이 아닌데도
@@ -364,6 +368,9 @@ function applyTargetEngineInputStyles_(sheet){
     .setNumberFormat("$#,##0.00");
 
   sheet.getRange(input.MONTHLY_COMPANY_INPUTS.BUDGET_ROW, monthStartCol, 1, monthCount)
+    .setNumberFormat("$#,##0.00");
+
+  sheet.getRange(input.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW, monthStartCol, 1, monthCount)
     .setNumberFormat("$#,##0.00");
 
   sheet.getRange(input.MANUAL_SEGMENT_SPENT.DATA_START_ROW, monthStartCol, groupCount, monthCount)

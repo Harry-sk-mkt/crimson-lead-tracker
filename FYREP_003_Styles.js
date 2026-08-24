@@ -4,30 +4,30 @@
  * FY_REP Styles — 서식 레이어
  *
  * Responsibility
- * `FYREP_002_Report.js`의 `generateFYReport_()`가 섹션/블록을 다 쓴 뒤
- * 호출하는 서식 전용 함수. 헤더 굵게+배경, 지표 숫자 서식(metric.format),
- * Total 행 굵게, 블록 전체 테두리(사용자 요청, 2026-08-08).
+ * `FYREP_002_Report.js`의 `generateFYReport_()`가 FY×Month 플랫 행을 다
+ * 쓴 뒤 호출하는 서식 전용 함수. 헤더(3행) 굵게+배경, 컬럼별 숫자 서식
+ * (`FY_REP_FLAT_COLUMNS[].format`), Target% ≥100% 행 강조, 테두리.
  *
  * Stage
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v3.2.0
+ * v4.1.0
  *
  * Change Log
+ * v4.1.0 (2026-08-20)
+ * - 3행(SUBTOTAL)/4행(헤더 라벨) 분리에 맞춰 스타일 분리 적용 — 3행은
+ *   굵게+기울임+숫자 서식(컬럼 format), 4행은 굵게만. 테두리 범위를
+ *   3행부터 마지막 데이터 행까지로 확장(기존엔 3행=헤더+SUBTOTAL 겸용
+ *   1행부터였음).
+ * v4.0.0 (2026-08-20)
+ * - FYREP_002_Report.js v4.0.0(FY×Month 단일 플랫 테이블) 전면 재구성에
+ *   맞춰 재작성 — 블록/Total 행/Sum 컬럼 개념 전부 폐기(더 이상 해당
+ *   없음). Target% ≥100% 강조를 Sum 컬럼(옛 Revenue 블록 전용)에서
+ *   Total Rev/Target% 두 컬럼(모든 FY×Month 행 공통)으로 이동 — 행별로
+ *   이미 계산된 `row.targetPct` 값을 그대로 판정에 씀(시트 재조회 없음).
  * v3.2.0 (2026-08-08)
- * - 버그 수정(실측) — Revenue(→"$#,##0") 실행 직후 Marketing/Results(→"0")로
- *   재실행했더니 Total 행에 "$"가 남아있던 문제. 데이터+Total 행 숫자
- *   서식을 조건 없이 항상 재적용하도록 수정(모든 지표가 이제 format을
- *   명시 — FYREP_002_Report.js에서 정수 지표도 "0"으로 통일, null 없앰).
- * v3.1.0 (2026-08-08)
- * - 사용자 요청 반영 — 블록(헤더~Total 행) 전체에 테두리 추가, Total 행
- *   굵게+숫자 서식. Sum 컬럼 하이라이트(#01EF18)는 Report 레이어
- *   (`writeFYRepFlatBlock_()`)에서 직접 처리 — Sum 계산과 같은 위치에서
- *   해야 rowSums 재계산/재조회가 필요 없어 그대로 둠.
- * v3.0.0 (2026-08-08)
- * - FYREP_002_Report.js v3.0.0(섹션당 지표 1개, 세그먼트=컬럼) 레이아웃에
- *   맞춰 단순화 — 병합 헤더/Target% 강조 로직 전부 제거(더 이상 해당 없음).
+ * - (이전 버전 이력은 git 로그 참고 — 블록/Total 행/Sum 컬럼 레이아웃 시절 기록)
  * ==========================================================
  */
 
@@ -37,58 +37,90 @@
  * Apply FY_REP Report Styles (IO 래퍼)
  *
  * WHY
- * generateFYReport_()가 체크된 섹션을 다 쓴 뒤 마지막에 호출. 시트 I/O
- * 전용이라 단위 테스트 대상 아님(32_ACQReportStyles.js 관례).
+ * generateFYReport_()가 데이터를 다 쓴 뒤 마지막에 호출. 시트 I/O 전용이라
+ * 단위 테스트 대상 아님(32_ACQReportStyles.js 관례).
  *
  * INPUT
  * sheet : Sheet
- * sectionsWritten : Array<{ metric: { format }, blocks: Array<Object> }>
- *   blocks 각 항목: { headerRow, dataStartRow, rowCount, colCount, totalRow, nextRow }
+ * columns : Array<Object>  FY_REP_FLAT_COLUMNS
+ * orderedRows : Array<Object>  generateFYReport_()가 실제로 쓴 행(순서대로,
+ *   각 행의 targetPct로 강조 여부 판정)
  * ==========================================================
  */
-function applyFYReportStyles_(sheet, sectionsWritten){
+function applyFYReportStyles_(sheet, columns, orderedRows){
 
-  let maxCols = 6;
+  const subtotalRow = CONFIG.FYREP.SUBTOTAL_ROW;
+  const headerRow = CONFIG.FYREP.HEADER_ROW;
+  const dataStartRow = CONFIG.FYREP.REPORT_START_ROW;
+  const dataRowCount = orderedRows.length;
 
-  sectionsWritten.forEach(function(section){
+  sheet.getRange(subtotalRow, 1, 1, columns.length)
+    .setFontWeight("bold")
+    .setFontStyle("italic")
+    .setBackground("#F3F3F3");
 
-    section.blocks.forEach(function(block){
+  sheet.getRange(headerRow, 1, 1, columns.length)
+    .setFontWeight("bold")
+    .setBackground("#F3F3F3");
 
-      sheet.getRange(block.headerRow, 1, 1, block.colCount)
-        .setFontWeight("bold")
-        .setBackground("#F3F3F3");
-
-      // 데이터/Total 행 전체(Total 있으면 그 행까지 포함)에 항상 명시적으로
-      // 숫자 서식을 다시 씌운다 — 이전 실행(다른 지표, 다른 서식)이 같은
-      // 셀 위치에 남긴 서식이 있어도 무조건 덮어써 잔여 서식을 막는다
-      // (실측 버그: Revenue 실행 후 Marketing/Results로 재실행했더니 Total
-      // 행에 "$"가 남아있던 문제, 2026-08-08). 모든 지표가 format을
-      // 명시하므로(FY_REP_*_METRICS, "0" 또는 "$..." — null 없음) 조건 없이
-      // 항상 적용.
-      const numberFormatRowCount = block.totalRow
-        ? (block.totalRow - block.dataStartRow + 1)
-        : block.rowCount;
-
-      if(numberFormatRowCount > 0){
-        sheet.getRange(block.dataStartRow, 2, numberFormatRowCount, block.colCount - 1)
-          .setNumberFormat(section.metric.format);
-      }
-
-      if(block.totalRow){
-        sheet.getRange(block.totalRow, 1, 1, block.colCount).setFontWeight("bold");
-      }
-
-      const blockLastRow = block.totalRow || (block.dataStartRow + block.rowCount - 1);
-
-      sheet.getRange(block.headerRow, 1, blockLastRow - block.headerRow + 1, block.colCount)
-        .setBorder(true, true, true, true, true, true);
-
-      maxCols = Math.max(maxCols, block.colCount);
-
-    });
-
+  columns.forEach(function(col, i){
+    if(!col.format) return;
+    sheet.getRange(subtotalRow, i + 1).setNumberFormat(col.format);
   });
 
-  sheet.autoResizeColumns(1, maxCols);
+  if(dataRowCount > 0){
+
+    columns.forEach(function(col, i){
+      if(!col.format) return;
+      sheet.getRange(dataStartRow, i + 1, dataRowCount, 1).setNumberFormat(col.format);
+    });
+
+    sheet.getRange(subtotalRow, 1, dataStartRow + dataRowCount - subtotalRow, columns.length)
+      .setBorder(true, true, true, true, true, true);
+
+    highlightFYRepTargetAchievedRows_(sheet, columns, orderedRows, dataStartRow);
+
+  }
+
+  sheet.autoResizeColumns(1, columns.length);
+
+}
+
+
+/**
+ * ==========================================================
+ * Highlight FY_REP Target Achieved Rows (IO 래퍼)
+ *
+ * WHY
+ * Target% ≥ 100%인 FY×Month 행의 Total Rev/Target% 셀 배경을 강조한다 —
+ * 이전 버전(블록 레이아웃)이 Revenue 블록의 Sum 컬럼에 적용하던 것과
+ * 동일한 목적을 새 플랫 레이아웃에 맞춰 이동(사용자가 명시적으로 폐기
+ * 요청하지 않은 기존 확정 기능 — FY_REP_TARGET_ACHIEVED_COLOR, 2026-08-08
+ * 확정 색상 그대로 재사용).
+ *
+ * INPUT
+ * sheet : Sheet
+ * columns : Array<Object>  FY_REP_FLAT_COLUMNS
+ * orderedRows : Array<Object>  targetPct 필드 포함
+ * dataStartRow : number
+ * ==========================================================
+ */
+function highlightFYRepTargetAchievedRows_(sheet, columns, orderedRows, dataStartRow){
+
+  const totalRevCol = columns.findIndex(function(c){ return c.key === "totalRev"; }) + 1;
+  const targetPctCol = columns.findIndex(function(c){ return c.key === "targetPct"; }) + 1;
+
+  if(totalRevCol === 0 || targetPctCol === 0) return;
+
+  orderedRows.forEach(function(row, i){
+
+    if(row.targetPct === "" || row.targetPct < 1) return;
+
+    const sheetRow = dataStartRow + i;
+
+    sheet.getRange(sheetRow, totalRevCol).setBackground(FY_REP_TARGET_ACHIEVED_COLOR);
+    sheet.getRange(sheetRow, targetPctCol).setBackground(FY_REP_TARGET_ACHIEVED_COLOR);
+
+  });
 
 }

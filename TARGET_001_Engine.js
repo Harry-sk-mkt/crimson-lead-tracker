@@ -22,9 +22,16 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.26.1
+ * v1.27.0
  *
  * Change Log
+ * v1.27.0 (2026-08-24)
+ * - `MONTHLY_COMPANY_INPUTS`에 24행 "Total Revenue Target"(NZD, VAT/Referral/Upsell
+ *   포함) 신규 — FY_REP이 회사 전체 Target으로 쓰던 22행 "Marketing Revenue Target"이
+ *   Referral/Upsell 제외 마케팅 기여분만 담고 있어 범위가 안 맞았음(사용자 실측 확인).
+ *   `readTargetEngineInputs_()`가 `monthlyTotalRevenueTarget` 신규 반환,
+ *   `setupTargetEngineMonthlyGridDefaults_()`가 라벨 세팅 + 보존형 0-초기화 대상에 포함.
+ *   22행/23행 자체는 안 건드림(Target_REP 등 기존 소비처 그대로 유지).
  * v1.26.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `90_TargetEngine.js` → 신규 `TARGET_001_Engine.js`, 코드 내용 변경 없음.
  * v1.26.0 (2026-08-07)
@@ -3160,10 +3167,12 @@ function readTargetEngineInputs_(sheet){
 
   const monthlyRevenueTarget = {};
   const monthlyBudget = {};
+  const monthlyTotalRevenueTarget = {};
 
   monthOrder.forEach(function(month, i){
     monthlyRevenueTarget[month] = Number(getGridCell(input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW, i)) || 0;
     monthlyBudget[month] = Number(getGridCell(input.MONTHLY_COMPANY_INPUTS.BUDGET_ROW, i)) || 0;
+    monthlyTotalRevenueTarget[month] = Number(getGridCell(input.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW, i)) || 0;
   });
 
   const monthlySegmentSpent = {};
@@ -3203,6 +3212,7 @@ function readTargetEngineInputs_(sheet){
     dealShareByGroup: dealShareByGroup,
     revenueTarget: revenueTarget,
     monthlyRevenueTarget: monthlyRevenueTarget,
+    monthlyTotalRevenueTarget: monthlyTotalRevenueTarget,
     monthlyBudget: monthlyBudget,
     monthlySegmentSpent: monthlySegmentSpent,
     seminarActiveMonths: seminarActiveMonths
@@ -3335,6 +3345,7 @@ function setupTargetEngineMonthlyGridDefaults_(sheet){
   const headerRow = input.MONTHLY_COMPANY_INPUTS.HEADER_ROW;
   const revenueRow = input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW;
   const budgetRow = input.MONTHLY_COMPANY_INPUTS.BUDGET_ROW;
+  const totalRevenueRow = input.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW;
   const spentHeaderRow = input.MANUAL_SEGMENT_SPENT.HEADER_ROW;
   const spentStartRow = input.MANUAL_SEGMENT_SPENT.DATA_START_ROW;
 
@@ -3346,6 +3357,7 @@ function setupTargetEngineMonthlyGridDefaults_(sheet){
     [headerRow, "Monthly Company-wide Inputs (실제 값)"],
     [revenueRow, "Marketing Revenue Target (NZD)"],
     [budgetRow, "Total Ad Budget (NZD)"],
+    [totalRevenueRow, "Total Revenue Target (NZD, VAT/Referral/Upsell 포함 — FY_REP 전용)"],
     [spentHeaderRow, "Monthly Segment Spent (NZD, 수동 취합)"]
   ];
 
@@ -3359,7 +3371,7 @@ function setupTargetEngineMonthlyGridDefaults_(sheet){
 
   // 값 셀 — 비어있을 때만 0으로 초기화(보존형). Revenue Target/Budget 행 + 세그먼트별
   // Spent 행을 한 번의 getRange/setValues로 처리(Article 10: Read Once).
-  const dataRows = [revenueRow, budgetRow].concat(
+  const dataRows = [revenueRow, budgetRow, totalRevenueRow].concat(
     groupOrder.map(function(g, i){ return spentStartRow + i; })
   );
 

@@ -23,9 +23,17 @@
  * openTargetExternalSheetByGid_() 재사용
  *
  * Version
- * v1.7.1
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-24)
+ * - `runInspectTargetEngineTeamKoreaTarget()` 로그 문구 갱신 — 22행 "Marketing
+ *   Revenue Target" × VAT 방식이 24행 "Total Revenue Target" 직접 사용으로
+ *   교체되며(FYREP_001_Engine.js v1.7.0) 기존 "VAT 반영 전/후" 라벨이 더 이상
+ *   안 맞아 정정, `inputs.monthlyTotalRevenueTarget` 로그 추가.
+ * v1.8.0 (2026-08-20)
+ * - `runInspectFYRepComputedMarketingRows()` 신규 — FY_REP 전면 재구성 후
+ *   실 시트 Spent 컬럼이 전부 $0으로 나오는 문제 진단용.
  * v1.7.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `96_TempQA_FYRepExternalSheet.js` → 신규 `TEMPQA_006_FYRepExternalSheet.js`, 코드 내용 변경 없음.
  * v1.7.0 (2026-08-08)
@@ -616,6 +624,154 @@ function runInspectFYRepQuarterlySummaryColumns(){
       }
     }
 
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Inspect FY_REP Computed Marketing Rows (읽기 전용, 안전, 1회성)
+ *
+ * WHY
+ * 2026-08-20 FY_REP 전면 재구성 후 실 시트에서 Spent 컬럼이 전부 $0으로
+ * 나오는 문제 진단 — `computeFYRepMarketingRowsForFY_(26)`의 raw 출력을
+ * 그대로 로그로 찍어 (a) 블록 스캔 자체가 비어있는지 (b) FX 환산
+ * (`fetchFxRateToNzd_()`)이 0을 반환하는지 구분한다.
+ * ==========================================================
+ */
+function runInspectFYRepComputedMarketingRows(){
+
+  const rows = computeFYRepMarketingRowsForFY_(26);
+
+  Logger.log("행 개수: " + rows.length);
+
+  const nonZeroSpent = rows.filter(function(r){ return r.spent > 0; });
+
+  Logger.log("spent > 0 인 행 개수: " + nonZeroSpent.length);
+  Logger.log("샘플 5개: " + JSON.stringify(rows.slice(0, 5)));
+
+  if(nonZeroSpent.length > 0){
+    Logger.log("nonZero 샘플: " + JSON.stringify(nonZeroSpent.slice(0, 3)));
+  }
+
+  Logger.log("companyRevenueTargets(26): " + JSON.stringify(computeFYRepCompanyRevenueTargetsForFY_(26)));
+  Logger.log("CONFIG.FYREP.FYS: " + JSON.stringify(CONFIG.FYREP.FYS));
+
+  const revenueRows = computeFYRepRevenueRows_();
+  const fy26Aug = revenueRows.filter(function(r){ return r.fy === 26 && r.month === "AUG"; });
+  Logger.log("revenueRows fy=26 month=AUG: " + JSON.stringify(fy26Aug));
+
+  runInspectTargetEngineTeamKoreaTarget();
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Inspect Target Engine Team Korea Target (읽기 전용, 안전, 1회성)
+ *
+ * WHY
+ * 2026-08-20 사용자 보고 — "FY27 AUG 타겟이 다른데? $1,086,204로 나타나.
+ * 실제값은 1,392,351.40여야하는데." Target_Engine의 raw
+ * monthlyRevenueTarget(AUG)와 VAT 적용 후 값을 그대로 로그로 찍어
+ * CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS 행/열 매핑이 실제 시트
+ * 구조와 맞는지, VAT 배수가 제대로 곱해지는지 확인한다.
+ * ==========================================================
+ */
+function runInspectTargetEngineTeamKoreaTarget(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!engineSheet){
+    Logger.log("❌ " + CONFIG.TARGET.ENGINE_SHEET + " 시트를 찾을 수 없음");
+    return;
+  }
+
+  const inputs = readTargetEngineInputs_(engineSheet);
+
+  Logger.log("targetFY: " + inputs.targetFY);
+  Logger.log("monthlyRevenueTarget(22행, Referral/Upsell 제외 — 더 이상 FY_REP이 안 씀, 참고용): " + JSON.stringify(inputs.monthlyRevenueTarget));
+  Logger.log("monthlyTotalRevenueTarget(24행, VAT/Referral/Upsell 포함 — FY_REP이 실제 쓰는 값): " + JSON.stringify(inputs.monthlyTotalRevenueTarget));
+
+  const result = computeFYRepTeamKoreaTargetsByFY_();
+  Logger.log("computeFYRepTeamKoreaTargetsByFY_() 결과: " + JSON.stringify(result));
+
+  const input = CONFIG.TARGET.INPUT;
+  const monthOrder = CONFIG.ACQ.FISCAL_MONTH_ORDER;
+  const headerRowValues = engineSheet.getRange(
+    input.MONTHLY_COMPANY_INPUTS.HEADER_ROW, 1, 1, input.MONTHLY_COMPANY_INPUTS.MONTH_START_COL + monthOrder.length
+  ).getDisplayValues()[0];
+  const revenueRowValues = engineSheet.getRange(
+    input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW, 1, 1, input.MONTHLY_COMPANY_INPUTS.MONTH_START_COL + monthOrder.length
+  ).getDisplayValues()[0];
+
+  Logger.log("헤더 행(" + input.MONTHLY_COMPANY_INPUTS.HEADER_ROW + ") 원본: " + JSON.stringify(headerRowValues));
+  Logger.log("Revenue Target 행(" + input.MONTHLY_COMPANY_INPUTS.REVENUE_TARGET_ROW + ") 원본: " + JSON.stringify(revenueRowValues));
+
+  // "Team Korea"라는 라벨을 가진 행이 시트 어딘가에 따로 있는지 A열 전체를 스캔
+  const lastRow = engineSheet.getLastRow();
+  const colAValues = engineSheet.getRange(1, 1, lastRow, 1).getDisplayValues();
+
+  Logger.log("A열 전체(1~" + lastRow + "행) non-blank 라벨:");
+  colAValues.forEach(function(row, i){
+    if(row[0] !== "") Logger.log((i + 1) + ": " + row[0]);
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Inspect PerfTrackerByFY TeamKorea Tab (읽기 전용, 안전, 1회성)
+ *
+ * WHY
+ * 2026-08-20 실측 중 발견 — perfTrackerByFY(FYREP.MARKETING_SOURCE 외부
+ * 스프레드시트)에 숨겨진 탭 "TeamKorea"(gid=605608658)가 존재한다
+ * (runInspectFYRepExternalSheet() 탭 목록 로그에서 발견). Target_Engine의
+ * "Marketing Revenue Target (NZD)" 행이 사용자가 말한 "Team Korea 타겟"이
+ * 아닐 가능성이 높아, 이 숨겨진 탭이 실제 Team Korea 타겟 원천인지 내용을
+ * 직접 덤프해 확인한다(읽기 전용).
+ * ==========================================================
+ */
+function runInspectPerfTrackerTeamKoreaTab(){
+
+  const CANDIDATE_SPREADSHEET_IDS = [
+    "1DhJynLE6eySh6X9X-Zsgbs6HvuXDT5omjf_m0XjXQ3o", // perfTrackerByFY
+    "1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A"  // 레거시 "0. Weekly" 외부 시트
+  ];
+
+  let sheet = null;
+
+  CANDIDATE_SPREADSHEET_IDS.forEach(function(id){
+    if(sheet) return;
+    try{
+      const f = SpreadsheetApp.openById(id);
+      const s = f.getSheetById(605608658);
+      if(s){
+        sheet = s;
+        Logger.log("찾음 — 스프레드시트 ID: " + id);
+      }
+    } catch(e){
+      Logger.log("openById(" + id + ") 실패: " + e.message);
+    }
+  });
+
+  if(!sheet){
+    Logger.log("❌ TeamKorea 탭(gid=605608658)을 두 후보 스프레드시트 모두에서 찾을 수 없음");
+    return;
+  }
+
+  Logger.log("탭 이름: " + sheet.getName() + ", hidden: " + sheet.isSheetHidden());
+
+  const lastRow = Math.min(sheet.getLastRow(), 40);
+  const lastCol = Math.min(sheet.getLastColumn(), 20);
+  const values = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+
+  values.forEach(function(row, i){
+    const nonBlank = row.some(function(v){ return v !== ""; });
+    if(nonBlank) Logger.log((i + 1) + ": " + JSON.stringify(row));
   });
 
 }

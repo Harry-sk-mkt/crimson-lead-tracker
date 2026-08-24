@@ -9,9 +9,33 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.38.0
+ * v1.42.0
  *
  * Change Log
+ * v1.42.0 (2026-08-24)
+ * - `CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW`(24행) 신규,
+ *   `CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER` 삭제(더 이상 안 씀) — 사용자 실측 확인:
+ *   기존 Target 소스(22행 "Marketing Revenue Target")는 Referral/Upsell이 빠진
+ *   마케팅 기여분만 담고 있어 FY_REP의 Total Rev(Referral/Upsell 포함 8개 버킷 합)와
+ *   범위가 안 맞았음. VAT/Referral/Upsell 전부 포함된 값을 그대로 수동 입력하는 새
+ *   24행으로 FY_REP Target 소스 교체(`computeFYRepTeamKoreaTargetsByFY_()`,
+ *   FYREP_001_Engine.js v1.7.0 참고). 22행/23행(Target_REP 등 기존 소비처)은 안 건드림.
+ * v1.41.0 (2026-08-20)
+ * - `CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER`(1.1) 신규 — 사용자 확정: FY_REP
+ *   Target은 perfTrackerByFY(Digital/CORE 한정으로 보임) 대신 Target_Engine의
+ *   "Team Korea" 회사 전체 Target을 쓰고, 부가세 10%를 추가로 반영해야 함.
+ *   FYREP_001_Engine.js `computeFYRepTeamKoreaTargetsByFY_()` 참고.
+ * v1.40.0 (2026-08-20)
+ * - `CONFIG.FYREP.HEADER_ROW`(4행) 신규, `REPORT_START_ROW` 4→5 — 사용자
+ *   피드백으로 헤더 라벨+SUBTOTAL 겸용 3행을 2행(3행=SUBTOTAL만,
+ *   4행=헤더 라벨만)으로 분리(FYREP_002_Report.js v4.1.0 참고).
+ * v1.39.0 (2026-08-20)
+ * - `CONFIG.FYREP.CONTROL` 전면 재구성(사용자 요청 — "전체 구조를 바꾸려고
+ *   해") — 섹션 체크박스/지표 드롭다운/FY_RANGE(A1:B2 세로) 폐기, Start
+ *   FY(A1/B1)/End FY(C1/D1)/Generate(E1/F1) 1행 가로 배치로 교체.
+ *   `SUBTOTAL_ROW`(3행) 신규 — FY×Month 단일 플랫 테이블(회사 전체 합계 +
+ *   Revenue 세그먼트별 컬럼)로 리포트 구조 자체가 바뀜, 상세는
+ *   FYREP_001_Engine.js/FYREP_002_Report.js 참고.
  * v1.38.0 (2026-08-19)
  * - **버그 수정 — `RAW_DATE_COLUMNS.MTA`에 `"Lead: Sales Accepted Date"` 누락**
  *   (S&M_REP 개발 중 미래 날짜 SAL이 찍히는 현상을 사용자가 Salesforce
@@ -789,6 +813,13 @@ const CONFIG = {
         HEADER_ROW: 21,
         REVENUE_TARGET_ROW: 22,
         BUDGET_ROW: 23,
+        // 24행 — Total Revenue Target(NZD, VAT 포함, Referral/Upsell 포함 전체) 신규
+        // (2026-08-24 사용자 확정) — 22행 "Marketing Revenue Target"은 Referral/Upsell이
+        // 빠진 마케팅 기여분만 담고 있어(사용자 실측 확인) FY_REP의 Total Rev(8개 버킷
+        // 전체 합)와 범위가 안 맞음이 드러남. FY_REP 전용 Target 소스로 이 행을 신규
+        // 도입 — 22행/23행(Target_REP 등 기존 소비처)은 그대로 유지, 안 건드림.
+        // 값은 매년 수동 입력(다른 Block 0 입력 행과 동일 관례).
+        TOTAL_REVENUE_TARGET_ROW: 24,
         MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
       },
 
@@ -923,47 +954,36 @@ const CONFIG = {
 
     SHEET: "FY_REP",
 
-    // Control Area — 2026-08-08 세 차례 사용자 피드백을 거쳐 확정된 최종 레이아웃.
-    // (1) "범위가 너무 넓다" → 섹션 체크박스로 선택 생성. (2) "세로로 길다" →
-    // FY×Month×Segment 플랫 나열 폐기, FY=컬럼 피벗 시도했다가 재차 피드백.
-    // (3) "세그먼트가 컬럼을 차지하고, FY는 블록(세로 반복), 지표는 드롭다운
-    // 선택"으로 최종 확정 — 세그먼트/채널을 컬럼으로, Month를 행으로, FY
-    // 범위(Start~End)만큼 블록을 세로로 반복, 섹션마다 지표 1개를 드롭다운으로
-    // 골라 표시(Revenue만 Actual 고정 — Target/Target%는 추정치라 사용자가
-    // 제외 확정).
+    // Control Area — 2026-08-20 전면 재구성(사용자 요청 — "전체 구조를
+    // 바꾸려고해"). 이전(v1.32.0)의 섹션 체크박스 4개 + 지표 드롭다운 +
+    // 세그먼트/채널별 컬럼·FY 블록 반복 레이아웃을 전부 폐기하고, **FY×Month
+    // 단일 플랫 테이블**(세그먼트·채널 구분 없이 회사 전체 합계, Revenue만
+    // 세그먼트별 컬럼 유지)로 교체. 1행에 Start FY(A1/B1)/End FY(C1/D1)/
+    // Generate(E1/F1)만 가로로 배치, 2행은 비움, 3행은 컬럼 헤더+SUBTOTAL
+    // 겸용 행(FYREP_002_Report.js `buildFYRepSubtotalRowFormulas_()` 참고),
+    // 4행부터 데이터(End FY가 위로 오도록 최신 FY 먼저 — 기존 방침 유지).
     CONTROL: {
 
-      // A1:B2 — FY 범위(NewP1_REP의 Start/End FY 패턴과 동일 사상)
-      FY_RANGE: {
-        START_ROW: 1, END_ROW: 2,
-        LABEL_COL: 1, VALUE_COL: 2
-      },
+      START_FY:  { ROW: 1, LABEL_COL: 1, VALUE_COL: 2 }, // A1/B1
+      END_FY:    { ROW: 1, LABEL_COL: 3, VALUE_COL: 4 }, // C1/D1
 
-      // C1:F2 — 섹션 라벨/체크박스(오른쪽으로 밀림, 사용자 확정)
-      SECTIONS: {
-        LABEL_ROW: 1,
-        CHECKBOX_ROW: 2,
-        METRIC_ROW: 3, // Marketing/ACQ/Pipeline 지표 드롭다운(Revenue는 없음 — Actual 고정)
-        COLUMNS: { MARKETING: 3, ACQ: 4, PIPELINE: 5, REVENUE: 6 } // C, D, E, F
-      },
-
-      // A3:B3 — Generate 체크박스(사용자 요청, 2026-08-08). Target_REP이
-      // 겪었던 것과 동일한 문제(일반 onEdit Simple Trigger는 권한 부족으로
-      // SpreadsheetApp.openById() 호출 불가 — Marketing 섹션이 perfTrackerByFY
-      // 외부 시트를 정확히 이 방식으로 읾)를 피하기 위해, **설치형 트리거**
-      // (Installable Trigger, 08_PipelineAsync.js의 백그라운드 파이프라인과
-      // 동일한 완전 권한 방식)로 구현 — 사용자가 `runInstallFYReportGenerateTrigger()`
-      // (FYREP_002_Report.js)를 최초 1회만 직접 Run하면 이후엔 체크박스만으로
-      // 동작. `docs/OpenItems.md` #11 참고.
-      GENERATE: {
-        ROW: 3,
-        LABEL_COL: 1,
-        CHECKBOX_COL: 2
-      }
+      // E1/F1 — Generate 체크박스. Target_REP이 겪었던 것과 동일한 문제
+      // (일반 onEdit Simple Trigger는 권한 부족으로 SpreadsheetApp.openById()
+      // 호출 불가 — Marketing 섹션이 perfTrackerByFY 외부 시트를 정확히 이
+      // 방식으로 읽음)를 피하기 위해, **설치형 트리거**(Installable Trigger,
+      // 08_PipelineAsync.js의 백그라운드 파이프라인과 동일한 완전 권한 방식)로
+      // 구현 — 사용자가 `runInstallFYReportGenerateTrigger()`(FYREP_002_Report.js)를
+      // 최초 1회만 직접 Run하면 이후엔 체크박스만으로 동작. `docs/OpenItems.md` #11 참고.
+      GENERATE:  { ROW: 1, LABEL_COL: 5, VALUE_COL: 6 }  // E1/F1
 
     },
 
-    REPORT_START_ROW: 4,
+    // 2026-08-20 사용자 피드백("3번째는 subtotal, 4번째는 헤더 이렇게
+    // 나와야해") — 헤더 라벨+SUBTOTAL 겸용 1행이었던 것을 2행으로 분리.
+    // 3행=SUBTOTAL 값만(라벨 없음), 4행=컬럼 헤더 라벨만, 데이터는 5행부터.
+    SUBTOTAL_ROW: 3,
+    HEADER_ROW: 4,
+    REPORT_START_ROW: 5,
 
     // 비교 대상 FY(오래된 순) — 우리 시스템 기준 FY(getFiscalYear() 컨벤션:
     // 8월 시작). startFY(24)부터 오늘이 속한 FY까지 자동 계산(사용자 요청,
@@ -1065,6 +1085,19 @@ const CONFIG = {
     // 기준으로 비율을 계산 — `computeFYRepDealShareRatiosForFY_()`
     // (FYREP_001_Engine.js)가 `computeDealShareRatiosFromDealRows_()`
     // (90_TargetEngine.js)와 별개로 이 배분 방식을 구현.
+    // 2026-08-20 사용자 확정 — 플랫 테이블의 "Target" 컬럼(회사 전체)은
+    // perfTrackerByFY의 Quarterly Summary가 아니라 `Target_Engine`(CONFIG.TARGET.ENGINE_SHEET)의
+    // "Team Korea" 월별 회사 전체 Revenue Target(`CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS`)을
+    // 써야 한다 — perfTrackerByFY 값은 Digital/CORE 시장 한정 지표로 보여 부적절하다는
+    // 사용자 판단. Target_Engine은 "한 번에 FY 하나"만 담는 구조(OpenItems #17)라
+    // FY_REP처럼 여러 FY를 한 테이블에 보여줘야 하는 리포트와 안 맞음 — 절충안(사용자
+    // 확정): Target_Engine이 현재 가리키는 FY 하나만 채우고 나머지 FY는 공란.
+    // **2026-08-24 정정**: 이 행을 "Marketing Revenue Target"(22행) × VAT로 구했었으나,
+    // 22행이 Referral/Upsell 제외 마케팅 기여분만 담고 있어 FY_REP의 Total Rev(Referral/
+    // Upsell 포함 8개 버킷 합)와 범위가 안 맞았음이 드러남 — `MONTHLY_COMPANY_INPUTS.
+    // TOTAL_REVENUE_TARGET_ROW`(24행 신규, VAT/Referral/Upsell 전부 포함된 값을 그대로
+    // 수동 입력)로 소스 교체, VAT 배수 곱셈은 이제 필요 없어 제거
+    // (`TEAM_KOREA_VAT_MULTIPLIER` 삭제, `computeFYRepTeamKoreaTargetsByFY_()` 참고).
     REVENUE_TARGET_IS_ESTIMATED: true
 
   },

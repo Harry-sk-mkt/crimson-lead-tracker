@@ -1,3 +1,36 @@
+# Changelog — 2026-08-24
+
+## FY_REP — Target 컬럼 범위 불일치 버그 수정, 2026-08-20 미커밋 재구성 재개/검증
+
+2026-08-20 세션에서 FY_REP 레이아웃을 FY×Month 단일 플랫 테이블로 전면 재구성(4섹션
+체크박스 폐기)하고 Target 소스도 `perfTrackerByFY`(Digital/CORE 한정으로 부적절 판명)에서
+`Target_Engine`의 "Marketing Revenue Target" × VAT 10%로 전환했었으나, 실 시트 검증 전
+커밋 없이 세션이 끊긴 채 방치돼 있던 걸 이번 세션에 재개.
+
+`TEMPQA_006_FYRepExternalSheet.js`의 진단 함수로 실측한 결과:
+- Spent $0 문제(2026-08-20 당시 미해결로 남아있던 것)는 이미 재현 안 됨(정상 확인).
+- 대신 Target 값이 사용자 기대치보다 낮게 나오는 새 버그 발견 — `Target_Engine`의
+  "Marketing Revenue Target"(22행)이 **Referral/Upsell을 제외한** 마케팅 기여분만
+  담고 있는데, FY_REP의 Total Rev는 Referral/Upsell을 포함한 8개 버킷 합이라 범위가
+  안 맞았음(사용자 실측 확인).
+
+**수정**: `Target_Engine`에 신규 24행 "Total Revenue Target"(VAT/Referral/Upsell 전부
+포함, 사용자가 다른 시트에서 확인한 FY27 실측치를 그대로 수동 입력)을 추가하고, FY_REP의
+Target 소스를 22행 × VAT 대신 이 24행 값을 직접 쓰도록 교체 — VAT 배수 곱셈도 함께 제거
+(`CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW` 신규,
+`TARGET_001_Engine.js` v1.27.0, `TARGET_003_Styles.js` v1.8.2, `FYREP_001_Engine.js`
+v1.7.0, `CORE_001_Config.js` v1.42.0). 22행/23행 및 Target_REP 등 기존 소비처는 안 건드림.
+1회성 값 입력용 `TEMPQA_022_TargetEngineTotalRevenueSeed.js`(`runSeedTargetEngineTotalRevenueRow()`)
+신규 작성. `computeFYRepTeamKoreaTargetsByFY_()` 결과가 사용자 제공 FY27 12개월 값과
+정확히 일치함을 실행 로그로 확인, `setupFYReport()`→`runGenerateFYReport()` 실행 후 사용자가
+실제 시트에서 Target 반영을 직접 확인 완료.
+
+그 외 Q&A로 확인/정리한 사항(코드 변경 없음): FY27 Spent $0는 버그가 아니라
+`perfTrackerByFY`에 FY27 탭이 아직 없어 생기는 예상된 동작(기존에 이미 안전 처리돼
+있음). IC Booked/IC Completed는 실제 발생월이 아니라 **Create Date 코호트**(New P1과
+동일 기준) 귀속(`aggregateFYRepLeadsOPSFromRecords_()`). FY_REP은 Import 파이프라인에
+자동 배선돼 있지 않음 — Generate 체크박스 또는 `runGenerateFYReport()` 수동 실행 필요.
+
 # Changelog — 2026-08-21
 
 ## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정

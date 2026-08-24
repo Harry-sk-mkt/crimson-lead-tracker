@@ -1,201 +1,166 @@
 /**
  * ==========================================================
  * Marketing 2.0
- * FY_REP Report — Write 레이어 (4섹션: Marketing/ACQ/Pipeline/Revenue)
+ * FY_REP Report — Write 레이어 (FY×Month 단일 플랫 테이블)
  *
  * Responsibility
- * `FYREP_001_Engine.js`의 4개 Engine 함수가 계산한 행을 `FY_REP` 시트에
- * 쓴다. Engine 레이어는 이번 재설계에서 전혀 안 바뀜 — 이 파일과
- * `FYREP_003_Styles.js`만 재작성.
+ * `FYREP_001_Engine.js`의 `computeFYRepFlatRows_()`가 계산한 회사 전체
+ * FY×Month 행(세그먼트/채널 구분 없음, Revenue만 세그먼트별 컬럼 유지)을
+ * `FY_REP` 시트에 쓴다. Engine 레이어는 이번 재구성에서 대부분 재사용됨
+ * (Marketing/Leads_OPS/Revenue 원시 계산 함수는 안 바뀜) — 이 파일과
+ * `FYREP_003_Styles.js`만 전면 재작성.
  *
- * **레이아웃(2026-08-08, 3차 재설계 — 사용자 피드백 반복 반영)**:
- * - **Control Area**: A1:B2 = FY 범위(Start FY/End FY 드롭다운, NewP1_REP의
- *   Start/End 패턴과 동일 사상). C1:F2 = 섹션 라벨 + 체크박스(Marketing/
- *   ACQ/Pipeline/Revenue). C3:E3 = Marketing/ACQ/Pipeline 지표 드롭다운
- *   (Spent/Results/CPL 등 여러 후보 중 하나를 골라서 봄 — "지표를 하나만
- *   고정하지 말고 드롭다운으로 클릭 전환"이라는 사용자 요청). Revenue는
- *   드롭다운 없음 — Target/Target%는 추정치라 제외하고 Actual Revenue만
- *   고정 표시(사용자 확정).
- * - **Report 영역**: 체크된 섹션마다, 그리고 그 섹션 안에서 FY 범위(Start~End)
- *   만큼 블록이 세로로 반복된다. 블록 하나 = 제목 행 + 헤더 행(Month |
- *   세그먼트1 | 세그먼트2 | ...) + 12개월 데이터 행 — **세그먼트/채널이
- *   컬럼, Month가 행**(이전 버전의 "FY가 컬럼" 피벗도 폐기됨 — FY는 이제
- *   블록 반복으로 표현). 섹션당 지표 1개만 보여주므로(드롭다운으로 선택)
- *   지표 그룹 병합 헤더가 더 이상 필요 없음 — 헤더가 단순 플랫 행.
+ * **레이아웃(2026-08-20 전면 재구성 — 사용자 요청 "전체 구조를 바꾸려고
+ * 해")**: 이전(v3.x)의 4섹션 체크박스 + 지표 드롭다운 + 세그먼트/채널별
+ * 컬럼 + FY 블록 세로 반복 레이아웃을 전부 폐기.
+ * - **Control(1행)**: A1=Start FY 라벨/B1=값(드롭다운), C1=End FY 라벨/
+ *   D1=값(드롭다운), E1=Generate 라벨/F1=체크박스 — 전부 1행에 가로로만
+ *   배치(사용자 확정). 2행은 비움.
+ * - **헤더(3행)**: 컬럼 헤더 라벨 + 그 아래 데이터의 SUBTOTAL(9, ...) 합계를
+ *   한 셀에 겸해서 보여준다(사용자 확정 — "헤더 라벨 + SUBTOTAL 합산을
+ *   겸하는"). 필터로 행을 숨기면 SUBTOTAL이 보이는 행만 다시 합산 —
+ *   `buildFYRepSubtotalRowFormulas_()` 참고.
+ * - **데이터(4행부터)**: FY×Month 단일 플랫 행, 컬럼은 FY | Month | Spent |
+ *   New P1 | ICBooked | IC Completed | SeminarRev | WB Rev | BOFU Rev |
+ *   SA Rev | Content Rev | Upsells | Referral | Other | Total Rev | Target |
+ *   Target% | ROI(사용자 확정 순서, `FY_REP_FLAT_COLUMNS` 참고). Spent/New
+ *   P1/ICBooked/IC Completed는 세그먼트·채널 구분 없이 회사 전체 합계
+ *   하나씩만(사용자 확정). End FY가 위로 오도록 FY 최신순 정렬은 기존
+ *   방침 그대로 유지.
  *
  * Stage
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v3.7.0
+ * v4.1.0
  *
  * Change Log
+ * v4.1.0 (2026-08-20)
+ * - 사용자 피드백("3번째는 subtotal, 4번째는 헤더 이렇게 나와야해") 반영 —
+ *   헤더 라벨+SUBTOTAL 겸용 1행(3행) 설계를 2행으로 분리: 3행=SUBTOTAL 값만
+ *   (`buildFYRepSubtotalRowFormulas_()`가 이제 라벨 없이 `=SUBTOTAL(9,...)`/
+ *   `=IFERROR(SUBTOTAL(9,...)/SUBTOTAL(9,...),0)`만 반환), 4행=순수 컬럼
+ *   헤더 라벨(`buildFYRepHeaderRowLabels_()` 신규). `writeFYRepHeaderRow_()`가
+ *   두 행 모두 씀. `CONFIG.FYREP.HEADER_ROW`(4행) 신규,
+ *   `REPORT_START_ROW` 4→5(CORE_001_Config.js v1.40.0). `setupFYReport()`
+ *   데이터 검증 정리 범위도 1~3행→1~4행으로 확장.
+ * v4.0.0 (2026-08-20)
+ * - 전면 재구성(사용자 요청) — 4섹션 체크박스/지표 드롭다운/세그먼트·채널별
+ *   컬럼/FY 블록 세로 반복 전부 폐기. FY×Month 단일 플랫 테이블로 교체
+ *   (`FY_REP_FLAT_COLUMNS`/`buildFYRepRowValues_()`/`buildFYRepSubtotalRowFormulas_()`/
+ *   `writeFYRepHeaderRow_()` 신규). Control Area를 1행 가로 배치(Start FY/
+ *   End FY/Generate)로 축소, 헤더+SUBTOTAL 겸용 3행 신규. 이제 쓸모없어진
+ *   `FY_REP_MARKETING_METRICS`/`FY_REP_ACQ_METRICS`/`FY_REP_PIPELINE_METRICS`/
+ *   `FY_REP_REVENUE_METRIC`/`FY_REP_MARKETING_CHANNEL_DISPLAY_MAP`/
+ *   `findFYRepMetricByLabel_()`/`collectFYRepDynamicBlockKeys_()`/
+ *   `buildFYRepPivotIndex_()`/`buildFYRepFlatDataRows_()`/
+ *   `writeFYRepFlatBlock_()`/`writeFYRepSection_()`/`computeFYRepColumnTotals_()`/
+ *   `computeFYRepRowSums_()`와 각 테스트 삭제(미사용 코드 방치 금지 원칙).
+ *   `transformFYRepMarketingChannels_()`는 표시명 매핑 책임이 없어져
+ *   `filterFYRepMarketingChannels_()`(제외 목록만)로 단순화. `buildFYRepFYRange_()`는
+ *   그대로 재사용(Start/End FY 파싱 로직 불변).
  * v3.7.0 (2026-08-08)
- * - 사용자 요청 반영: (1) FY 블록을 최신이 위로 오도록 역순 표시
- *   (`writeFYRepSection_()` — fyRange 자체는 오름차순 유지, 순회만 역순).
- *   (2) Sum 컬럼(행별 합계)을 Revenue 전용에서 4개 섹션 전체로 확장 —
- *   Marketing/ACQ/Pipeline도 `includeRowSum: true`. Target 초과 하이라이트
- *   (#01EF18)는 여전히 Revenue만(다른 섹션엔 비교할 Target이 없음).
- * v3.6.0 (2026-08-08)
- * - 사용자 요청 반영: (1) 정수 카운트 지표 서식을 "0"→"#,##0"(1000단위
- *   콤마)으로 변경. (2) Marketing 채널 표시명 매핑(`FY_REP_MARKETING_CHANNEL_DISPLAY_MAP`)
- *   + 제외 목록(`FY_REP_MARKETING_CHANNEL_EXCLUDE`, `transformFYRepMarketingChannels_()`)
- *   신규 — 원본 채널명이 길어 컬럼 너비가 들쭉날쭉하던 문제 해소, 노이즈성
- *   채널("Others" 등) 제거.
- * v3.5.0 (2026-08-08)
- * - 버그 수정(실측) — Results/New Leads/New P1/SAL/IC Booked/IC Completed/
- *   Deals(정수 카운트 지표)의 format이 `null`이라 Revenue(통화 서식)를
- *   먼저 실행한 뒤 재실행하면 이전 서식("$")이 Total 행에 남아있었음.
- *   전부 `"0"`(소수점 없는 정수 서식)으로 명시 — FYREP_003_Styles.js
- *   v3.2.0과 짝(거기서 서식을 조건 없이 항상 재적용하도록도 수정).
- * v3.4.0 (2026-08-08)
- * - 사용자 요청 4건 반영: (1) 모든 블록에 "Total" 행 추가(컬럼별 합계,
- *   `computeFYRepColumnTotals_()`). (2) Revenue 블록에 "Sum" 컬럼 추가
- *   (세그먼트 값 행별 합계, `computeFYRepRowSums_()`) — 8개 세그먼트+Upsell
- *   기준 자연스럽게 J열에 위치. (3) Sum이 그 달 회사 전체 Revenue Target을
- *   넘으면 `#01EF18`로 하이라이트(`writeFYRepFlatBlock_()`에서 직접 처리).
- *   (4) Generate 완료 후 섹션 체크박스(C2:F2)도 자동 해제(Generate
- *   체크박스 B3와 동일하게). Styles 레이어(FYREP_003_Styles.js v3.1.0)에
- *   블록 전체 테두리 + Total 행 굵게 추가.
- * v3.3.0 (2026-08-08)
- * - Generate 체크박스(A3:B3) 신규(사용자 요청) — `onFYReportEdit_()`(설치형
- *   트리거 핸들러)/`runInstallFYReportGenerateTrigger()`(최초 1회 설치용)
- *   추가. 일반 onEdit Simple Trigger는 Marketing 섹션의
- *   `SpreadsheetApp.openById()`(perfTrackerByFY) 호출을 권한 부족으로 못
- *   해서(Target_REP 선례, docs/OpenItems.md #11) 반드시 설치형 트리거로
- *   등록해야 함 — `deleteTriggersByHandlerName_()`(08_PipelineAsync.js)
- *   재사용해 중복 트리거 방지.
- * v3.2.0 (2026-08-08)
- * - `setupFYReport()`에 `sheet.clearFormats()` 추가(사용자 요청) — 레이아웃이
- *   세 차례 바뀌며 남았을 수 있는 과거 배경색/굵게 등 서식을 시트 전체
- *   기준으로 초기화. 내용(체크박스/드롭다운 선택값 등)은 보존되므로 기존
- *   "선택값 안 건드림" 방침과 충돌 없음.
- * v3.1.0 (2026-08-08)
- * - `setupFYReport()`에 `clearDataValidations()` 방어 코드 추가 — 레이아웃이
- *   세 차례 바뀌면서 과거 버전(체크박스가 A2:D2에 있던 버전 등)이 남긴
- *   데이터 검증 규칙이 새 셀 위치에 그대로 남아있을 수 있어, Control Area
- *   전체(A1:F3)를 setValue 전에 먼저 clearDataValidations()로 정리.
- * v3.0.0 (2026-08-08)
- * - 3차 재설계 — Control Area를 FY 범위(A1:B2)+섹션 체크박스(C1:F2)+지표
- *   드롭다운(C3:E3)으로 재구성, Report 레이어를 "세그먼트/채널=컬럼,
- *   Month=행, FY=블록 반복, 지표 1개(드롭다운 선택)"로 전면 교체. v2.x의
- *   "지표=컬럼그룹 병합헤더, FY=서브컬럼" 피벗 폐기(사용자 피드백).
+ * - (이전 버전 이력은 git 로그 참고 — 4섹션/블록 레이아웃 시절 기록)
  * ==========================================================
  */
 
 
-// 섹션별 지표 후보 — 드롭다운에 표시될 라벨 순서 그대로. compute()는 피벗
-// 행 하나(해당 FY×Month×Segment의 Engine 결과)를 받아 표시값을 뽑는다.
-const FY_REP_MARKETING_METRICS = [
-  { label: "Spent (NZD)", compute: function(row){ return row.spent; }, format: "$#,##0" },
-  { label: "Results", compute: function(row){ return row.results; }, format: "#,##0" },
-  { label: "CPL", compute: function(row){ return row.cpl; }, format: "$#,##0.00" }
-];
-
-const FY_REP_ACQ_METRICS = [
-  { label: "New Leads", compute: function(row){ return row.newLeads; }, format: "#,##0" },
-  { label: "New P1", compute: function(row){ return row.newP1; }, format: "#,##0" },
-  { label: "SAL", compute: function(row){ return row.sal; }, format: "#,##0" }
-];
-
-const FY_REP_PIPELINE_METRICS = [
-  { label: "IC Booked", compute: function(row){ return row.icBooked; }, format: "#,##0" },
-  { label: "IC Completed", compute: function(row){ return row.icComplete; }, format: "#,##0" },
-  { label: "Deals", compute: function(row){ return row.deals; }, format: "#,##0" }
-];
-
-// Revenue는 드롭다운 없이 Actual Revenue 고정(사용자 확정, 2026-08-08 —
-// "Target, target%는 제외하고 actual만 남기자". Target은 추정치라
-// Actual과 나란히 두면 실제 목표처럼 오해될 위험도 있어 제외).
-const FY_REP_REVENUE_METRIC = { label: "Actual Revenue", compute: function(row){ return row.actual; }, format: "$#,##0" };
-
-// Marketing 채널 표시명 매핑(사용자 확정, 2026-08-08 — "이름도 길어서 컬럼
-// 너비도 멋대로고. 이름도 같이 고치자"). 원본 채널명(perfTrackerByFY 플랫폼
-// 블록 A열에서 추출된 것, extractFYRepChannelName_() 참고)이 길어서 컬럼
-// 너비가 들쭉날쭉해지는 문제 + 원본 라벨이 장황한 문제를 함께 해소.
-// ⚠️ "Content Performance"는 실제 채널이 아니라 perfTrackerByFY 원본 시트의
-// 장식용 섹션 헤더 행이 채널 블록으로 잘못 스캔된 것으로 보임(A열이
-// 비어있지 않고 B열이 "Metrics"가 아니라 "Best & worst performing"이라
-// scanFYRepMarketingPlatformBlocks_()가 블록 시작으로 오판) — 실제 지출/
-// 리드 데이터가 전혀 없는 빈 컬럼일 가능성이 높음. 사용자가 삭제 대상으로
-// 지정하지 않고 "Content"로 개명하라고 명시했으므로 일단 그대로 따르되,
-// 스캔 로직 자체를 고칠지는 별도 확인 필요(임의로 안 고침).
-const FY_REP_MARKETING_CHANNEL_DISPLAY_MAP = {
-  "Content Performance": "Content",
-  "Facebook": "Meta",
-  "Google Demand Gen": "GoogleDG",
-  "Google Paid Search": "GSA",
-  "Google Performance Max": "GPMax",
-  "Naver Search": "NaverSA",
-  "Others (Naver Display)": "NaverGFA"
-};
-
-// 완전히 제외할 채널(사용자 확정 — "=delete" 표시된 것들).
+// Marketing 채널 중 완전히 제외할 채널(사용자 확정 — "=delete" 표시된
+// 것들). 회사 전체 Spent 합계에서도 제외해야 노이즈성 채널이 총액을
+// 왜곡하지 않는다(2026-08-20 재구성에서도 그대로 유지 — 채널별 표시가
+// 없어졌을 뿐, 어떤 채널을 합계에 넣을지는 여전히 유효한 결정).
 const FY_REP_MARKETING_CHANNEL_EXCLUDE = [
   "Google Display / Discovery/ Perf Max",
   "Others",
   "Others (Naver Search)"
 ];
 
+// 회사 전체 FY×Month 플랫 테이블 컬럼 정의(사용자 확정 순서, 2026-08-20).
+// subtotal: "sum"이면 3행 헤더 셀이 SUBTOTAL(9, 그 컬럼 범위)를 합산 표시,
+// "ratio"면 numeratorKey/denominatorKey 컬럼의 SUBTOTAL끼리 나눈 값을
+// ratioFormat으로 표시(Target%/ROI처럼 행별 비율을 그냥 합산하면 의미가
+// 없는 컬럼 — 분자/분모를 각각 합산한 뒤 나눔). FY/Month는 subtotal 없음
+// (헤더 라벨만).
+const FY_REP_FLAT_COLUMNS = [
+  { key: "fy", label: "FY" },
+  { key: "month", label: "Month" },
+  { key: "spent", label: "Spent", format: "$#,##0", subtotal: "sum" },
+  { key: "newP1", label: "New P1", format: "#,##0", subtotal: "sum" },
+  { key: "icBooked", label: "ICBooked", format: "#,##0", subtotal: "sum" },
+  { key: "icComplete", label: "IC Completed", format: "#,##0", subtotal: "sum" },
+  { key: "seminar", label: "SeminarRev", format: "$#,##0", subtotal: "sum" },
+  { key: "webinar", label: "WB Rev", format: "$#,##0", subtotal: "sum" },
+  { key: "bofu", label: "BOFU Rev", format: "$#,##0", subtotal: "sum" },
+  { key: "search", label: "SA Rev", format: "$#,##0", subtotal: "sum" },
+  { key: "content", label: "Content Rev", format: "$#,##0", subtotal: "sum" },
+  { key: "upsell", label: "Upsells", format: "$#,##0", subtotal: "sum" },
+  { key: "referral", label: "Referral", format: "$#,##0", subtotal: "sum" },
+  { key: "other", label: "Other", format: "$#,##0", subtotal: "sum" },
+  { key: "totalRev", label: "Total Rev", format: "$#,##0", subtotal: "sum" },
+  { key: "target", label: "Target", format: "$#,##0", subtotal: "sum" },
+  { key: "targetPct", label: "Target%", format: "0%", subtotal: "ratio", numeratorKey: "totalRev", denominatorKey: "target", ratioFormat: "0%" },
+  { key: "roi", label: "ROI", format: "0.00", subtotal: "ratio", numeratorKey: "totalRev", denominatorKey: "spent", ratioFormat: "0.00" }
+];
+
+// 3행 SUBTOTAL 헤더 수식이 참조하는 데이터 범위 크기(4행부터 이만큼) —
+// 실제 데이터 행 수(FY 개수×12)보다 넉넉히 크게 잡아 매 Generate마다 수식을
+// 다시 안 써도 되게 한다(SUBTOTAL(9,...)는 빈 셀을 0으로 취급해 합계에
+// 영향 없음).
+const FY_REP_SUBTOTAL_RANGE_ROW_COUNT = 100000;
+
+// Target% ≥ 100%일 때 Total Rev/Target% 셀을 강조하는 색상 — 기존
+// FYREP_002_Report.js(v3.x, Sum 컬럼 하이라이트)가 쓰던 값 그대로 재사용
+// (ACQ_REP의 #C6E0B4와는 별개 — FY_REP 자체 관례 유지, 2026-08-20).
+const FY_REP_TARGET_ACHIEVED_COLOR = "#01EF18";
+
 
 /**
  * ==========================================================
- * Transform FY_REP Marketing Channels (순수 함수)
+ * Filter FY_REP Marketing Channels (순수 함수)
  *
  * WHY
- * Marketing Engine 행의 원본 채널명을 사용자 확정 표시명으로 바꾸고,
- * 제외 대상 채널은 행 자체를 걸러낸다 — 컬럼 헤더가 짧아져 컬럼 너비가
- * 안정되고, 노이즈성 채널(예 "Content Performance")도 정리 가능.
+ * 제외 대상 채널(FY_REP_MARKETING_CHANNEL_EXCLUDE)의 행을 걸러낸다 — 회사
+ * 전체 Spent 합계(`sumFYRepRowsByFYMonth_()`)에 노이즈성 채널이 섞이지
+ * 않도록. 이전 버전의 `transformFYRepMarketingChannels_()`는 채널별 컬럼
+ * 표시명 매핑도 겸했으나, 2026-08-20 재구성으로 채널별 컬럼 자체가
+ * 없어져(회사 전체 합계 하나) 표시명 매핑 책임은 삭제 — 필터만 남음.
  *
  * INPUT
  * rows : Array<Object>  computeFYRepMarketingRows_() 결과(각 행에 channel 필드)
- * displayMap : Object  원본명 → 표시명(매핑 없으면 원본 그대로 유지)
  * excludeList : Array<string>  이 목록에 있는 원본 채널명은 행 자체를 제거
  *
  * OUTPUT
- * Array<Object>  channel 필드가 치환된 새 배열(원본 불변)
+ * Array<Object>  제외 대상이 빠진 새 배열(원본 불변)
  *
  * TEST
- * testTransformFYRepMarketingChannels() 참고
+ * testFilterFYRepMarketingChannels() 참고
  * ==========================================================
  */
-function transformFYRepMarketingChannels_(rows, displayMap, excludeList){
+function filterFYRepMarketingChannels_(rows, excludeList){
 
-  return rows
-    .filter(function(row){ return excludeList.indexOf(row.channel) === -1; })
-    .map(function(row){
-
-      const displayName = displayMap[row.channel];
-
-      return displayName ? Object.assign({}, row, { channel: displayName }) : row;
-
-    });
+  return rows.filter(function(row){ return excludeList.indexOf(row.channel) === -1; });
 
 }
 
 
 /**
  * ==========================================================
- * TEST — transformFYRepMarketingChannels_()
+ * TEST — filterFYRepMarketingChannels_()
  * ==========================================================
  */
-function testTransformFYRepMarketingChannels(){
+function testFilterFYRepMarketingChannels(){
 
   const rows = [
     { channel: "Facebook", spent: 100 },
-    { channel: "Bing", spent: 50 },
-    { channel: "Others", spent: 999 } // 제외 대상
+    { channel: "Others", spent: 999 }
   ];
 
-  const result = transformFYRepMarketingChannels_(
-    rows, { "Facebook": "Meta" }, ["Others"]
-  );
+  const result = filterFYRepMarketingChannels_(rows, ["Others"]);
 
   const pass =
-    result.length === 2 &&
-    result[0].channel === "Meta" && result[0].spent === 100 &&
-    result[1].channel === "Bing" &&
-    rows[0].channel === "Facebook"; // 원본 불변 확인
+    result.length === 1 &&
+    result[0].channel === "Facebook" &&
+    rows.length === 2; // 원본 불변 확인
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
@@ -205,207 +170,31 @@ function testTransformFYRepMarketingChannels(){
 
 /**
  * ==========================================================
- * Find FY_REP Metric By Label (순수 함수)
+ * Build FY_REP Row Values (순수 함수)
  *
  * WHY
- * Control Area 드롭다운 셀 값(문자열 라벨)을 실제 metric 객체로 변환한다.
- * 드롭다운이 아직 비어있거나 알 수 없는 값이면 목록의 첫 번째로 안전하게
- * 폴백(에러로 리포트 생성을 막지 않음).
+ * `computeFYRepFlatRows_()`가 만든 행 객체 하나를 `FY_REP_FLAT_COLUMNS`
+ * 순서의 셀 값 배열로 바꾼다(setValues()에 바로 넣을 형태). FY 컬럼만
+ * "FY27" 같은 표시용 라벨로 변환하고 나머지는 그대로 통과.
  *
  * INPUT
- * metrics : Array<{ label }>
- * label : string
+ * row : Object  computeFYRepFlatRows_() 결과 행 하나
+ * columns : Array<{ key }>  FY_REP_FLAT_COLUMNS
  *
  * OUTPUT
- * Object  metrics 안의 항목(못 찾으면 metrics[0])
+ * Array  columns 순서의 셀 값
  *
  * TEST
- * testFindFYRepMetricByLabel() 참고
+ * testBuildFYRepRowValues() 참고
  * ==========================================================
  */
-function findFYRepMetricByLabel_(metrics, label){
+function buildFYRepRowValues_(row, columns){
 
-  const found = metrics.filter(function(m){ return m.label === label; })[0];
+  return columns.map(function(col){
 
-  return found || metrics[0];
+    if(col.key === "fy") return "FY" + String(row.fy).slice(-2);
 
-}
-
-
-/**
- * ==========================================================
- * TEST — findFYRepMetricByLabel_()
- * ==========================================================
- */
-function testFindFYRepMetricByLabel(){
-
-  const metrics = [{ label: "A" }, { label: "B" }];
-
-  const pass =
-    findFYRepMetricByLabel_(metrics, "B").label === "B" &&
-    findFYRepMetricByLabel_(metrics, "존재안함").label === "A" &&
-    findFYRepMetricByLabel_(metrics, "").label === "A";
-
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Collect FY_REP Dynamic Block Keys (순수 함수)
- *
- * WHY
- * Marketing 채널처럼 고정 목록이 없는 차원은 실제 등장한 값을 모아
- * 알파벳순으로 정렬한다(채널 구성이 FY마다 달라 하드코딩 불가 — exec-plan
- * 확정 사항).
- *
- * INPUT
- * rows : Array<Object>
- * dimensionKey : string
- *
- * OUTPUT
- * Array<string>  중복 제거 + 알파벳순
- *
- * TEST
- * testCollectFYRepDynamicBlockKeys() 참고
- * ==========================================================
- */
-function collectFYRepDynamicBlockKeys_(rows, dimensionKey){
-
-  const seen = {};
-
-  rows.forEach(function(row){ seen[row[dimensionKey]] = true; });
-
-  return Object.keys(seen).sort();
-
-}
-
-
-/**
- * ==========================================================
- * TEST — collectFYRepDynamicBlockKeys_()
- * ==========================================================
- */
-function testCollectFYRepDynamicBlockKeys(){
-
-  const rows = [
-    { channel: "Facebook" }, { channel: "Naver Search" },
-    { channel: "Facebook" }, { channel: "Bing" }
-  ];
-
-  const result = collectFYRepDynamicBlockKeys_(rows, "channel");
-
-  const pass = JSON.stringify(result) === JSON.stringify(["Bing", "Facebook", "Naver Search"]);
-
-  Logger.log("Result: " + JSON.stringify(result));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Build FY_REP Pivot Index (순수 함수)
- *
- * WHY
- * 플랫 Engine 행 배열을 { [블록키]: { [월]: { [FY]: row } } } 3중 맵으로
- * 재구성한다 — 표 작성 시 (블록, 월, FY) 조합으로 O(1) 조회하기 위함.
- *
- * INPUT
- * rows : Array<Object>  { fy, month, [dimensionKey]: string, ...지표 }
- * dimensionKey : string
- *
- * OUTPUT
- * Object
- *
- * TEST
- * testBuildFYRepPivotIndex() 참고
- * ==========================================================
- */
-function buildFYRepPivotIndex_(rows, dimensionKey){
-
-  const index = {};
-
-  rows.forEach(function(row){
-
-    const dim = row[dimensionKey];
-
-    if(!index[dim]) index[dim] = {};
-    if(!index[dim][row.month]) index[dim][row.month] = {};
-
-    index[dim][row.month][row.fy] = row;
-
-  });
-
-  return index;
-
-}
-
-
-/**
- * ==========================================================
- * TEST — buildFYRepPivotIndex_()
- * ==========================================================
- */
-function testBuildFYRepPivotIndex(){
-
-  const rows = [
-    { fy: 26, month: "AUG", segment: "Search", newLeads: 10 },
-    { fy: 25, month: "AUG", segment: "Search", newLeads: 8 }
-  ];
-
-  const index = buildFYRepPivotIndex_(rows, "segment");
-
-  const pass =
-    index.Search.AUG[26].newLeads === 10 &&
-    index.Search.AUG[25].newLeads === 8;
-
-  Logger.log("Result: " + JSON.stringify(index));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Build FY_REP Flat Data Rows (순수 함수)
- *
- * WHY
- * FY 하나·지표 하나에 대한 12개월 × 세그먼트/채널 그리드를 만든다 —
- * 세그먼트가 컬럼, 월이 행(2026-08-08 사용자 확정 레이아웃). 데이터가
- * 없는 (월, 세그먼트) 조합은 공란("").
- *
- * INPUT
- * pivotIndex : Object  buildFYRepPivotIndex_() 결과
- * blockKeys : Array<string>  컬럼이 될 세그먼트/채널 목록(순서 그대로)
- * monthOrder : Array<string>  CONFIG.ACQ.FISCAL_MONTH_ORDER
- * fy : number
- * metric : { compute: Function }
- *
- * OUTPUT
- * Array<Array>  각 행 = [월, 세그먼트1값, 세그먼트2값, ...]
- *
- * TEST
- * testBuildFYRepFlatDataRows() 참고
- * ==========================================================
- */
-function buildFYRepFlatDataRows_(pivotIndex, blockKeys, monthOrder, fy, metric){
-
-  return monthOrder.map(function(month){
-
-    const outRow = [month];
-
-    blockKeys.forEach(function(blockKey){
-
-      const monthData = pivotIndex[blockKey] && pivotIndex[blockKey][month];
-      const row = monthData && monthData[fy];
-
-      outRow.push(row ? metric.compute(row) : "");
-
-    });
-
-    return outRow;
+    return row[col.key];
 
   });
 
@@ -414,28 +203,148 @@ function buildFYRepFlatDataRows_(pivotIndex, blockKeys, monthOrder, fy, metric){
 
 /**
  * ==========================================================
- * TEST — buildFYRepFlatDataRows_()
+ * TEST — buildFYRepRowValues_()
  * ==========================================================
  */
-function testBuildFYRepFlatDataRows(){
+function testBuildFYRepRowValues(){
 
-  const rows = [
-    { fy: 26, month: "AUG", segment: "Search", newLeads: 10 },
-    { fy: 26, month: "AUG", segment: "Content", newLeads: 4 }
-    // SEP은 데이터 없음 — 공란 확인용
-  ];
+  const row = {
+    fy: 27, month: "AUG", spent: 100, newP1: 5, icBooked: 2, icComplete: 1,
+    seminar: 10, webinar: 20, bofu: 30, search: 40, content: 50,
+    upsell: 60, referral: 70, other: 80, totalRev: 360, target: 400,
+    targetPct: 0.9, roi: 3.6
+  };
 
-  const index = buildFYRepPivotIndex_(rows, "segment");
-  const metric = { compute: function(r){ return r.newLeads; } };
-
-  const dataRows = buildFYRepFlatDataRows_(index, ["Search", "Content"], ["AUG", "SEP"], 26, metric);
+  const values = buildFYRepRowValues_(row, FY_REP_FLAT_COLUMNS);
 
   const pass =
-    dataRows.length === 2 &&
-    JSON.stringify(dataRows[0]) === JSON.stringify(["AUG", 10, 4]) &&
-    JSON.stringify(dataRows[1]) === JSON.stringify(["SEP", "", ""]);
+    values[0] === "FY27" &&
+    values[1] === "AUG" &&
+    values[2] === 100 &&
+    values[3] === 5 &&
+    values[14] === 360 && // totalRev
+    values[16] === 0.9 && // targetPct
+    values[17] === 3.6;   // roi
 
-  Logger.log("Result: " + JSON.stringify(dataRows));
+  Logger.log("Result: " + JSON.stringify(values));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Build FY_REP Subtotal Row Formulas (순수 함수)
+ *
+ * WHY
+ * 3행(헤더 겸 SUBTOTAL 행)에 들어갈 수식 문자열을 컬럼 정의로부터 만든다.
+ * "sum" 컬럼은 `="라벨 (" & TEXT(SUBTOTAL(9,범위),서식) & ")"` 형태로 라벨과
+ * 합계를 한 셀에 겸해서 보여주고(사용자 확정), "ratio" 컬럼(Target%/ROI)은
+ * 분자·분모 컬럼을 각각 SUBTOTAL로 합산한 뒤 나눈다(행별 비율을 그대로
+ * 합산하면 의미가 없으므로). FY/Month처럼 subtotal이 없는 컬럼은 라벨만.
+ * 전부 "="로 시작하는 수식이라 setFormulas() 한 번으로 균일하게 쓸 수 있음.
+ *
+ * INPUT
+ * columns : Array<Object>  FY_REP_FLAT_COLUMNS
+ * rangeByKey : Object  컬럼 key → A1 표기 데이터 범위 문자열(예 "C4:C100000")
+ *
+ * OUTPUT
+ * Array<string>  columns와 같은 길이의 수식 문자열
+ *
+ * TEST
+ * testBuildFYRepSubtotalRowFormulas() 참고
+ * ==========================================================
+ */
+function buildFYRepSubtotalRowFormulas_(columns, rangeByKey){
+
+  return columns.map(function(col){
+
+    if(col.subtotal === "sum"){
+      return "=SUBTOTAL(9," + rangeByKey[col.key] + ")";
+    }
+
+    if(col.subtotal === "ratio"){
+      return "=IFERROR(SUBTOTAL(9," + rangeByKey[col.numeratorKey] +
+        ")/SUBTOTAL(9," + rangeByKey[col.denominatorKey] + "),0)";
+    }
+
+    return "";
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildFYRepSubtotalRowFormulas_()
+ * ==========================================================
+ */
+function testBuildFYRepSubtotalRowFormulas(){
+
+  const columns = [
+    { key: "fy", label: "FY" },
+    { key: "spent", label: "Spent", format: "$#,##0", subtotal: "sum" },
+    { key: "totalRev", label: "Total Rev", format: "$#,##0", subtotal: "sum" },
+    { key: "target", label: "Target", format: "$#,##0", subtotal: "sum" },
+    { key: "roi", label: "ROI", format: "0.00", subtotal: "ratio", numeratorKey: "totalRev", denominatorKey: "spent", ratioFormat: "0.00" }
+  ];
+
+  const rangeByKey = { spent: "C4:C100", totalRev: "O4:O100", target: "P4:P100" };
+
+  const formulas = buildFYRepSubtotalRowFormulas_(columns, rangeByKey);
+
+  const pass =
+    formulas[0] === "" &&
+    formulas[1] === "=SUBTOTAL(9,C4:C100)" &&
+    formulas[4] === "=IFERROR(SUBTOTAL(9,O4:O100)/SUBTOTAL(9,C4:C100),0)";
+
+  Logger.log("Result: " + JSON.stringify(formulas));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Build FY_REP Header Row Labels (순수 함수)
+ *
+ * WHY
+ * 4행(순수 컬럼 헤더 행)에 쓸 라벨 배열을 만든다 — 2026-08-20 사용자
+ * 피드백("3번째는 subtotal, 4번째는 헤더")으로 기존 "헤더+SUBTOTAL 겸용"
+ * 1행 설계를 2행으로 분리(3행=SUBTOTAL만, 4행=이 함수의 라벨만).
+ *
+ * INPUT
+ * columns : Array<{ label }>  FY_REP_FLAT_COLUMNS
+ *
+ * OUTPUT
+ * Array<string>  columns 순서의 라벨
+ *
+ * TEST
+ * testBuildFYRepHeaderRowLabels() 참고
+ * ==========================================================
+ */
+function buildFYRepHeaderRowLabels_(columns){
+
+  return columns.map(function(col){ return col.label; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildFYRepHeaderRowLabels_()
+ * ==========================================================
+ */
+function testBuildFYRepHeaderRowLabels(){
+
+  const columns = [{ key: "fy", label: "FY" }, { key: "spent", label: "Spent" }];
+
+  const labels = buildFYRepHeaderRowLabels_(columns);
+
+  const pass = JSON.stringify(labels) === JSON.stringify(["FY", "Spent"]);
+
+  Logger.log("Result: " + JSON.stringify(labels));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -449,7 +358,8 @@ function testBuildFYRepFlatDataRows(){
  * Control Area의 Start FY/End FY 드롭다운 값(예 "FY24")을 실제 순회할 FY
  * 배열로 바꾼다. 잘못된 값(파싱 실패, start > end, CONFIG.FYREP.FYS 밖의
  * 값)이면 CONFIG.FYREP.FYS 전체로 안전하게 폴백 — 에러로 리포트 생성을
- * 막지 않음(빈 드롭다운인 최초 상태 등 방어).
+ * 막지 않음(빈 드롭다운인 최초 상태 등 방어). 2026-08-20 재구성에서도
+ * 그대로 재사용(Start/End FY 파싱 로직 자체는 안 바뀜).
  *
  * INPUT
  * startLabel, endLabel : string  "FY24" 등
@@ -512,13 +422,49 @@ function testBuildFYRepFYRange(){
 
 /**
  * ==========================================================
+ * Write FY_REP Header Row (IO 래퍼)
+ *
+ * WHY
+ * 3행(헤더+SUBTOTAL 겸용)에 `buildFYRepSubtotalRowFormulas_()` 결과를 쓴다.
+ * 실제 시트 Range의 `getA1Notation()`으로 범위 문자열을 만들어(컬럼 문자
+ * 직접 계산 안 함 — 이 프로젝트에 아직 columnToLetter_ 유틸이 없어 실수
+ * 위험) 순수 함수에 넘긴다. setupFYReport()와 generateFYReport_() 둘 다
+ * 호출 — Generate 때마다 다시 써도 내용은 동일(범위가 컬럼 개수/
+ * REPORT_START_ROW로 고정이라 매번 같은 수식).
+ *
+ * INPUT
+ * sheet : Sheet
+ * ==========================================================
+ */
+function writeFYRepHeaderRow_(sheet){
+
+  const columns = FY_REP_FLAT_COLUMNS;
+  const dataStartRow = CONFIG.FYREP.REPORT_START_ROW;
+
+  const rangeByKey = {};
+
+  columns.forEach(function(col, i){
+    rangeByKey[col.key] = sheet.getRange(dataStartRow, i + 1, FY_REP_SUBTOTAL_RANGE_ROW_COUNT, 1).getA1Notation();
+  });
+
+  const formulas = buildFYRepSubtotalRowFormulas_(columns, rangeByKey);
+  sheet.getRange(CONFIG.FYREP.SUBTOTAL_ROW, 1, 1, columns.length).setFormulas([formulas]);
+
+  const labels = buildFYRepHeaderRowLabels_(columns);
+  sheet.getRange(CONFIG.FYREP.HEADER_ROW, 1, 1, columns.length).setValues([labels]);
+
+}
+
+
+/**
+ * ==========================================================
  * Setup FY_REP Report (IO 래퍼)
  *
  * WHY
- * FY_REP 시트를 만들고 Control Area(FY 범위 드롭다운 + 섹션 체크박스 +
- * 지표 드롭다운)를 세팅한다. 기존 선택값이 있으면 안 건드리고, 비어있거나
- * 유효하지 않은 셀만 기본값으로 채운다 — 재실행해도 사용자가 골라둔 선택이
- * 사라지지 않게(체크박스 기본값 버그, 2026-08-08 실측 발견·수정 경험 반영).
+ * FY_REP 시트를 만들고 Control Area(1행 — Start FY/End FY/Generate)와
+ * 3행 헤더를 세팅한다. 기존 선택값이 있으면 안 건드리고, 비어있거나
+ * 유효하지 않은 셀만 기본값으로 채운다 — 재실행해도 사용자가 골라둔
+ * 선택이 사라지지 않게.
  * ==========================================================
  */
 function setupFYReport(){
@@ -531,33 +477,28 @@ function setupFYReport(){
     sheet = ss.insertSheet(CONFIG.FYREP.SHEET);
   }
 
-  // 시트 전체 서식 초기화(값은 안 건드림) — 레이아웃이 세 차례 바뀌면서
-  // 과거 버전의 배경색/굵게 등이 새 레이아웃 위치에 남아있을 수 있어
-  // 사용자 요청으로 추가(2026-08-08). clearFormats()는 내용은 보존하므로
-  // 아래 Control Area 기존 선택값 보존 로직과 충돌하지 않음.
   sheet.clearFormats();
 
   const control = CONFIG.FYREP.CONTROL;
+  const columns = FY_REP_FLAT_COLUMNS;
+
+  // 과거 레이아웃(체크박스 4개 + 지표 드롭다운, A1:F3)이 남긴 데이터 검증
+  // 규칙을 먼저 지운다 — setValue()는 검증을 무시하고 값은 써지지만, 규칙
+  // 자체는 안 지워져 셀에 엉뚱한 체크박스/드롭다운 UI가 남을 수 있음.
+  sheet.getRange(1, 1, 4, columns.length).clearDataValidations();
+
+  // 2행은 항상 빈 행(사용자 확정) — 과거 레이아웃이 남긴 값이 있어도 정리.
+  sheet.getRange(2, 1, 1, columns.length).clearContent();
+
   const fyLabels = CONFIG.FYREP.FYS.map(function(fy){ return "FY" + String(fy).slice(-2); });
   const fyRule = SpreadsheetApp.newDataValidation().requireValueInList(fyLabels).build();
 
-  // 과거 레이아웃(체크박스 4개가 A2:D2에 있던 버전 등)이 남긴 데이터 검증
-  // 규칙을 먼저 지운다 — setValue()는 검증을 무시하고 값은 써지지만, 규칙
-  // 자체는 안 지워져 셀에 엉뚱한 체크박스/드롭다운 UI가 남을 수 있음
-  // (2026-08-08 레이아웃이 세 차례 바뀌며 실측 대비 방어적으로 추가).
-  sheet.getRange(1, 1, 3, 6).clearDataValidations();
+  sheet.getRange(control.START_FY.ROW, control.START_FY.LABEL_COL).setValue("Start FY").setFontWeight("bold");
+  sheet.getRange(control.END_FY.ROW, control.END_FY.LABEL_COL).setValue("End FY").setFontWeight("bold");
+  sheet.getRange(control.GENERATE.ROW, control.GENERATE.LABEL_COL).setValue("Generate").setFontWeight("bold");
 
-  //----------------------------------------------------------
-  // A1:B2 — FY 범위
-  //----------------------------------------------------------
-
-  const fyRange = control.FY_RANGE;
-
-  sheet.getRange(fyRange.START_ROW, fyRange.LABEL_COL).setValue("Start FY").setFontWeight("bold");
-  sheet.getRange(fyRange.END_ROW, fyRange.LABEL_COL).setValue("End FY").setFontWeight("bold");
-
-  const startCell = sheet.getRange(fyRange.START_ROW, fyRange.VALUE_COL);
-  const endCell = sheet.getRange(fyRange.END_ROW, fyRange.VALUE_COL);
+  const startCell = sheet.getRange(control.START_FY.ROW, control.START_FY.VALUE_COL);
+  const endCell = sheet.getRange(control.END_FY.ROW, control.END_FY.VALUE_COL);
 
   startCell.setDataValidation(fyRule);
   endCell.setDataValidation(fyRule);
@@ -565,58 +506,13 @@ function setupFYReport(){
   if(fyLabels.indexOf(startCell.getValue()) === -1) startCell.setValue(fyLabels[0]);
   if(fyLabels.indexOf(endCell.getValue()) === -1) endCell.setValue(fyLabels[fyLabels.length - 1]);
 
-  //----------------------------------------------------------
-  // C1:F3 — 섹션 체크박스 + 지표 드롭다운
-  //----------------------------------------------------------
-
-  const sections = control.SECTIONS;
-  const cols = sections.COLUMNS;
-
-  const sectionMeta = [
-    { col: cols.MARKETING, label: "Marketing", metrics: FY_REP_MARKETING_METRICS },
-    { col: cols.ACQ, label: "ACQ", metrics: FY_REP_ACQ_METRICS },
-    { col: cols.PIPELINE, label: "Pipeline", metrics: FY_REP_PIPELINE_METRICS },
-    { col: cols.REVENUE, label: "Revenue", metrics: null } // 드롭다운 없음(Actual 고정)
-  ];
-
   const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  const generateCell = sheet.getRange(control.GENERATE.ROW, control.GENERATE.VALUE_COL);
 
-  sectionMeta.forEach(function(meta){
-
-    const labelCell = sheet.getRange(sections.LABEL_ROW, meta.col);
-    labelCell.setValue(meta.label).setFontWeight("bold");
-
-    const checkboxCell = sheet.getRange(sections.CHECKBOX_ROW, meta.col);
-    checkboxCell.setDataValidation(checkboxRule);
-
-    if(typeof checkboxCell.getValue() !== "boolean") checkboxCell.setValue(true);
-
-    if(meta.metrics){
-
-      const metricLabels = meta.metrics.map(function(m){ return m.label; });
-      const metricRule = SpreadsheetApp.newDataValidation().requireValueInList(metricLabels).build();
-
-      const metricCell = sheet.getRange(sections.METRIC_ROW, meta.col);
-      metricCell.setDataValidation(metricRule);
-
-      if(metricLabels.indexOf(metricCell.getValue()) === -1) metricCell.setValue(metricLabels[0]);
-
-    }
-
-  });
-
-  //----------------------------------------------------------
-  // A3:B3 — Generate 체크박스(설치형 트리거 전용, onFYReportEdit_() 참고)
-  //----------------------------------------------------------
-
-  const generateConfig = control.GENERATE;
-
-  sheet.getRange(generateConfig.ROW, generateConfig.LABEL_COL).setValue("Generate").setFontWeight("bold");
-
-  const generateCell = sheet.getRange(generateConfig.ROW, generateConfig.CHECKBOX_COL);
   generateCell.setDataValidation(checkboxRule);
-
   if(typeof generateCell.getValue() !== "boolean") generateCell.setValue(false);
+
+  writeFYRepHeaderRow_(sheet);
 
   Logger.log(CONFIG.LOG.PREFIX + " " + CONFIG.FYREP.SHEET + " Control Area ready.");
 
@@ -628,7 +524,7 @@ function setupFYReport(){
  * On FY_REP Edit (설치형 트리거 핸들러)
  *
  * WHY
- * Generate 체크박스(A3:B3)가 체크되면 generateFYReport_()를 실행하고 다시
+ * Generate 체크박스(F1)가 체크되면 generateFYReport_()를 실행하고 다시
  * 체크 해제한다. 반드시 **설치형 트리거**로 등록해야 동작 — 일반 onEdit
  * Simple Trigger는 권한이 제한돼 있어 Marketing 섹션이 여는
  * `perfTrackerByFY`(SpreadsheetApp.openById()) 호출이 실패한다(Target_REP
@@ -649,7 +545,7 @@ function onFYReportEdit_(e){
 
   const generateConfig = CONFIG.FYREP.CONTROL.GENERATE;
 
-  if(e.range.getRow() !== generateConfig.ROW || e.range.getColumn() !== generateConfig.CHECKBOX_COL) return;
+  if(e.range.getRow() !== generateConfig.ROW || e.range.getColumn() !== generateConfig.VALUE_COL) return;
 
   if(e.value !== "TRUE") return;
 
@@ -658,7 +554,7 @@ function onFYReportEdit_(e){
   } catch(err){
     Logger.log(CONFIG.LOG.PREFIX + " FY_REP Generate 실패: " + err.message);
   } finally {
-    sheet.getRange(generateConfig.ROW, generateConfig.CHECKBOX_COL).setValue(false);
+    sheet.getRange(generateConfig.ROW, generateConfig.VALUE_COL).setValue(false);
   }
 
 }
@@ -693,277 +589,14 @@ function runInstallFYReportGenerateTrigger(){
 
 /**
  * ==========================================================
- * Compute FY_REP Column Totals (순수 함수)
- *
- * WHY
- * 블록 하나(12개월 데이터 행)의 컬럼별 합계 행을 만든다 — 모든 블록에
- * 공통으로 붙는 "Total" 행(사용자 요청, 2026-08-08). 첫 컬럼(Month)은
- * "Total" 라벨로 대체, 나머지 컬럼은 숫자 합(공란/비숫자는 0 취급).
- *
- * INPUT
- * dataRows : Array<Array>  buildFYRepFlatDataRows_() 결과(또는 Sum 컬럼이
- *   이미 붙은 형태 — 그 컬럼도 그대로 합산됨)
- *
- * OUTPUT
- * Array|null  ["Total", 합계1, 합계2, ...], dataRows가 비어있으면 null
- *
- * TEST
- * testComputeFYRepColumnTotals() 참고
- * ==========================================================
- */
-function computeFYRepColumnTotals_(dataRows){
-
-  if(dataRows.length === 0) return null;
-
-  const colCount = dataRows[0].length;
-  const totals = ["Total"];
-
-  for(let c = 1; c < colCount; c++){
-
-    let sum = 0;
-
-    dataRows.forEach(function(row){ sum += (Number(row[c]) || 0); });
-
-    totals.push(sum);
-
-  }
-
-  return totals;
-
-}
-
-
-/**
- * ==========================================================
- * TEST — computeFYRepColumnTotals_()
- * ==========================================================
- */
-function testComputeFYRepColumnTotals(){
-
-  const dataRows = [["AUG", 1, 2], ["SEP", 3, ""], ["OCT", "", 4]];
-
-  const totals = computeFYRepColumnTotals_(dataRows);
-
-  const pass =
-    JSON.stringify(totals) === JSON.stringify(["Total", 4, 6]) &&
-    computeFYRepColumnTotals_([]) === null;
-
-  Logger.log("Result: " + JSON.stringify(totals));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Compute FY_REP Row Sums (순수 함수)
- *
- * WHY
- * Revenue 섹션의 Sum 컬럼(사용자 요청 — "J에 sum이 들어가면 좋겠어") 값을
- * 계산한다 — 행 하나(그 달)의 세그먼트/버킷 값을 전부 더한 것(Month
- * 컬럼 제외).
- *
- * INPUT
- * dataRows : Array<Array>  buildFYRepFlatDataRows_() 결과
- *
- * OUTPUT
- * Array<number>  dataRows와 같은 길이, 행별 합계
- *
- * TEST
- * testComputeFYRepRowSums() 참고
- * ==========================================================
- */
-function computeFYRepRowSums_(dataRows){
-
-  return dataRows.map(function(row){
-
-    let sum = 0;
-
-    for(let c = 1; c < row.length; c++){
-      sum += (Number(row[c]) || 0);
-    }
-
-    return sum;
-
-  });
-
-}
-
-
-/**
- * ==========================================================
- * TEST — computeFYRepRowSums_()
- * ==========================================================
- */
-function testComputeFYRepRowSums(){
-
-  const dataRows = [["AUG", 1, 2, 3], ["SEP", 5, "", ""]];
-
-  const sums = computeFYRepRowSums_(dataRows);
-
-  const pass = JSON.stringify(sums) === JSON.stringify([6, 5]);
-
-  Logger.log("Result: " + JSON.stringify(sums));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Write FY_REP Flat Block (IO 래퍼)
- *
- * WHY
- * FY 하나·지표 하나의 표(제목 행 + 헤더 행 + 12개월 데이터 행 + Total
- * 행)를 startRow부터 쓴다. Revenue 전용 옵션(options.includeRowSum)이
- * 켜져 있으면 세그먼트 값들의 행별 합계를 "Sum" 컬럼으로 추가하고,
- * options.monthTargets(월→회사 전체 Target 맵)가 있으면 그 달 Sum이
- * Target을 넘을 때 셀 배경을 `#01EF18`로 칠한다(사용자 확정 색상,
- * 2026-08-08) — Sum 계산과 같은 함수 안에서 처리해야 rowSums를 다시
- * 조회할 필요가 없어 Styles 레이어로 안 빼고 여기서 직접 처리.
- *
- * INPUT
- * sheet : Sheet
- * startRow : number
- * title : string
- * columnKeys : Array<string>  세그먼트/채널 컬럼 목록
- * dataRows : Array<Array>  buildFYRepFlatDataRows_() 결과
- * options : { includeRowSum?: boolean, monthTargets?: Object } | undefined
- *
- * OUTPUT
- * Object  { headerRow, dataStartRow, rowCount, colCount, totalRow, nextRow }
- * ==========================================================
- */
-function writeFYRepFlatBlock_(sheet, startRow, title, columnKeys, dataRows, options){
-
-  options = options || {};
-
-  sheet.getRange(startRow, 1).setValue(title).setFontWeight("bold").setFontSize(12);
-
-  const headerRow = startRow + 1;
-  const header = ["Month"].concat(columnKeys);
-
-  if(options.includeRowSum) header.push("Sum");
-
-  sheet.getRange(headerRow, 1, 1, header.length).setValues([header]);
-
-  const dataStartRow = headerRow + 1;
-
-  let outputRows = dataRows;
-  let rowSums = null;
-
-  if(options.includeRowSum){
-
-    rowSums = computeFYRepRowSums_(dataRows);
-    outputRows = dataRows.map(function(row, i){ return row.concat([rowSums[i]]); });
-
-  }
-
-  if(outputRows.length > 0){
-    sheet.getRange(dataStartRow, 1, outputRows.length, header.length).setValues(outputRows);
-  }
-
-  let cursor = dataStartRow + outputRows.length;
-  let totalRow = null;
-
-  const totals = computeFYRepColumnTotals_(outputRows);
-
-  if(totals){
-    sheet.getRange(cursor, 1, 1, header.length).setValues([totals]);
-    totalRow = cursor;
-    cursor++;
-  }
-
-  if(options.includeRowSum && options.monthTargets && rowSums){
-
-    dataRows.forEach(function(row, i){
-
-      const month = row[0];
-      const target = options.monthTargets[month] || 0;
-
-      if(rowSums[i] > target){
-        sheet.getRange(dataStartRow + i, header.length).setBackground("#01EF18");
-      }
-
-    });
-
-  }
-
-  return {
-    headerRow: headerRow,
-    dataStartRow: dataStartRow,
-    rowCount: outputRows.length,
-    colCount: header.length,
-    totalRow: totalRow,
-    nextRow: cursor + 1 // 블록 사이 빈 줄 1개
-  };
-
-}
-
-
-/**
- * ==========================================================
- * Write FY_REP Section (IO 래퍼)
- *
- * WHY
- * 섹션(Marketing/ACQ/Pipeline/Revenue) 하나 — FY 범위만큼 writeFYRepFlatBlock_()
- * 반복 호출(FY가 세로 블록 반복 단위, 2026-08-08 확정). 블록은 **최신 FY가
- * 먼저(위쪽)** 오도록 fyRange를 역순으로 순회(사용자 요청, 2026-08-08 —
- * fyRange 자체는 오름차순 유지, 여기서만 표시 순서를 뒤집음).
- *
- * INPUT
- * sheet : Sheet
- * startRow : number
- * sectionName : string
- * metric : Object
- * columnKeys : Array<string>
- * pivotIndex : Object
- * monthOrder : Array<string>
- * fyRange : Array<number>
- * sectionOptions : { includeRowSum?: boolean, monthTargetsByFY?: Object } | undefined
- *   monthTargetsByFY는 FY→(월→Target) 맵 — Revenue Sum 하이라이트 전용.
- *
- * OUTPUT
- * Object  { blocks: Array<Object>, nextRow }
- * ==========================================================
- */
-function writeFYRepSection_(sheet, startRow, sectionName, metric, columnKeys, pivotIndex, monthOrder, fyRange, sectionOptions){
-
-  sectionOptions = sectionOptions || {};
-
-  let cursor = startRow;
-  const blocks = [];
-
-  fyRange.slice().reverse().forEach(function(fy){
-
-    const dataRows = buildFYRepFlatDataRows_(pivotIndex, columnKeys, monthOrder, fy, metric);
-    const title = sectionName + " — " + metric.label + " — FY" + String(fy).slice(-2);
-
-    const blockOptions = {
-      includeRowSum: sectionOptions.includeRowSum,
-      monthTargets: sectionOptions.monthTargetsByFY ? sectionOptions.monthTargetsByFY[fy] : null
-    };
-
-    const block = writeFYRepFlatBlock_(sheet, cursor, title, columnKeys, dataRows, blockOptions);
-
-    blocks.push(block);
-    cursor = block.nextRow;
-
-  });
-
-  return { blocks: blocks, nextRow: cursor };
-
-}
-
-
-/**
- * ==========================================================
  * Generate FY_REP Report (IO 래퍼 — 수동 실행 전용)
  *
  * WHY
- * Control Area(FY 범위/섹션 체크박스/지표 드롭다운)를 읽어 체크된 섹션만
- * Engine 호출 + 표 작성. Report 영역(CONFIG.FYREP.REPORT_START_ROW부터)만
- * 지우고 Control Area는 그대로 둔다.
+ * Control Area(Start FY/End FY)를 읽어 그 범위의 FY×Month 플랫 행을
+ * `computeFYRepFlatRows_()`(Engine)에서 가져와 4행부터 쓴다. End FY가
+ * 위로 오도록 FY는 최신순, 그 안에서 월은 CONFIG.ACQ.FISCAL_MONTH_ORDER
+ * 순(기존 방침 유지). 3행 헤더는 컬럼 정의가 안 바뀌어도 매번 다시 써서
+ * (Generate와 무관하게 항상 최신 수식 유지) 값만 새로 채운다.
  * ==========================================================
  */
 function generateFYReport_(){
@@ -982,150 +615,50 @@ function generateFYReport_(){
   }
 
   const control = CONFIG.FYREP.CONTROL;
-  const fyRangeConfig = control.FY_RANGE;
-  const sections = control.SECTIONS;
-  const cols = sections.COLUMNS;
+  const columns = FY_REP_FLAT_COLUMNS;
 
-  const startLabel = sheet.getRange(fyRangeConfig.START_ROW, fyRangeConfig.VALUE_COL).getValue();
-  const endLabel = sheet.getRange(fyRangeConfig.END_ROW, fyRangeConfig.VALUE_COL).getValue();
+  const startLabel = sheet.getRange(control.START_FY.ROW, control.START_FY.VALUE_COL).getValue();
+  const endLabel = sheet.getRange(control.END_FY.ROW, control.END_FY.VALUE_COL).getValue();
   const fyRange = buildFYRepFYRange_(startLabel, endLabel, CONFIG.FYREP.FYS);
 
-  const checkboxValues = sheet.getRange(sections.CHECKBOX_ROW, cols.MARKETING, 1, 4).getValues()[0];
-  const metricValues = sheet.getRange(sections.METRIC_ROW, cols.MARKETING, 1, 3).getValues()[0];
-
-  const showMarketing = checkboxValues[cols.MARKETING - cols.MARKETING] === true;
-  const showACQ = checkboxValues[cols.ACQ - cols.MARKETING] === true;
-  const showPipeline = checkboxValues[cols.PIPELINE - cols.MARKETING] === true;
-  const showRevenue = checkboxValues[cols.REVENUE - cols.MARKETING] === true;
-
-  const marketingMetric = findFYRepMetricByLabel_(FY_REP_MARKETING_METRICS, metricValues[cols.MARKETING - cols.MARKETING]);
-  const acqMetric = findFYRepMetricByLabel_(FY_REP_ACQ_METRICS, metricValues[cols.ACQ - cols.MARKETING]);
-  const pipelineMetric = findFYRepMetricByLabel_(FY_REP_PIPELINE_METRICS, metricValues[cols.PIPELINE - cols.MARKETING]);
-
   const reportStartRow = CONFIG.FYREP.REPORT_START_ROW;
-  const clearWidth = 30; // 세그먼트/채널 컬럼 수가 늘어나도 여유있게(Marketing 채널은 동적)
-
   const lastRow = sheet.getLastRow();
+
   if(lastRow >= reportStartRow){
-    sheet.getRange(reportStartRow, 1, lastRow - reportStartRow + 1, clearWidth).clear();
+    sheet.getRange(reportStartRow, 1, lastRow - reportStartRow + 1, columns.length).clear();
   }
+
+  writeFYRepHeaderRow_(sheet);
+
+  const allRows = computeFYRepFlatRows_();
+  const rowsByKey = {};
+
+  allRows.forEach(function(row){ rowsByKey[row.fy + "|" + row.month] = row; });
 
   const monthOrder = CONFIG.ACQ.FISCAL_MONTH_ORDER;
-  const segmentOrder = CONFIG.ACQ.SEGMENTS;
+  const orderedRows = [];
 
-  let cursor = reportStartRow;
-  const sectionsWritten = [];
-
-  //----------------------------------------------------------
-  // 1. Marketing
-  //----------------------------------------------------------
-
-  if(showMarketing){
-
-    const marketingRows = transformFYRepMarketingChannels_(
-      computeFYRepMarketingRows_(), FY_REP_MARKETING_CHANNEL_DISPLAY_MAP, FY_REP_MARKETING_CHANNEL_EXCLUDE
-    );
-    const marketingIndex = buildFYRepPivotIndex_(marketingRows, "channel");
-    const marketingBlockKeys = collectFYRepDynamicBlockKeys_(marketingRows, "channel");
-
-    const section = writeFYRepSection_(
-      sheet, cursor, "Marketing", marketingMetric, marketingBlockKeys, marketingIndex, monthOrder, fyRange,
-      { includeRowSum: true }
-    );
-
-    sectionsWritten.push({ metric: marketingMetric, blocks: section.blocks });
-    cursor = section.nextRow;
-
-  }
-
-  //----------------------------------------------------------
-  // 2/3. ACQ + Pipeline (같은 Engine 결과 공유)
-  //----------------------------------------------------------
-
-  if(showACQ || showPipeline){
-
-    const leadsOPSRows = computeFYRepLeadsOPSAggregates_();
-
-    if(showACQ){
-
-      const acqIndex = buildFYRepPivotIndex_(leadsOPSRows, "segment");
-
-      const section = writeFYRepSection_(
-        sheet, cursor, "ACQ", acqMetric, segmentOrder, acqIndex, monthOrder, fyRange,
-        { includeRowSum: true }
-      );
-
-      sectionsWritten.push({ metric: acqMetric, blocks: section.blocks });
-      cursor = section.nextRow;
-
-    }
-
-    if(showPipeline){
-
-      const pipelineDealCounts = computeFYRepPipelineDealCounts_();
-
-      const pipelineRows = leadsOPSRows.map(function(row){
-
-        const key = row.fy + "|" + row.month + "|" + row.segment;
-
-        return Object.assign({}, row, { deals: pipelineDealCounts[key] || 0 });
-
-      });
-
-      const pipelineIndex = buildFYRepPivotIndex_(pipelineRows, "segment");
-
-      const section = writeFYRepSection_(
-        sheet, cursor, "Pipeline", pipelineMetric, segmentOrder, pipelineIndex, monthOrder, fyRange,
-        { includeRowSum: true }
-      );
-
-      sectionsWritten.push({ metric: pipelineMetric, blocks: section.blocks });
-      cursor = section.nextRow;
-
-    }
-
-  }
-
-  //----------------------------------------------------------
-  // 4. Revenue
-  //----------------------------------------------------------
-
-  if(showRevenue){
-
-    const revenueRows = computeFYRepRevenueRows_();
-    const revenueBucketOrder = segmentOrder.concat(["Upsell"]);
-    const revenueIndex = buildFYRepPivotIndex_(revenueRows, "segment");
-
-    // Sum(J열) 하이라이트용 — FY별 월 Revenue Target(회사 전체, Quarterly
-    // Summary C열). computeFYRepCompanyRevenueTargetsForFY_()는 Revenue
-    // 섹션 Engine이 Target(추정) 계산에 이미 쓰던 함수 재사용.
-    const monthTargetsByFY = {};
-    fyRange.forEach(function(fy){
-      monthTargetsByFY[fy] = computeFYRepCompanyRevenueTargetsForFY_(fy);
+  fyRange.slice().reverse().forEach(function(fy){
+    monthOrder.forEach(function(month){
+      const row = rowsByKey[fy + "|" + month];
+      if(row) orderedRows.push(row);
     });
+  });
 
-    const section = writeFYRepSection_(
-      sheet, cursor, "Revenue", FY_REP_REVENUE_METRIC, revenueBucketOrder, revenueIndex, monthOrder, fyRange,
-      { includeRowSum: true, monthTargetsByFY: monthTargetsByFY }
-    );
+  const values = orderedRows.map(function(row){ return buildFYRepRowValues_(row, columns); });
 
-    sectionsWritten.push({ metric: FY_REP_REVENUE_METRIC, blocks: section.blocks });
-    cursor = section.nextRow;
-
+  if(values.length > 0){
+    sheet.getRange(reportStartRow, 1, values.length, columns.length).setValues(values);
   }
 
-  applyFYReportStyles_(sheet, sectionsWritten);
-
-  // Generate 완료 후 섹션 체크박스(C2:F2)도 Generate 체크박스(B3, onFYReportEdit_
-  // 쪽에서 처리)처럼 해제 — 사용자 요청(2026-08-08, "이것도 해제되도록").
-  sheet.getRange(sections.CHECKBOX_ROW, cols.MARKETING, 1, 4).setValue(false);
+  applyFYReportStyles_(sheet, columns, orderedRows);
 
   const elapsed = ((new Date()) - start) / 1000;
 
   Logger.log(
     CONFIG.LOG.PREFIX + " FY_REP Report generated — FY 범위 " +
     fyRange.map(function(fy){ return "FY" + String(fy).slice(-2); }).join("~") +
-    ", 섹션 " + sectionsWritten.length + "개 (" + elapsed + "초)"
+    ", " + values.length + "행 (" + elapsed + "초)"
   );
 
 }

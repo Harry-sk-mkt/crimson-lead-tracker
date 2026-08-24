@@ -40,9 +40,49 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v1.4.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-24)
+ * - `computeFYRepTeamKoreaTargetsByFY_()` Target 소스 재교체 — 22행 "Marketing
+ *   Revenue Target" × VAT 10%(`CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER`, 삭제됨)
+ *   대신 신규 24행 "Total Revenue Target"(`inputs.monthlyTotalRevenueTarget`,
+ *   TARGET_001_Engine.js v1.27.0)을 그대로 사용 — 사용자 실측 확인: 22행이
+ *   Referral/Upsell 제외 마케팅 기여분만 담고 있어 FY_REP Total Rev(Referral/
+ *   Upsell 포함)와 범위가 안 맞았음. 상세는 함수 WHY 참고.
+ * v1.6.0 (2026-08-20)
+ * - Target 소스 전면 교체(사용자 확정 — "타겟은 팀 코리아 타겟으로
+ *   적용되야해") — `computeFYRepFlatRows_()`가 이제 perfTrackerByFY
+ *   Quarterly Summary 대신 `computeFYRepTeamKoreaTargetsByFY_()`(신규,
+ *   Target_Engine의 "Team Korea" 회사 전체 월별 Revenue Target ×
+ *   `CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER` 부가세 10% 반영)를 호출.
+ *   Target_Engine은 FY 하나만 담는 구조라 그 FY만 채워지고 나머지 FY는
+ *   공란(0 아님) — `buildFYRepFlatRows_()`의 target 계산 로직도 이에 맞춰
+ *   "FY 데이터 자체가 없으면 공란" 판정으로 수정, `testBuildFYRepFlatRows()`
+ *   케이스 갱신. `computeFYRepCompanyRevenueTargetsForFY_()`(perfTrackerByFY
+ *   기반)는 `computeFYRepRevenueRows_()`의 세그먼트별 배분 계산에서는
+ *   계속 씀(그쪽은 이번 변경 범위 밖) — 삭제 안 함.
+ * v1.5.1 (2026-08-20)
+ * - 버그 수정(실측, 사용자 보고 — "target, target%, roi, spent가 0이거나
+ *   값이 없어") — `computeFYRepCompanyRevenueTargetsForFY_()`가
+ *   `getRange().getValues()`로 Quarterly Summary 월 라벨(B열)을 읽고
+ *   있었는데, FY26 탭은 이 셀이 실제 Date 객체(표시 서식 "MMMM yyyy"로
+ *   "August 2026"처럼 보임)라 `.getValues()`는 Date 객체를 그대로 반환 —
+ *   `parseQuarterlySummaryMonthLabel_()`이 문자열이 아닌 Date를 월 이름으로
+ *   못 읽어 매번 null(스킵) 처리되며 Target이 항상 0으로 떨어짐. FY24 탭은
+ *   같은 셀이 순수 텍스트("AUGUST")라 우연히 문제가 안 드러났었음.
+ *   `.getDisplayValues()`로 교체 — `scanFYRepQuarterlySummaryRevenueTargets_()`
+ *   테스트 픽스처가 애초에 "$507,487" 같은 표시 문자열을 기대하고 있었으므로
+ *   (`testScanFYRepQuarterlySummaryRevenueTargets`) 원래 의도와도 일치.
+ * v1.5.0 (2026-08-20)
+ * - 전면 재구성(사용자 요청 — "전체 구조를 바꾸려고해") — 세그먼트/채널별
+ *   컬럼 폐기, 회사 전체 FY×Month 단일 플랫 행으로 교체. `sumFYRepRowsByFYMonth_()`
+ *   (Marketing/Leads_OPS 공용 합산 헬퍼)/`buildFYRepFlatRows_()`(3개 소스
+ *   병합)/`computeFYRepFlatRows_()`(IO 래퍼) 신규, `FY_REP_BUCKET_TO_FLAT_KEY`
+ *   매핑 상수 신규. Deals(건수) 섹션이 새 컬럼 목록에서 빠져
+ *   `aggregateFYRepDealCountsFromRows_()`/`computeFYRepPipelineDealCounts_()`
+ *   와 그 테스트 삭제(더 이상 어디서도 호출 안 함 — 미사용 코드 방치 금지
+ *   원칙). `deriveFYRepDealBucket_()`는 Revenue 섹션이 계속 사용해 유지.
  * v1.4.0 (2026-08-08)
  * - `computeFYRepDefaultFYList_()` 신규(사용자 요청 — "이후 년도도 자동으로
  *   추가되게 하자") — CONFIG.FYREP.FYS를 [24,25,26] 하드코딩 대신 이 함수
@@ -741,93 +781,6 @@ function testDeriveFYRepDealBucket(){
 
 /**
  * ==========================================================
- * Aggregate FY_REP Deal Counts From Rows (순수 함수)
- *
- * WHY
- * Pipeline 섹션의 Deals(건수)를 Deal Tracker 딜의 Created Date 코호트
- * 기준으로 집계한다(Close Date 아님 — `computeNewP1DealWonRevenueFromRows_()`
- * 와 동일 패턴, exec-plan §"ACQ / Pipeline 섹션(Actual)" 확정 사항).
- * Revenue 섹션도 이 함수를 그대로 재사용 예정(건수 대신 금액 합산만
- * 다르면 되므로 — 다음 커밋).
- *
- * INPUT
- * dealRows : Array<Object>  readDealTrackerRawRows_() 결과
- *
- * OUTPUT
- * Object  키 "fy|month|bucket" → 건수
- *
- * TEST
- * testAggregateFYRepDealCountsFromRows() 참고
- * ==========================================================
- */
-function aggregateFYRepDealCountsFromRows_(dealRows){
-
-  const counts = {};
-
-  dealRows.forEach(function(row){
-
-    if(!row.createdDate) return;
-
-    const bucket = deriveFYRepDealBucket_(row);
-    const key = row.createdFY + "|" + getFiscalMonthLabel(row.createdDate) + "|" + bucket;
-
-    counts[key] = (counts[key] || 0) + 1;
-
-  });
-
-  return counts;
-
-}
-
-
-/**
- * ==========================================================
- * TEST — aggregateFYRepDealCountsFromRows_()
- * ==========================================================
- */
-function testAggregateFYRepDealCountsFromRows(){
-
-  const dealRows = [
-    { createdDate: new Date(2026, 7, 1), createdFY: 27, leadSource: "Paid Search", businessSegment: "Search" },
-    { createdDate: new Date(2026, 7, 15), createdFY: 27, leadSource: "Paid Search", businessSegment: "Search" },
-    { createdDate: new Date(2026, 7, 3), createdFY: 27, leadSource: "Upsell", businessSegment: "Other" },
-    { createdDate: null, createdFY: null, leadSource: "Paid Search", businessSegment: "Search" }
-  ];
-
-  const counts = aggregateFYRepDealCountsFromRows_(dealRows);
-
-  const pass =
-    counts["27|AUG|Search"] === 2 &&
-    counts["27|AUG|Upsell"] === 1 &&
-    Object.keys(counts).length === 2;
-
-  Logger.log("Result: " + JSON.stringify(counts));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
-
-}
-
-
-/**
- * ==========================================================
- * Compute FY_REP Pipeline Deal Counts (IO 래퍼)
- *
- * WHY
- * Deal Tracker 캐시(DealTracker_Engine)를 읽어 Pipeline 섹션의 Deals
- * (건수) 맵을 만든다.
- *
- * OUTPUT
- * Object  aggregateFYRepDealCountsFromRows_() 참고 — 키 "fy|month|bucket" → 건수
- * ==========================================================
- */
-function computeFYRepPipelineDealCounts_(){
-
-  return aggregateFYRepDealCountsFromRows_(readDealTrackerRawRows_());
-
-}
-
-
-/**
- * ==========================================================
  * Parse Quarterly Summary Month Label (순수 함수)
  *
  * WHY
@@ -996,7 +949,7 @@ function computeFYRepCompanyRevenueTargetsForFY_(fy){
 
   if(numRows <= 0) return {};
 
-  const values = sheet.getRange(1, 1, numRows, lastCol).getValues();
+  const values = sheet.getRange(1, 1, numRows, lastCol).getDisplayValues();
 
   return scanFYRepQuarterlySummaryRevenueTargets_(
     values, quarterlyConfig.MONTH_LABEL_COL, quarterlyConfig.REVENUE_TARGET_COL
@@ -1293,5 +1246,323 @@ function testComputeFYRepDefaultFYList(){
   });
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * FY_REP Bucket To Flat Row Key (매핑 상수)
+ *
+ * WHY
+ * `deriveFYRepDealBucket_()`/`aggregateFYRepLeadsOPSFromRecords_()`가 쓰는
+ * 세그먼트/버킷 이름("Seminar"/"Webinar"/... /"Upsell")을 `buildFYRepFlatRows_()`
+ * 출력 행의 필드 키로 매핑한다 — 2026-08-20 전면 재구성(세그먼트/채널별
+ * 컬럼·FY 블록 반복 폐기, FY×Month 단일 플랫 테이블로 교체, 사용자 확정)의
+ * Revenue 컬럼 8개(CONFIG.ACQ.SEGMENTS 7개 + Upsell)에 대응.
+ * ==========================================================
+ */
+const FY_REP_BUCKET_TO_FLAT_KEY = {
+  Seminar: "seminar",
+  Webinar: "webinar",
+  BOFU: "bofu",
+  Search: "search",
+  Content: "content",
+  Referral: "referral",
+  Other: "other",
+  Upsell: "upsell"
+};
+
+
+/**
+ * ==========================================================
+ * Sum FY_REP Rows By FY×Month (순수 함수)
+ *
+ * WHY
+ * Marketing(채널별)/ACQ·Pipeline(세그먼트별) Engine 행을 세그먼트·채널
+ * 구분 없이 회사 전체 FY×Month 합계로 접는다 — 2026-08-20 전면 재구성
+ * (사용자 요청 "세그먼트·채널 구분 없이 회사 전체 합계 하나씩만") 반영.
+ * Marketing/Leads_OPS 둘 다 재사용하도록 합산 대상 필드를 인자로 받는
+ * 범용 함수로 작성(중복 로직 금지).
+ *
+ * INPUT
+ * rows : Array<Object>  각 행에 fy/month + fields에 나열된 숫자 필드
+ * fields : Array<string>  합산할 필드명 목록
+ *
+ * OUTPUT
+ * Array<Object>  [{ fy, month, ...fields 합계 }]
+ *
+ * TEST
+ * testSumFYRepRowsByFYMonth() 참고
+ * ==========================================================
+ */
+function sumFYRepRowsByFYMonth_(rows, fields){
+
+  const groups = {};
+
+  rows.forEach(function(row){
+
+    const key = row.fy + "|" + row.month;
+
+    if(!groups[key]){
+      groups[key] = { fy: row.fy, month: row.month };
+      fields.forEach(function(field){ groups[key][field] = 0; });
+    }
+
+    fields.forEach(function(field){
+      groups[key][field] += (Number(row[field]) || 0);
+    });
+
+  });
+
+  return Object.keys(groups).map(function(key){ return groups[key]; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — sumFYRepRowsByFYMonth_()
+ * ==========================================================
+ */
+function testSumFYRepRowsByFYMonth(){
+
+  const rows = [
+    { fy: 27, month: "AUG", spent: 100 },
+    { fy: 27, month: "AUG", spent: 50 },
+    { fy: 27, month: "SEP", spent: 30 }
+  ];
+
+  const result = sumFYRepRowsByFYMonth_(rows, ["spent"]);
+
+  const aug = result.find(function(r){ return r.month === "AUG"; });
+  const sep = result.find(function(r){ return r.month === "SEP"; });
+
+  const pass =
+    result.length === 2 &&
+    aug.spent === 150 &&
+    sep.spent === 30;
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Build FY_REP Flat Rows (순수 함수)
+ *
+ * WHY
+ * Marketing(회사 전체 Spent)/Leads_OPS(회사 전체 New P1/IC Booked/IC
+ * Completed)/Revenue(세그먼트별 Actual + 회사 전체 Target)를 FY×Month
+ * 단일 플랫 행으로 합친다 — 2026-08-20 전면 재구성(사용자 확정 컬럼 순서:
+ * Spent/New P1/ICBooked/IC Completed/SeminarRev/WB Rev/BOFU Rev/SA Rev/
+ * Content Rev/Upsells/Referral/Other/Total Rev/Target/Target%/ROI).
+ * fys×monthOrder 전 조합을 빠짐없이 만든다(데이터 없는 조합은 0 —
+ * Total Rev/ROI 등 산술에 쓰이므로 공란("") 대신 0, NewP1_REP의 "0 vs
+ * 공란" 관례와 달리 이 리포트는 전부 회사 전체 합계라 0이 자연스러운 값).
+ *
+ * INPUT
+ * marketingTotals : Array<Object>  sumFYRepRowsByFYMonth_(마케팅 채널 행, ["spent"]) 결과
+ * leadsOPSTotals : Array<Object>  sumFYRepRowsByFYMonth_(Leads_OPS 세그먼트 행,
+ *   ["newP1","icBooked","icComplete"]) 결과
+ * revenueRows : Array<Object>  computeFYRepRevenueRows_() 결과({ fy, month, segment, target, actual })
+ * companyTargetsByFY : Object  fy → (computeFYRepCompanyRevenueTargetsForFY_() 결과, 월→금액)
+ * fys : Array<number>
+ * monthOrder : Array<string>  CONFIG.ACQ.FISCAL_MONTH_ORDER
+ * bucketKeyMap : Object  FY_REP_BUCKET_TO_FLAT_KEY
+ *
+ * OUTPUT
+ * Array<Object>  [{ fy, month, spent, newP1, icBooked, icComplete, seminar,
+ *   webinar, bofu, search, content, upsell, referral, other, totalRev,
+ *   target, targetPct, roi }]
+ *
+ * TEST
+ * testBuildFYRepFlatRows() 참고
+ * ==========================================================
+ */
+function buildFYRepFlatRows_(
+  marketingTotals, leadsOPSTotals, revenueRows, companyTargetsByFY, fys, monthOrder, bucketKeyMap
+){
+
+  const marketingIndex = {};
+  marketingTotals.forEach(function(row){ marketingIndex[row.fy + "|" + row.month] = row.spent; });
+
+  const leadsIndex = {};
+  leadsOPSTotals.forEach(function(row){ leadsIndex[row.fy + "|" + row.month] = row; });
+
+  const revenueIndex = {};
+  revenueRows.forEach(function(row){
+    revenueIndex[row.fy + "|" + row.month + "|" + row.segment] = row.actual;
+  });
+
+  const bucketNames = Object.keys(bucketKeyMap);
+  const rows = [];
+
+  fys.forEach(function(fy){
+
+    monthOrder.forEach(function(month){
+
+      const key = fy + "|" + month;
+      const spent = marketingIndex[key] || 0;
+      const leads = leadsIndex[key] || {};
+
+      const row = {
+        fy: fy,
+        month: month,
+        spent: spent,
+        newP1: leads.newP1 || 0,
+        icBooked: leads.icBooked || 0,
+        icComplete: leads.icComplete || 0
+      };
+
+      let totalRev = 0;
+
+      bucketNames.forEach(function(bucket){
+        const value = revenueIndex[key + "|" + bucket] || 0;
+        row[bucketKeyMap[bucket]] = value;
+        totalRev += value;
+      });
+
+      row.totalRev = totalRev;
+
+      // Target_Engine은 "한 번에 FY 하나"만 담아 companyTargetsByFY에 그 FY의
+      // 항목만 존재한다(사용자 확정) — 값이 없는 FY는 0이 아니라 공란("")으로
+      // 남겨 "타겟 미입력"과 "실제 0"을 구분한다(NewP1_REP의 0 vs 공란 관례와
+      // 동일 사상).
+      const hasTarget = !!companyTargetsByFY[fy];
+      const target = hasTarget ? (companyTargetsByFY[fy][month] || "") : "";
+
+      row.target = target;
+      row.targetPct = (typeof target === "number" && target > 0) ? totalRev / target : "";
+      row.roi = spent > 0 ? totalRev / spent : "";
+
+      rows.push(row);
+
+    });
+
+  });
+
+  return rows;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildFYRepFlatRows_()
+ * ==========================================================
+ */
+function testBuildFYRepFlatRows(){
+
+  const marketingTotals = [{ fy: 27, month: "AUG", spent: 1000 }];
+  const leadsOPSTotals = [{ fy: 27, month: "AUG", newP1: 20, icBooked: 10, icComplete: 5 }];
+  const revenueRows = [
+    { fy: 27, month: "AUG", segment: "Seminar", target: 300, actual: 400 },
+    { fy: 27, month: "AUG", segment: "Upsell", target: 100, actual: 100 }
+  ];
+  const companyTargetsByFY = { 27: { AUG: 500 } };
+
+  const rows = buildFYRepFlatRows_(
+    marketingTotals, leadsOPSTotals, revenueRows, companyTargetsByFY,
+    [27], ["AUG", "SEP"], FY_REP_BUCKET_TO_FLAT_KEY
+  );
+
+  const aug = rows.find(function(r){ return r.month === "AUG"; });
+  const sep = rows.find(function(r){ return r.month === "SEP"; });
+
+  const pass =
+    rows.length === 2 &&
+    aug.spent === 1000 && aug.newP1 === 20 && aug.icBooked === 10 && aug.icComplete === 5 &&
+    aug.seminar === 400 && aug.upsell === 100 && aug.other === 0 &&
+    aug.totalRev === 500 &&
+    aug.target === 500 &&
+    aug.targetPct === 1 &&
+    aug.roi === 0.5 &&
+    sep.spent === 0 && sep.totalRev === 0 && sep.target === "" && sep.targetPct === "" && sep.roi === "";
+
+  Logger.log("Result: " + JSON.stringify(rows));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute FY_REP Flat Rows (IO 래퍼)
+ *
+ * WHY
+ * Marketing/Leads_OPS/Revenue Engine 함수를 전부 호출해 회사 전체
+ * FY×Month 플랫 행을 만든다. Report 레이어(FYREP_002_Report.js)는 이
+ * 결과를 그대로 시트에 쓰기만 하면 됨(피벗/합산 로직 없음).
+ *
+ * OUTPUT
+ * Array<Object>  buildFYRepFlatRows_() 참고
+ * ==========================================================
+ */
+function computeFYRepFlatRows_(){
+
+  const marketingRows = filterFYRepMarketingChannels_(computeFYRepMarketingRows_(), FY_REP_MARKETING_CHANNEL_EXCLUDE);
+  const marketingTotals = sumFYRepRowsByFYMonth_(marketingRows, ["spent"]);
+
+  const leadsOPSTotals = sumFYRepRowsByFYMonth_(
+    computeFYRepLeadsOPSAggregates_(), ["newP1", "icBooked", "icComplete"]
+  );
+
+  const revenueRows = computeFYRepRevenueRows_();
+  const companyTargetsByFY = computeFYRepTeamKoreaTargetsByFY_();
+
+  return buildFYRepFlatRows_(
+    marketingTotals, leadsOPSTotals, revenueRows, companyTargetsByFY,
+    CONFIG.FYREP.FYS, CONFIG.ACQ.FISCAL_MONTH_ORDER, FY_REP_BUCKET_TO_FLAT_KEY
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute FY_REP Team Korea Targets By FY (IO 래퍼)
+ *
+ * WHY
+ * FY_REP의 Target 컬럼(회사 전체)은 perfTrackerByFY의 Quarterly Summary가
+ * 아니라 `Target_Engine`의 "Team Korea" 월별 회사 전체 Revenue Target
+ * (`CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS`)을 써야 한다 — 2026-08-20
+ * 사용자 확정("target이 digital로 적용되어있네? ... 타겟은 팀 코리아
+ * 타겟으로 적용되야해"). Target_Engine은 "한 번에 FY 하나"만 담는 구조라
+ * (`docs/OpenItems.md` #17) FY_REP처럼 FY24~27을 한 테이블에 보여줘야 하는
+ * 리포트와 근본적으로 안 맞음 — 사용자 확정 절충안: Target_Engine이 현재
+ * 가리키는 FY(`readTargetEngineInputs_().targetFY`) 하나만 채우고 나머지
+ * FY는 공란(`buildFYRepFlatRows_()`가 처리).
+ *
+ * **2026-08-24 정정**: 처음엔 22행 "Marketing Revenue Target" × VAT 10%로 구했으나,
+ * 사용자 실측 확인 결과 그 행이 Referral/Upsell 제외 마케팅 기여분만 담고 있어
+ * FY_REP의 Total Rev(Referral/Upsell 포함 8개 버킷 합)와 범위가 안 맞았음 — VAT/
+ * Referral/Upsell 전부 포함된 값을 그대로 수동 입력하는 24행("Total Revenue
+ * Target", `MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW`)으로 소스 교체,
+ * 배수 곱셈 제거(`inputs.monthlyTotalRevenueTarget` 그대로 사용).
+ *
+ * OUTPUT
+ * Object  { [targetFY]: { AUG: 금액, ... } } — Target_Engine 시트가 없으면
+ *   빈 객체(companyTargetsByFY[fy]가 항상 undefined가 되어 모든 FY가 공란으로
+ *   처리됨, 에러로 리포트 생성을 막지 않음).
+ * ==========================================================
+ */
+function computeFYRepTeamKoreaTargetsByFY_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+
+  if(!engineSheet) return {};
+
+  const inputs = readTargetEngineInputs_(engineSheet);
+
+  if(!inputs.targetFY) return {};
+
+  const result = {};
+  result[inputs.targetFY] = inputs.monthlyTotalRevenueTarget;
+
+  return result;
 
 }
