@@ -33,9 +33,18 @@
  * TEST: 별도 testXXXX() 없음 — 1회성 실데이터 조사 스크립트(TEMPQA 관례).
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-08-25)
+ * - 매칭 방식 수정 — Content_Engine의 실제 키는
+ *   stripRegistrationFormSuffix_(r["Lead Source Detail"])(등록폼 접미사
+ *   " | Registered for Webinar/Seminar from ..." 제거)인데, v1.0.0은 원본
+ *   값과의 완전 일치만 검사해 접미사가 붙은 변형 행들을 누락하고 있었음
+ *   (v1.0.0 실행 결과 일부 키가 "Content 0건"으로 나왔는데, 실제로는
+ *   접미사 붙은 변형 행에 Content 오염이 숨어있을 가능성 — 재확인 필요,
+ *   사용자 발견). MTA/Leads 양쪽 다 stripRegistrationFormSuffix_() 적용
+ *   후 비교하도록 수정.
  * v1.0.0 (2026-08-25)
  * - 최초 구현.
  * ==========================================================
@@ -92,7 +101,7 @@ function runTraceContentSegmentLeak(){
 
     sheetToObjects(mtaSheet).forEach(function(r){
 
-      const detail = String(r["Lead Source Detail"] || "").trim();
+      const detail = stripRegistrationFormSuffix_(r["Lead Source Detail"]);
       const normalized = detail.toLowerCase();
 
       if(!targetKeySet[normalized]) return;
@@ -126,7 +135,7 @@ function runTraceContentSegmentLeak(){
 
     sheetToObjects(leadsSheet).forEach(function(r){
 
-      const detail = String(r["First Touch Detail"] || "").trim();
+      const detail = stripRegistrationFormSuffix_(r["First Touch Detail"]);
       const normalized = detail.toLowerCase();
 
       if(!targetKeySet[normalized]) return;
