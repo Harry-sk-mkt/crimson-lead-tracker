@@ -321,11 +321,13 @@
     Leads_OPS엔 없음) 0건 — 누락 12건 전부 Leads_Master에도 존재 자체가 없음**(Import 자체가
     안 됨). 즉 집계 로직/타임존/dedup 버그가 전혀 아니라 **순수 Import 공백(gap)** — 이 12개
     Lead ID(`00QRC00001LKLba/LKZkz/LKzUA/LLlov/LMiAf/LMmnm/LNBZF/LNsJH/LOgL2/LPt6M/LR4R8/
-    LRpt3`)가 애초에 어느 주간 CSV export에도 포함된 적이 없음. **가설(미확정)**: Salesforce
-    ID 순서상 이 12건이 8/17주 안에서 상대적으로 이른 시점 생성 리드 쪽에 몰려있어, 지난주
-    export 마감 시점과 이번주 export 시작 시점 사이에 좁은 날짜 공백이 있었을 가능성 — 확정
-    하려면 이 12건의 실제 Salesforce Create Date 확인 필요(다음 세션 진행). **재발 방지 겸
-    해결책**: 이 12건의 Create Date 범위를 다시 export해 재업로드하면 됨 — 2026-08-25에
-    추가된 Raw 완전동일 중복 필터(`IMPORT_008_RawDeduplicator.js`) 덕분에 기존 export와 날짜
-    범위가 겹쳐도 이미 들어간 행은 자동으로 skip되어 안전하게 재업로드 가능. **임의로 재
-    export 진행하지 말 것** — 사용자가 12건의 정확한 Create Date를 확인해 범위를 정한 뒤 진행.
+    LRpt3`)가 애초에 어느 주간 CSV export에도 포함된 적이 없음. **✅ 가설 확정(2026-08-25,
+    사용자가 75건 전체 Create Date 제공)**: 누락 12건 전부 Create Date = **2026-08-17(그 주
+    월요일, 첫날)**로 확정 — 8/17 생성 리드는 정확히 12건이고 그 12건이 통째로 빠졌으며,
+    8/18~08/23 생성 리드는 단 한 건도 안 빠짐(63건 전부 일치). 즉 그 주 Leads export가
+    8/17을 포함하지 않고 8/18부터 시작됐던 것 — export 날짜 범위 설정 실수(공백)로 최종
+    확정, 코드 버그 아님. **해결책**: 2026-08-17(최소 하루, 여유 있게 8/16~08/18 권장)을
+    다시 export해 "📥 Update"(Leads)로 재업로드 — 2026-08-25에 추가된 Raw 완전동일 중복
+    필터(`IMPORT_008_RawDeduplicator.js`) 덕분에 8/18~23 등 기존에 이미 들어간 행과 겹쳐도
+    자동으로 skip되어 안전. **다음 세션에서 재업로드 결과(12건 신규 반영 확인) 및 S&M_REP/
+    ACQ_REP 등 재Generate로 최종 검증할 것.**
