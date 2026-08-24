@@ -21,9 +21,23 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-25)
+ * - **근본 원인 확정·수정**: runDumpContentOPSKeysWithLiveStatus()로 확인한
+ *   결과 Content_OPS에 남아있던 Webinar/Seminar 프로그램들은 Business
+ *   Segment 재분류/stale 데이터 문제가 아니라 computeContentDealAggregates_()
+ *   에 Business Segment 필터가 아예 없던 버그였음 — Deal Tracker에 어떤
+ *   세그먼트로든 귀속된 딜이 있으면 leadSourceDetail 문자열만 일치해도
+ *   Content_Engine의 allKeys 합집합(refreshContentEngine_())에 끼어들었음.
+ *   같은 패턴을 쓰는 BOFU_002_Engine.js computeBOFUDealAggregates_()는
+ *   이미 `row.businessSegment` 필터가 있어 문제 없었음(대조군) — 그 패턴을
+ *   그대로 적용해 `CONTENT.SEGMENTS.indexOf(row.businessSegment) === -1`
+ *   이면 제외하도록 수정. EVENTS_002_Engine.js의 computeEventsDealAggregates_()
+ *   에도 동일한 버그가 있어 함께 수정(사용자 확인). 회귀 테스트
+ *   testComputeContentDealAggregates_() 갱신 — Content 아닌 businessSegment
+ *   케이스 추가.
  * v1.3.0 (2026-08-25)
  * - runDumpContentOPSKeysWithLiveStatus() 신규 — TEMPQA_028(원본 값 완전
  *   일치 → stripRegistrationFormSuffix_() 적용까지 두 차례 수정)로도
@@ -444,6 +458,8 @@ function computeContentDealAggregates_() {
 
   return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
 
+    if (CONTENT.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
+
     const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
 
     return (key && isKoreanProgram_(key)) ? key : null;
@@ -461,11 +477,13 @@ function computeContentDealAggregates_() {
 function testComputeContentDealAggregates_() {
 
   const dealRows = [
-    { leadSourceDetail: "WF-2025-07-KOR-MOFU-Core A", revenue: 500 },
-    { leadSourceDetail: "WF-2025-07-US-MOFU-Core B", revenue: 999 }  // KOR 아님, 제외
+    { leadSourceDetail: "WF-2025-07-KOR-MOFU-Core A", revenue: 500, businessSegment: "Content" },
+    { leadSourceDetail: "WF-2025-07-US-MOFU-Core B", revenue: 999, businessSegment: "Content" },  // KOR 아님, 제외
+    { leadSourceDetail: "WB-2026-07-KOR-MOFU-Core Webinar C", revenue: 777, businessSegment: "Webinar" } // Content 아님, 제외(회귀 방지)
   ];
 
   const keyFn = function (row) {
+    if (CONTENT.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
     const key = stripRegistrationFormSuffix_(row.leadSourceDetail);
     return (key && isKoreanProgram_(key)) ? key : null;
   };

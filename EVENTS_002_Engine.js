@@ -15,9 +15,19 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.16.0
+ * v1.17.0
  *
  * Change Log
+ * v1.17.0 (2026-08-25)
+ * - **버그 수정 — computeEventsDealAggregates_()에 Business Segment 필터가
+ *   없었음**(Content_002_Engine.js에서 동일 패턴으로 먼저 발견, 사용자
+ *   확인 후 Events도 함께 수정). Deal Tracker에 어떤 세그먼트로든 귀속된
+ *   딜이 있으면 leadSourceDetail 문자열만 일치해도 Events_Engine의 allKeys
+ *   합집합에 끼어들어 Webinar/Seminar가 아닌 프로그램(예: ebook 등)이
+ *   Events_OPS에 노출될 수 있었음. BOFU_002_Engine.js computeBOFUDealAggregates_()
+ *   의 `row.businessSegment` 필터 패턴을 그대로 적용 —
+ *   `EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1`이면 제외. 회귀
+ *   테스트 testComputeEventsDealAggregates_() 갱신.
  * v1.16.0 (2026-08-21)
  * - **버그 수정 — `resolveMetaCampaignEventsKey_()`가 UTM_Program_Dictionary
  *   경유 프로그램명에 `stripLGSuffix_()`/`stripRegistrationFormSuffix_()`를
@@ -632,6 +642,8 @@ function computeEventsDealAggregates_() {
 
   return computeDealTrackerCountsByKey_(readDealTrackerRawRows_(), function (row) {
 
+    if (EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
+
     const rawKey = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
 
     return (rawKey && isEligibleEventProgram_(rawKey)) ? applyEventsProgramKeyOverride_(rawKey) : null;
@@ -652,12 +664,14 @@ function computeEventsDealAggregates_() {
 function testComputeEventsDealAggregates_() {
 
   const dealRows = [
-    { leadSourceDetail: "WB-2025-07-KOR-MOFU-Core A", revenue: 1000 },
-    { leadSourceDetail: "WF-2025-07-KOR-MOFU-Core B", revenue: 500 },   // WF 제외 대상
-    { leadSourceDetail: "WB-2025-07-US-MOFU-Core C", revenue: 300 }     // KOR 아님, 제외
+    { leadSourceDetail: "WB-2025-07-KOR-MOFU-Core A", revenue: 1000, businessSegment: "Webinar" },
+    { leadSourceDetail: "WF-2025-07-KOR-MOFU-Core B", revenue: 500, businessSegment: "Webinar" },   // WF 제외 대상
+    { leadSourceDetail: "WB-2025-07-US-MOFU-Core C", revenue: 300, businessSegment: "Webinar" },    // KOR 아님, 제외
+    { leadSourceDetail: "WB-2025-07-KOR-MOFU-Core D", revenue: 777, businessSegment: "Content" }    // Webinar/Seminar 아님, 제외(회귀 방지)
   ];
 
   const keyFn = function (row) {
+    if (EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1) return null;
     const key = stripLGSuffix_(stripRegistrationFormSuffix_(row.leadSourceDetail));
     return (key && isEligibleEventProgram_(key)) ? key : null;
   };
