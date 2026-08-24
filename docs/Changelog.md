@@ -1,5 +1,24 @@
 # Changelog — 2026-08-24
 
+## S&M_REP — Leads breakdown New P1 필터 추가, Salesforce 대조 불일치 조사(진행 중)
+
+사용자가 S&M_REP의 Event/BOFU/Content/Organic/Referral breakdown이 New Leads 전체가 아니라
+New P1만 보여야 한다고 확정 — `computeSMRepWeeklyAggregates_()`(`SMREP_001_Report.js` v1.1.0)의
+Leads 블록 breakdown 집계에 `isEffectiveP1_()` 필터 추가(`if(bucket) ...` →
+`if(bucket && isP1) ...`). SAL 블록 breakdown(BOFU/Search/Organic/Referral)은 변경 없음(원래도
+전체 SAL 기준). `testComputeSMRepWeeklyAggregates()` 갱신 및 PASS 확인, clasp push 완료.
+
+이후 사용자가 8/17~08/23 주를 Salesforce 리포트와 대조한 결과 Event/BOFU/Content/Organic이
+30/5/35/3(Salesforce) vs 26/4/29/2(S&M_REP)로 불일치 발견 — `TEMPQA_025_
+SMRepWeekTimezoneTrace.js` 신규 작성해 "`getMondayOfWeek_()`가 스크립트 타임존(America/
+New_York) 기준으로 요일을 판정해 Seoul 기준 월요일 새벽 리드가 전 주로 밀린다"는 1차
+가설을 검증했으나, 실측 결과 버그 있는 방식/Seoul 보정 방식이 완전히 동일한 값을 내 **기각**
+(주 배정이 갈리는 리드 0건). S&M_REP 코드 자체는 Leads_OPS를 정확히 집계하고 있음이 확인돼,
+문제는 "우리 코드 대 Salesforce" 간 불일치로 좁혀짐 — Import는 조사 당일 실행 완료 상태라
+데이터 지연도 배제. 20번 항목(ACQ_REP New P1 vs Salesforce, 2026-08-05 — Leads_Master 미정리
+중복 Lead 행이 원인이었던 전례) 패턴이 유력 가설이나 미검증 상태로 다음 세션 계속 — 상세는
+`docs/OpenItems.md` 27번 항목 참고.
+
 ## FY_REP — Target 컬럼 범위 불일치 버그 수정, 2026-08-20 미커밋 재구성 재개/검증
 
 2026-08-20 세션에서 FY_REP 레이아웃을 FY×Month 단일 플랫 테이블로 전면 재구성(4섹션

@@ -278,3 +278,35 @@
     **예방 조치 완료**: `OPS_006_QA.js` v1.7.0에 `checkUnprotectedDateLikeRawColumns_()` 추가 —
     Leads_Raw/MTA_Raw 헤더 중 이름에 "date"가 들어가는데 `CONFIG.RAW_DATE_COLUMNS`에 없는 컬럼을
     매 QA 실행마다 자동 감지(이번 사고의 근본 원인이었던 "보호 목록 갱신 누락"을 재발 방지).
+27. **S&M_REP Leads breakdown(Event/BOFU/Content/Organic) New P1 건수가 Salesforce 리포트와
+    불일치(2026-08-17~08-23 주 기준) — 조사 진행 중, 다음 세션 계속(2026-08-24)** —
+    사용자가 S&M_REP에 New P1 필터를 추가한 직후(아래 SMREP_001_Report.js v1.1.0 참고) 8/17주를
+    Salesforce 리포트와 대조: Event 30/BOFU 5/Content 35/Organic 3(Salesforce) vs
+    26/4/29/2(S&M_REP) — 4개 버킷 전부 과소집계, 총 12건 차이. Import는 조사 당일(8/24) 실행
+    완료된 상태(데이터 지연 아님, 사용자 확인).
+    **1차 가설(기각, 2026-08-24)**: `getMondayOfWeek_()`(`TARGET_001_Engine.js`)가
+    `date.getFullYear()`/`.getMonth()`/`.getDate()`를 스크립트 타임존(America/New_York)
+    기준으로 호출해 Seoul 기준 월요일 새벽 리드가 전 주로 밀릴 수 있다는 가설 — `docs/
+    DateParsing.md`의 "Sales Accepted Date 타임존 버그"(26번 항목)와 동일 클래스 우려.
+    `TEMPQA_025_SMRepWeekTimezoneTrace.js`(`runTraceSMRepWeekTimezone()`)로 실측한 결과
+    버그 있는 방식/Seoul 보정 방식이 완전히 동일한 값(8/17주 newP1=63, Event=26/BOFU=4/
+    Content=29/Organic=2)을 냈고 두 방식 간 주 배정이 갈리는 리드도 0건 — **`getMondayOfWeek_()`는
+    무관함이 확인됨**. 즉 S&M_REP 코드는 현재 Leads_OPS 데이터를 정확히 집계하고 있고, 불일치는
+    "우리 코드 대 Salesforce 리포트" 사이의 문제로 좁혀짐.
+    **유력 가설(미검증, 20번 항목 precedent)**: 20번 항목(ACQ_REP New P1 vs Salesforce 불일치,
+    2026-08-05)에서 동일 증상(우리 쪽이 Salesforce보다 적게 집계)의 근본 원인이 **Leads_Master의
+    미정리 완전동일 중복 Lead 행**(재export로 같은 Lead ID가 여러 번 쌓이고, `mergeOPS()`
+    earliest-wins dedup이 최신이 아닌 오래된 스냅샷의 Priority를 채택 — 예: 최신은 Priority 1인데
+    오래된 스냅샷 Priority 3이 채택됨)이었던 전례가 있음. 25번 항목(2026-08-09 OPS QA)에서도
+    "Exact Duplicate Lead Row 650건"이 미해결로 남아있다고 기록돼 있어, 이번 8/17주 12건 부족도
+    같은 메커니즘일 가능성이 있음 — **아직 확인 전, 임의로 처리하지 말 것**.
+    **Salesforce 쪽 집계 기준도 미확인**: 사용자가 Event/BOFU/Content/Organic 30/5/35/3을 정확히
+    어떤 Salesforce 필드/리포트로 뽑았는지(우리 `getBusinessSegment()`처럼 UTM Campaign/Detail
+    키워드 매칭 기반인지, SF 자체의 별도 분류 필드인지) 질문했으나 세션 종료로 답변 전 중단 —
+    다음 세션에서 먼저 확인 필요. 만약 SF가 UTM 기반이 아닌 별도 필드로 분류한다면 이건 코드
+    버그가 아니라 14번 항목(Business Segment 분류 개선)과 같은 종류의 "우리 키워드 매칭 로직이
+    SF의 실제 분류와 다름" 문제일 수 있음.
+    **다음 세션 진행 순서(제안)**: (1) Salesforce 집계 기준 확인, (2) `runOPSQA_()` 또는
+    `findExactDuplicateLeadRows_()`(`OPS_006_QA.js`)로 8/17주(Create Date) 관련 Lead ID 중
+    완전동일 중복이 있는지 확인, (3) 중복이 원인이면 20번 항목과 동일하게
+    `runAutoDeleteExactDuplicateLeadRows()` → `buildLeadsOPS()` → S&M_REP 재Generate로 검증.
