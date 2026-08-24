@@ -11,9 +11,16 @@
  * - Master 빌드
  *
  * Version
- * v3.7.1
+ * v3.8.0
  *
  * Change Log
+ * v3.8.0 (2026-08-25)
+ * - writeLeadRaw()/writeMTARaw()/writeICFunnelRaw()(IMPORT_005_RawWriter.js
+ *   v4.1.0)가 완전 동일 중복 제외 결과({ appended, skipped })를 반환하도록
+ *   바뀜에 따라, importCsv()가 그 반환값을 rawWriteResult로 받아 신규
+ *   formatRawDedupSummary_()로 "N건 완전 동일 중복 제외" 안내를 최종 메시지에
+ *   추가(사용자 요청 — Raw 단계 중복 제외를 도입, 상세 배경은
+ *   IMPORT_008_RawDeduplicator.js 참고).
  * v3.7.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `00_Import.js` → 신규 `IMPORT_001_Import.js`, 코드 내용 변경 없음.
  * v3.7.0 (2026-08-06)
@@ -185,6 +192,64 @@ function testFormatAppendSummary(){
 
 
 /**
+ * ==========================================================
+ * Format Raw Dedup Summary (Raw 단계 완전 동일 중복 제외 안내)
+ *
+ * WHY
+ * writeLeadRaw()/writeMTARaw()/writeICFunnelRaw()(IMPORT_005_RawWriter.js
+ * v4.1.0)가 Raw에 쓰기 전 완전 동일(byte-identical) 행을 걸러내도록
+ * 바뀌면서(2026-08-25), 몇 건이 제외됐는지 사용자에게 보여주기 위한 변환 함수.
+ *
+ * INPUT
+ * rawWriteResult : { appended, skipped } | null
+ *
+ * OUTPUT
+ * string (skipped가 0이거나 결과가 없으면 빈 문자열)
+ *
+ * TEST
+ * testFormatRawDedupSummary() 참고.
+ * ==========================================================
+ */
+function formatRawDedupSummary_(rawWriteResult){
+
+  if(!rawWriteResult || rawWriteResult.skipped === 0){
+    return "";
+  }
+
+  return (
+    "⚠️ 완전 동일 중복 " +
+    rawWriteResult.skipped +
+    "건 제외됨(Raw 미기록)\n\n"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — formatRawDedupSummary_()
+ * ==========================================================
+ */
+function testFormatRawDedupSummary(){
+
+  const withSkip = formatRawDedupSummary_({ appended: 10, skipped: 3 });
+  const noSkip = formatRawDedupSummary_({ appended: 10, skipped: 0 });
+  const nullResult = formatRawDedupSummary_(null);
+
+  const ok =
+    withSkip.indexOf("3건 제외") !== -1 &&
+    noSkip === "" &&
+    nullResult === "";
+
+  Logger.log(
+    "testFormatRawDedupSummary: " + (ok ? "PASS" : "FAIL") +
+    "\n  withSkip=" + withSkip
+  );
+
+}
+
+
+/**
  * Execute Import Pipeline
  *
  * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
@@ -312,21 +377,22 @@ function importCsv(
     //----------------------------------------------------------
 
     let appendResult = null;
+    let rawWriteResult = null;
 
     switch (importType) {
 
       case "LEADS":
-        writeLeadRaw(rawRecords);
+        rawWriteResult = writeLeadRaw(rawRecords);
         appendResult = appendNewLeads(true);
         break;
 
       case "MTA":
-        writeMTARaw(rawRecords);
+        rawWriteResult = writeMTARaw(rawRecords);
         appendResult = appendNewMTA(true);
         break;
 
       case "IC_FUNNEL":
-        writeICFunnelRaw(rawRecords);
+        rawWriteResult = writeICFunnelRaw(rawRecords);
         break;
 
       default:
@@ -348,6 +414,7 @@ function importCsv(
     return (
       formatValidationSummary_(summary) +
       "\n\n" +
+      formatRawDedupSummary_(rawWriteResult) +
       formatAppendSummary_(appendResult, importType)
     );
 

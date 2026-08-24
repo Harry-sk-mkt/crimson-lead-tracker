@@ -27,6 +27,22 @@
 | `23_OPS_Write.js` | Leads_OPS 시트 쓰기 |
 | `99_ResetRawMaster.js` | `resetIncrementalCounters()` — Raw/Master 수동 초기화 후 카운터 리셋용 |
 
+## 2026-08-25 변경 이력
+
+- **완전 동일 중복 Raw 단계 필터링 신규 도입** (`IMPORT_008_RawDeduplicator.js`
+  신규, 현재 파일명 기준): `writeLeadRaw()`/`writeMTARaw()`/`writeICFunnelRaw()`
+  (`IMPORT_005_RawWriter.js` v4.1.0)가 `appendSheetRecords()` 호출 전에
+  `filterOutExactDuplicateRawRecords_()`로 대상 Raw 시트를 읽어, 이미 있는
+  행과 모든 필드 값이 완전히 같은 신규 레코드는 Raw에 아예 쓰지 않고 skip
+  (사용자 요청 — Master Build 단계 완전동일 중복 정리(`OPS_006_QA.js`)가
+  데이터가 쌓일수록 무거워짐, 겹치는 export 날짜 범위 재업로드로 생기는
+  byte-identical 행을 Raw에서부터 차단). **범위 밖(의도적)**: "같은 Lead
+  ID/터치인데 일부 snapshot 필드만 다른" 경우를 하나로 합치는 판단
+  (progression tie-break 등 business logic)은 여전히 Master Build 단계
+  책임 — Raw 단계는 순수 구조적 완전 일치만 검사(2026-08-25 사용자 확정).
+  `importCsv()`(`IMPORT_001_Import.js` v3.8.0)가 skip 건수를 업로드
+  완료 메시지에 표시.
+
 ## 2026-07-21 변경 이력
 
 - **`16_TransformHelper.js`**: 과거 리팩토링 이전 버전에 `transformLeadRecords`/`transformLeadRecord`가 헬퍼 함수들과 함께 중복 정의되어 있던 문제를 발견 → 해당 두 함수 삭제, 순수 헬퍼 함수만 유지 (전역 스코프 함수명 중복 해소, `12_LeadTransformer.js`가 유일한 정의처).
