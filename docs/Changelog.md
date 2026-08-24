@@ -31,6 +31,34 @@ v1.7.0, `CORE_001_Config.js` v1.42.0). 22행/23행 및 Target_REP 등 기존 소
 동일 기준) 귀속(`aggregateFYRepLeadsOPSFromRecords_()`). FY_REP은 Import 파이프라인에
 자동 배선돼 있지 않음 — Generate 체크박스 또는 `runGenerateFYReport()` 수동 실행 필요.
 
+## "EV-2026-08-KOR-MOFU-Core SC Bank JHU Seminar" Events_OPS 누락 — 원인 규명 및 Raw 데이터 정정
+
+사용자가 MTA import 완료 후 이 프로그램이 Events_OPS에 안 보인다고 보고. README Pipeline
+Status는 정상 DONE이라 파이프라인 실행 자체는 문제없었음 — `TEMPQA_023_SCBankJHUSeminarEventTrace.js`
+(신규, 진단 전용)로 단계별 조사한 결과, 코드 버그가 아니라 **Salesforce/Marketo 쪽 Kakao
+Channel 캠페인 연결 오류**로 확인:
+
+- 이 신규 이벤트의 UTM(`KR_core_2026-08-23_sc-jhu-ev`)으로 실제 터치 12건이 들어왔으나,
+  해당 Kakao Channel이 지난 5월 EXPO 캠페인에 연결된 채 남아있어 그 중 6건이
+  "EV-2026-05-KOR-MOFU-Core EXPO Kakao Channel"(지난 5월 EXPO 행사)로 잘못 attribution
+  되어 기존 EXPO 통합 override 로직을 타고 조용히 그쪽 집계에 흡수되고 있었음. 나머지
+  6건은 Lead Source Detail이 공란(Business Segment="Other")으로 남아 Events 필터에서
+  아예 제외.
+- 리드 1건(`00QRC00001M749m`)은 이 UTM이 First Touch였는데 Leads_Raw의 "First Touch
+  Detail"도 동일하게 공란.
+- 사용자가 Marketo/SFDC 쪽 Kakao Channel 캠페인 연결을 이미 정정(향후 유입 건은 정상
+  attribution 확인) — 이미 들어온 과거 데이터만 소급 정정 필요.
+
+**정정**: 사용자가 정확한 프로그램명("EV-2026-08-KOR-MOFU-Core SC Bank JHU Seminar")과 정정
+범위(공란 포함 전체)를 확인해줘서, `TEMPQA_024_SCJHUEVLeadSourceDetailRepair.js`(신규)로
+"Raw는 원본 보존, 수동 수정 금지" 원칙의 명시적 예외(`TEMPQA_008_SalesAcceptedDateRepair.js`와
+동일 사유 구조 — 오염 원인 확정 + 사용자가 목표값/범위 직접 확인)로 MTA_Raw 12건 + Leads_Raw
+1건을 직접 정정(UTM 정확히 일치 + 알려진 오염값인 행만 건드리는 안전장치 포함). 이후
+`rebuildMTAMaster()`/`rebuildLeadsMaster()` 실행해 Master/Engine까지 반영 완료(Events_Engine
+356→357행, 신규 키 생성 확인). **다음 세션 첫 단계**: `buildEventsOPS()` 실행해 Events_OPS
+시트에 이 프로그램 행이 정상적으로 나타나는지 최종 확인 필요(이번 세션에서 요청만 하고
+실행 확인 전에 종료).
+
 # Changelog — 2026-08-21
 
 ## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정
