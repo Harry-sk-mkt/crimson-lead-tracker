@@ -125,7 +125,23 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 | IC Complete | Leads_OPS | **IC Completed Date (Event)** | IC Completed Date가 그 달에 속함 |
 | Revenue | **Deal Tracker** (2026-07-28부터 — 이전엔 Leads_OPS `Opportunity Won Date`/`Revenue`, 2트랙 아키텍처 CLAUDE.md #7 참고) | **Close Date (Event, Deal Tracker 자체 필드)** | 그 달에 Close된 딜의 Revenue 합. Segment는 딜 트래커의 수동 "Segment" 컬럼(H열) 그대로 사용 — Upsell은 이 컬럼에서 이미 "Other"로 분류돼 있어 별도 제외 로직 없음 |
 
-## ⚠️ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25, 미해결)
+## ✅ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25 조사, 2026-08-26 해결책 구현 완료, 실사용 검증 대기)
+
+**2026-08-26 후속 — 해결책 구현 완료**: 아래 "해결 방향"에서 미착수로 남겨뒀던
+ICFunnel_Raw 재도입을 실제로 구현. `MASTER_009_ICFunnelSync.js`(신규) +
+`CONFIG.IC_FUNNEL`(`CORE_001_Config.js` v1.43.0) — 터치와 무관하게 Lead 단위로
+IC Booked/Completed/Opportunity Won Date만 직접 export하는 리포트를 다시 만들어
+`syncICFunnelToOPS_()`가 Leads_OPS로 동기화(Master 빌드 단계 없음, Raw→직접
+sync). `MASTER_003_MTAFunnelSync.js`(v1.7.0)는 이 3개 필드에서 손을 떼고 Revenue/
+Sales Accepted Date만 계속 관리 — 두 파이프라인이 같은 필드를 다른 순서로
+덮어쓰는 위험 제거(사용자 확정). 실제 Salesforce export 헤더 확인 완료(추정 아님):
+"Lead ID"/"IC Booked Date"/"IC Completed Date (Pre-Conversion)"/"Opportunity Won
+Date" — day-first 날짜 형식이라 `RAW_DATE_COLUMNS.IC_FUNNEL`로 Plain Text 보호
+처리함(Sales Accepted Date와 동일한 locale 오해석 사고 방지). "📥 Update → Import
+IC Funnel" 메뉴로 수동 실행(사용자가 Salesforce에서 별도 리포트를 export/import).
+**실사용 검증 아직 안 됨** — `docs/OpenItems.md` #32 참고, 완료로 간주하지 말 것.
+
+## ⚠️ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25, 원인 조사 기록)
 
 **증상**: 사용자가 Salesforce "leads report"(IC Booked Date=이번 달 필터, 전체 세그먼트 합)에서
 42건을 확인했는데 ACQ_REP IC Booked는 21건. IC Complete도 Salesforce 21~22건 대비 ACQ_REP 7건.

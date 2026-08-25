@@ -9,9 +9,28 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.42.0
+ * v1.45.0
  *
  * Change Log
+ * v1.45.0 (2026-08-26)
+ * - `CONFIG.PROPERTIES.PIPELINE_STATUS_ICFUNNEL` 신규 — README Pipeline
+ *   Status 표에 IC Funnel을 3번째 행으로 추가(`MASTER_002_PipelineAsync.js`
+ *   참고, 사용자 요청).
+ * v1.44.0 (2026-08-26)
+ * - `CONFIG.PIPELINE.TYPES.ICFUNNEL` 신규 — IC Funnel Import를 백그라운드
+ *   트리거로 처리하도록 전환(`MASTER_009_ICFunnelSync.js`/
+ *   `MASTER_002_PipelineAsync.js` 참고, 사용자 실측: 동기 호출 시 브라우저
+ *   업로드 다이얼로그가 무거운 Engine refresh 체인 때문에 안 끝남).
+ *   PIPELINE_LOCK은 Leads/MTA와 그대로 공유.
+ * v1.43.0 (2026-08-26)
+ * - `CONFIG.IC_FUNNEL`(SHEET/COLUMNS) 신규, `REQUIRED_FIELDS.IC_FUNNEL`/
+ *   `RAW_DATE_COLUMNS.IC_FUNNEL` 추가 — ICFunnel_Raw 재도입
+ *   (`MASTER_009_ICFunnelSync.js` 신규, `docs/OpenItems.md` #32). 실제
+ *   Salesforce export 헤더로 확인 완료(추정 아님) — "Lead ID"/"IC Booked
+ *   Date"/"IC Completed Date (Pre-Conversion)"/"Opportunity Won Date".
+ *   날짜값이 day-first(예: "6/8/2026, 3:05 pm")로 확인되어
+ *   RAW_DATE_COLUMNS에 반드시 포함(Sales Accepted Date와 동일한 locale
+ *   오해석 위험 방지).
  * v1.42.0 (2026-08-24)
  * - `CONFIG.TARGET.INPUT.MONTHLY_COMPANY_INPUTS.TOTAL_REVENUE_TARGET_ROW`(24행) 신규,
  *   `CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER` 삭제(더 이상 안 씀) — 사용자 실측 확인:
@@ -325,6 +344,31 @@ const CONFIG = {
   },
 
   /**
+     * IC_FUNNEL — ICFunnel_Raw 재도입(2026-08-26, docs/OpenItems.md #32).
+     * IC Booked/Completed/Won Date는 Lead 레벨 스냅샷이라, MTA_Master
+     * (터치 단위) 기반 동기화만으로는 새 마케팅 터치가 없는 리드의 값
+     * 변화를 영원히 놓치는 구조적 공백이 있어, 터치와 무관하게 Lead
+     * 단위로 이 3개 필드만 직접 export하는 별도 리포트를 이 필드
+     * 전용으로 재도입. Master 빌드 단계 없음(MASTER_009_ICFunnelSync.js가
+     * Raw를 직접 읽어 Leads_OPS로 동기화) — 실제 Salesforce export 헤더로
+     * 확인 완료(추정 아님).
+     */
+  IC_FUNNEL: {
+
+    SHEET: "ICFunnel_Raw",
+
+    COLUMNS: {
+
+      LEAD_ID: "Lead ID",
+      IC_BOOKED_DATE: "IC Booked Date",
+      IC_COMPLETED_DATE: "IC Completed Date (Pre-Conversion)",
+      OPPORTUNITY_WON_DATE: "Opportunity Won Date"
+
+    }
+
+  },
+
+  /**
      * Required Fields (Validation)
      *
      * 비어있으면 안 되는 컬럼 목록.
@@ -343,6 +387,10 @@ const CONFIG = {
         "Lead: Lead ID",
         "Lead: Email",
         "Multi Touch Attribution: Created Date"
+      ],
+
+      IC_FUNNEL: [
+        "Lead ID"
       ]
 
   },
@@ -377,6 +425,15 @@ const CONFIG = {
       // 이 목록에 없는 새 날짜 컬럼을 MTA Transformer에 추가할 때마다 반드시 여기도
       // 같이 갱신할 것 — 재발 방지 메모.
       "Lead: Sales Accepted Date"
+    ],
+
+    // 2026-08-26 추가 — ICFunnel_Raw 재도입. 실측 확인된 값이 day-first
+    // ("6/8/2026, 3:05 pm", "10/9/2026")라 Sales Accepted Date와 동일한
+    // locale 오해석 위험이 있음 — 반드시 Plain Text 보호 대상에 포함.
+    IC_FUNNEL: [
+      "IC Booked Date",
+      "IC Completed Date (Pre-Conversion)",
+      "Opportunity Won Date"
     ]
 
   },
@@ -396,6 +453,9 @@ const CONFIG = {
     PIPELINE_LAST_FAILED_TYPE: "PIPELINE_LAST_FAILED_TYPE",
     PIPELINE_STATUS_LEADS: "PIPELINE_STATUS_LEADS",
     PIPELINE_STATUS_MTA: "PIPELINE_STATUS_MTA",
+    // 2026-08-26 추가 — IC Funnel 백그라운드 파이프라인을 README Pipeline
+    // Status 표에 3번째 행으로 표시하기 위함(pipelineStatusPropertyKey_() 참고).
+    PIPELINE_STATUS_ICFUNNEL: "PIPELINE_STATUS_ICFUNNEL",
 
     // 2026-08-06 추가 — DealTracker_Engine 증분 동기화 체크포인트
     // (appendNewDealTrackerRows_(), 90_TargetEngine.js). LEADS_LAST_ROW/
@@ -416,7 +476,14 @@ const CONFIG = {
 
     TYPES: {
       LEADS: "LEADS",
-      MTA: "MTA"
+      MTA: "MTA",
+      // 2026-08-26 추가 — ICFunnel_Raw 재도입(MASTER_009_ICFunnelSync.js).
+      // PIPELINE_LOCK은 Leads/MTA와 공유(같은 PropertiesService 키) — Leads_OPS/
+      // Engine 캐시를 동시에 건드리는 백그라운드 실행끼리 겹치지 않게 하기 위함.
+      // README Pipeline Status 표(2행: New Leads/MTA Leads)엔 포함하지 않음
+      // (writePipelineStatusState_()가 MTA 외엔 전부 LEADS 키로 저장하는 구조라
+      // 그대로 얹으면 Leads 상태를 덮어씀 — 의도적으로 별도 트리거만 사용).
+      ICFUNNEL: "ICFUNNEL"
     },
 
     TRIGGER_DELAY_MS: 1000,

@@ -7,9 +7,13 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.3
+ * v2.4
  *
  * Change Log
+ * v2.4 (2026-08-26)
+ * - 코드 변경 없음 — SF_COLUMNS/SYNC_COLUMNS 주변 주석만 정정. IC Booked/
+ *   Completed/Won Date의 실제 소유 함수가 ICFunnel_Raw 재도입으로
+ *   `syncICFunnelToOPS_()`(신규)로 옮겨간 사실을 반영(`docs/OpenItems.md` #32).
  * v2.3 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `20_OPS_Config.js` → 신규 `OPS_001_Config.js`, 코드 내용 변경 없음.
  * v2.2 (2026-07-25)
@@ -71,8 +75,9 @@ const OPS = {
 
   Always overwritten from Leads_Master.
   (2026-07-21: IC Booked/Completed/Won/Revenue 제거 —
-   이제 syncICFunnelToOPS()만 이 필드들을 관리함.
-   Master는 이 필드들의 신뢰할 수 있는 최신 소스가 아니게 됨.)
+   Master는 이 필드들의 신뢰할 수 있는 최신 소스가 아니게 됨.
+   2026-08-26: 아래 SYNC_COLUMNS 주석 참고 — 실제 소유 함수가
+   재도입/재분리됨.)
   ==========================================================
   */
   SF_COLUMNS : [
@@ -95,8 +100,14 @@ const OPS = {
   ==========================================================
   IC FUNNEL SYNC COLUMNS (2026-07-21 신규)
 
-  syncICFunnelToOPS()만 갱신. mergeOPS()는 이 필드들을
-  Master 값으로 덮어쓰지 않고, 기존 OPS 값을 보존한다.
+  mergeOPS()는 이 필드들을 Master 값으로 덮어쓰지 않고,
+  기존 OPS 값을 보존한다 — 실제 갱신은 아래 2개 함수가 필드별로
+  나눠 담당한다(2026-08-26, docs/OpenItems.md #32):
+  - "IC Booked Date" / "IC Completed Date" / "Opportunity Won Date"
+    → syncICFunnelToOPS_()  (MASTER_009_ICFunnelSync.js, ICFunnel_Raw 기반,
+      터치 무관 Lead 레벨 최신 상태)
+  - "Revenue" / "Sales Accepted Date"
+    → syncMTAFunnelToOPS_() (MASTER_003_MTAFunnelSync.js, MTA_Master 기반)
   ==========================================================
   */
   SYNC_COLUMNS : [

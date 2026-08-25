@@ -11,9 +11,30 @@
  * - Master 빌드
  *
  * Version
- * v3.8.0
+ * v3.10.0
  *
  * Change Log
+ * v3.10.0 (2026-08-26)
+ * - **버그 수정 — 실사용 중 실제 발생**: v3.9.0에서 `case "IC_FUNNEL"`이
+ *   `syncICFunnelToOPS_()`를 동기 호출하도록 배선했으나, 그 함수 끝의 7개
+ *   Engine refresh가 Leads/MTA와 동일하게 무거워 업로드 다이얼로그가 오래
+ *   안 닫히는 문제 발견(사용자 실측, 36,464행 전체기간 Import). `appendNewLeads()`/
+ *   `appendNewMTA()`와 동일한 설치형 1회성 백그라운드 트리거 패턴으로 전환 —
+ *   `syncICFunnelToOPS_()` 직접 호출을 신규 `scheduleICFunnelPipelineTail_()`
+ *   (`MASTER_009_ICFunnelSync.js`)로 교체. `formatAppendSummary_()`의
+ *   IC_FUNNEL 분기를 `backgroundScheduled`/`backgroundSkipped` 케이스로
+ *   재작성(LEADS/MTA와 동일한 형태), `testFormatAppendSummary()` 갱신.
+ * v3.9.0 (2026-08-26)
+ * - `importICFunnelReport()` 메뉴 진입점 복원(ICFunnel_Raw 재도입,
+ *   `docs/OpenItems.md` #32) — `showUploadDialog_("IC_FUNNEL")` 호출은
+ *   기존 그대로(범용 다이얼로그라 변경 불필요). `importCsv()`의
+ *   `case "IC_FUNNEL"`이 `writeICFunnelRaw()` 직후 `syncICFunnelToOPS_()`
+ *   (`MASTER_009_ICFunnelSync.js` 신규)를 동기 호출하도록 배선했었음(v3.10.0에서
+ *   비동기로 재수정, 위 참고). `formatAppendSummary_()`에
+ *   `importType === "IC_FUNNEL"` 분기 추가 — 대응하는 Append 단계가 없어
+ *   기존엔 "Master Append를 실행해주세요"라는 부정확한 안내가 나갔던 걸
+ *   "IC Funnel Sync 완료" 문구로 교체, `testFormatAppendSummary()` 기대값도
+ *   함께 갱신.
  * v3.8.0 (2026-08-25)
  * - writeLeadRaw()/writeMTARaw()/writeICFunnelRaw()(IMPORT_005_RawWriter.js
  *   v4.1.0)가 완전 동일 중복 제외 결과({ appended, skipped })를 반환하도록
@@ -122,6 +143,27 @@ function showUploadDialog_(importType) {
  */
 function formatAppendSummary_(appendResult, importType){
 
+  if(importType === "IC_FUNNEL"){
+
+    if(appendResult && appendResult.backgroundScheduled){
+      return (
+        "IC Funnel Sync가 백그라운드에서 진행됩니다 — 잠시 후 Leads_OPS에 " +
+        "반영됩니다(진행상태는 Apps Script 편집기 Executions 로그 참고)."
+      );
+    }
+
+    if(appendResult && appendResult.backgroundSkipped){
+      return (
+        "⚠️ 다른 백그라운드 작업이 진행 중이라 이번 사이클은 sync를 건너뛰었습니다. " +
+        "몇 분 후(다른 작업이 끝난 뒤) MASTER_009_ICFunnelSync.js의 " +
+        "runSyncICFunnelToOPS()를 Apps Script 편집기에서 직접 Run 해주세요."
+      );
+    }
+
+    return "IC Funnel Sync 완료 — Leads_OPS에 반영되었습니다.";
+
+  }
+
   if(!appendResult){
     return "Master 🏗️Append를 실행해주세요.";
   }
@@ -172,7 +214,8 @@ function testFormatAppendSummary(){
     { appended: 10, backgroundScheduled: true }, "LEADS"
   );
   const noNew = formatAppendSummary_({ appended: 0 }, "MTA");
-  const nullResult = formatAppendSummary_(null, "IC_FUNNEL");
+  const icFunnelScheduled = formatAppendSummary_({ backgroundScheduled: true }, "IC_FUNNEL");
+  const icFunnelSkipped = formatAppendSummary_({ backgroundSkipped: true }, "IC_FUNNEL");
 
   const ok =
     mtaSkipped.indexOf("runMTAPipelineTail()") !== -1 &&
@@ -180,7 +223,8 @@ function testFormatAppendSummary(){
     leadsSkipped.indexOf("runLeadsPipelineTail()") !== -1 &&
     scheduled.indexOf("백그라운드에서 진행됩니다") !== -1 &&
     noNew.indexOf("반영할 신규 레코드가 없었습니다") !== -1 &&
-    nullResult.indexOf("Append를 실행해주세요") !== -1;
+    icFunnelScheduled.indexOf("백그라운드에서 진행됩니다") !== -1 &&
+    icFunnelSkipped.indexOf("runSyncICFunnelToOPS()") !== -1;
 
   Logger.log(
     "testFormatAppendSummary: " + (ok ? "PASS" : "FAIL") +
@@ -393,6 +437,7 @@ function importCsv(
 
       case "IC_FUNNEL":
         rawWriteResult = writeICFunnelRaw(rawRecords);
+        appendResult = scheduleICFunnelPipelineTail_();
         break;
 
       default:
@@ -450,5 +495,12 @@ function importLeadReport() {
 function importMTAReport() {
 
   showUploadDialog_("MTA");
+
+}
+
+
+function importICFunnelReport() {
+
+  showUploadDialog_("IC_FUNNEL");
 
 }

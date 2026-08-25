@@ -22,9 +22,42 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.15.0
+ * v1.18.0
  *
  * Change Log
+ * v1.18.0 (2026-08-26)
+ * - **버그 수정 — 실사용 로그로 발견(사용자 지적)**: `runICFunnelPipelineTail()`이
+ *   `syncICFunnelToOPS_()`(숨겨진 Engine 캐시만 갱신)만 부르고 끝나서,
+ *   `buildEventsOPS()`/`buildBOFUOPS()`/`buildSearchOPS()`/`buildContentOPS()`
+ *   (OPS 시트 재구성)와 `generateACQReport_()`/`generateNewP1Report_()`/
+ *   `generateTargetReport_()`(Report 화면 재생성)가 전혀 안 불려서, IC Funnel
+ *   Import로 고친 IC Booked/Complete 값이 ACQ_REP 화면엔 다음 Leads/MTA
+ *   Import 전까지 안 보이는 문제 — `runMTAPipelineTail()`과 동일하게
+ *   `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/`refreshReportGenerate_()`
+ *   까지 이어서 실행하도록 확장(`advancePipelineStage_()` 패턴으로 전환,
+ *   `syncICFunnelToOPS_()` 완료 시 "leadsOps" 컬럼도 DONE 표시).
+ * v1.17.0 (2026-08-26)
+ * - **README Pipeline Status 표에 IC Funnel 3번째 행 추가**(사용자 요청 —
+ *   "A4 위에 새 행 추가해서 IC pipeline status 표시"). `pipelineStatusPropertyKey_(type)`
+ *   신규(순수 함수, `readPipelineStatusState_()`/`writePipelineStatusState_()`의
+ *   중복 삼항 연산자를 대체) — 기존엔 MTA가 아닌 타입은 전부 LEADS 키로
+ *   떨어지는 구조라 ICFUNNEL을 그대로 넘기면 Leads 상태를 덮어쓸 뻔했음.
+ *   `buildPipelineStatusGrid_()`에 `icFunnelState` 3번째 인자 추가, 3행("IC
+ *   Funnel")을 반환(세부 단계 없이 전체 상태만). `writePipelineStatusToReadme_()`에
+ *   3행→4행 전환 1회성 마이그레이션 추가 — 이미 3행 블록이 자리잡은 시트는
+ *   A4(그 다음 빈 구분 행)를 그냥 덮어쓰면 안 되므로, IC Funnel 행이 아직
+ *   없으면 그 자리에 1행만 insertRowsBefore. `runICFunnelPipelineTail()`
+ *   (v1.16.0에서 상태 추적 없이 추가했던 것)이 이제 RUNNING/DONE/FAILED를
+ *   README에 반영(`advancePipelineStage_()`는 세부 단계용이라 안 씀, 전체
+ *   상태만 직접 기록). `testBuildPipelineStatusGrid()` 3행 케이스로 갱신.
+ * v1.16.0 (2026-08-26)
+ * - 신규 `runICFunnelPipelineTail()` — ICFunnel_Raw 재도입(`docs/OpenItems.md`
+ *   #32) 실사용 중, `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`) 끝의
+ *   무거운 Engine refresh 체인이 `importCsv()`에서 동기 호출되며 업로드
+ *   다이얼로그가 안 끝나던 문제 발견 — Leads/MTA와 동일한 설치형 1회성
+ *   트리거 패턴으로 전환(`scheduleICFunnelPipelineTail_()`, 신규 파일 참고).
+ *   `PIPELINE_LOCK` 공유, README Pipeline Status 표는 의도적으로 미반영
+ *   (LEADS/MTA 2타입 전용 구조라 그대로 얹으면 Leads 상태를 덮어씀).
  * v1.15.0 (2026-08-19)
  * - **버그 수정 — 플랫폼 강제종료/내부 오류 시 README Pipeline Status에
  *   "RUNNING"이 영구 잔존**(실측: BOFU_OPS Timed Out에 이어 이번엔
@@ -341,13 +374,16 @@ function buildPipelineStatusCell_(state){
  * 끝났으면 "Complete", 아직이면 빈 문자열 — 사용자 확정("완료되면 Complete로").
  *
  * INPUT
- * leadsState / mtaState : { status, stage, startedAt, finishedAt, error, stages }
+ * leadsState / mtaState / icFunnelState : { status, stage, startedAt, finishedAt, error, stages }
  *   stages : { [CONFIG.PIPELINE.STATUS_COLUMNS[i].KEY]: "RUNNING"|"DONE"|"FAILED" }
  *   (진입한 적 없는 키는 아예 없음 — 그 컬럼은 빈 문자열로 렌더링됨)
  *   각 필드 미제공 시 status는 "IDLE", stages는 {}로 간주(전 컬럼 빈 문자열).
+ *   icFunnelState(2026-08-26 신규, 선택)는 세부 단계(Master Update~Target_REP)를
+ *   전혀 안 쓰므로(IC Funnel 파이프라인엔 그런 하위 단계가 없음) stages가 항상
+ *   {}에 가깝고, 전 단계 컬럼이 빈 문자열로 렌더링됨 — Status 열만 의미 있음.
  *
  * OUTPUT
- * string[3][2 + N]  (A열부터, 1~3행 그대로 — 헤더 1행 + New Leads/MTA Leads 2행)
+ * string[4][2 + N]  (A열부터, 1~4행 — 헤더 1행 + New Leads/MTA Leads/IC Funnel 3행)
  *
  * TEST
  * buildPipelineStatusGrid_() 참고 — RUNNING/FAILED/DONE 조합을 넣으면 Status
@@ -355,10 +391,11 @@ function buildPipelineStatusCell_(state){
  * 빈 객체({})를 넣으면 Status가 "IDLE"이고 모든 단계 컬럼이 빈 문자열이어야 함.
  * ==========================================================
  */
-function buildPipelineStatusGrid_(leadsState, mtaState){
+function buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState){
 
   const leads = leadsState || {};
   const mta = mtaState || {};
+  const icFunnel = icFunnelState || {};
 
   const columns = CONFIG.PIPELINE.STATUS_COLUMNS;
 
@@ -381,7 +418,8 @@ function buildPipelineStatusGrid_(leadsState, mtaState){
   return [
     headerRow,
     buildRow("New Leads", leads),
-    buildRow("MTA Leads", mta)
+    buildRow("MTA Leads", mta),
+    buildRow("IC Funnel", icFunnel)
   ];
 
 }
@@ -687,11 +725,36 @@ function testComputeSelfHealedPipelineState(){
  * 케이스까지 커버).
  * ==========================================================
  */
+/**
+ * ==========================================================
+ * Pipeline Status PropertiesService Key By Type
+ *
+ * WHY (2026-08-26, ICFUNNEL 추가 계기 리팩토링)
+ * 기존엔 `(type === MTA) ? PIPELINE_STATUS_MTA : PIPELINE_STATUS_LEADS`
+ * 삼항 연산자를 read/write 두 곳에 중복 — MTA가 아닌 타입은 전부 LEADS
+ * 키로 떨어지는 구조라, ICFUNNEL을 그대로 넘기면 LEADS 상태를 덮어쓰는
+ * 버그가 될 뻔했음(발견해서 이 함수로 분리). 새 타입 추가 시 이 함수
+ * 한 곳만 고치면 됨.
+ * ==========================================================
+ */
+function pipelineStatusPropertyKey_(type){
+
+  if(type === CONFIG.PIPELINE.TYPES.MTA){
+    return CONFIG.PROPERTIES.PIPELINE_STATUS_MTA;
+  }
+
+  if(type === CONFIG.PIPELINE.TYPES.ICFUNNEL){
+    return CONFIG.PROPERTIES.PIPELINE_STATUS_ICFUNNEL;
+  }
+
+  return CONFIG.PROPERTIES.PIPELINE_STATUS_LEADS;
+
+}
+
+
 function readPipelineStatusState_(type){
 
-  const key = (type === CONFIG.PIPELINE.TYPES.MTA)
-    ? CONFIG.PROPERTIES.PIPELINE_STATUS_MTA
-    : CONFIG.PROPERTIES.PIPELINE_STATUS_LEADS;
+  const key = pipelineStatusPropertyKey_(type);
 
   const raw = PropertiesService.getScriptProperties().getProperty(key);
 
@@ -726,9 +789,7 @@ function readPipelineStatusState_(type){
 
 function writePipelineStatusState_(type, state){
 
-  const key = (type === CONFIG.PIPELINE.TYPES.MTA)
-    ? CONFIG.PROPERTIES.PIPELINE_STATUS_MTA
-    : CONFIG.PROPERTIES.PIPELINE_STATUS_LEADS;
+  const key = pipelineStatusPropertyKey_(type);
 
   PropertiesService
     .getScriptProperties()
@@ -758,6 +819,16 @@ function writePipelineStatusState_(type, state){
  * RUNNING(빨강)/DONE(초록) 배경+글자색+bold를 매번 같이 덮어씀 — 상태가 바뀔
  * 때마다 이 함수가 호출되므로 별도 조건부 서식 규칙 없이 매번 값과 함께
  * 색도 최신 상태로 유지됨.
+ *
+ * **2026-08-26 IC Funnel 행 추가 마이그레이션**: 그리드가 3행(헤더+New
+ * Leads+MTA Leads)에서 4행(+ IC Funnel)으로 늘어남 — 이미 3행 블록이
+ * 자리잡은 시트(title이 이미 "Pipeline Status")는 위 title 분기를 안 타서
+ * 그냥 덮어쓰기만 하면 기존에 A4(그 다음 빈 구분 행)에 있던 내용이 밀리지
+ * 않고 깨질 위험이 있음 — IC Funnel 행이 들어갈 자리(anchorRow+3, 예: A4)의
+ * 라벨이 아직 "IC Funnel"이 아니면 그 자리에 딱 1행만 insertRowsBefore로
+ * 끼워넣은 뒤 씀(사용자 요청: "A4 위에 새 행 추가"). 완전 신규 시트/옛
+ * 7행 레이아웃은 이미 grid.length+1(=5)행을 통째로 확보하므로 이 추가
+ * 마이그레이션 대상이 아님(중복 삽입 방지, didFullInsert 플래그로 구분).
  * ==========================================================
  */
 function writePipelineStatusToReadme_(){
@@ -772,8 +843,9 @@ function writePipelineStatusToReadme_(){
 
   const leadsState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.LEADS);
   const mtaState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.MTA);
+  const icFunnelState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.ICFUNNEL);
 
-  const grid = buildPipelineStatusGrid_(leadsState, mtaState);
+  const grid = buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState);
 
   const anchorRow = CONFIG.PIPELINE.STATUS_ANCHOR_ROW;
   const anchorCol = CONFIG.PIPELINE.STATUS_ANCHOR_COL;
@@ -783,11 +855,27 @@ function writePipelineStatusToReadme_(){
 
   const titleCell = sheet.getRange(anchorRow, anchorCol).getValue();
 
+  let didFullInsert = false;
+
   if(titleCell === OLD_LAYOUT_TITLE){
     sheet.deleteRows(anchorRow, OLD_LAYOUT_ROW_COUNT);
     sheet.insertRowsBefore(anchorRow, grid.length + 1);
+    didFullInsert = true;
   } else if(titleCell !== grid[0][0]){
     sheet.insertRowsBefore(anchorRow, grid.length + 1);
+    didFullInsert = true;
+  }
+
+  if(!didFullInsert && grid.length > 3){
+
+    const newRowIndex = anchorRow + 3;
+    const newRowLabel = grid[3][0]; // "IC Funnel"
+    const currentLabelAtNewRow = sheet.getRange(newRowIndex, anchorCol).getValue();
+
+    if(currentLabelAtNewRow !== newRowLabel){
+      sheet.insertRowsBefore(newRowIndex, 1);
+    }
+
   }
 
   const range =
@@ -1414,6 +1502,108 @@ function runMTAPipelineTail(){
 
 /**
  * ==========================================================
+ * Run IC Funnel Pipeline Tail
+ *
+ * WHY (2026-08-26, docs/OpenItems.md #32)
+ * `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`) 끝의 7개 Engine
+ * refresh가 Leads_OPS/MTA_Master 전체를 스캔하는 무거운 작업이라 Leads/MTA와
+ * 동일한 설치형 1회성 트리거 패턴으로 백그라운드 실행.
+ *
+ * **2026-08-26 후속 — OPS 시트/Report 화면 재생성까지 포함(사용자 지적)**:
+ * 최초 구현은 `syncICFunnelToOPS_()`만 부르고 끝냈으나, 그 함수가 갱신하는
+ * 건 ACQ_Summary/Events·BOFU·Search·Content Engine 등 **숨겨진 캐시뿐**이고
+ * `buildEventsOPS()`/`buildBOFUOPS()`/`buildSearchOPS()`/`buildContentOPS()`
+ * (눈에 보이는 OPS 시트 재구성)나 `generateACQReport_()`/`generateNewP1Report_()`/
+ * `generateTargetReport_()`(Report 화면 재생성)는 안 불러서, 이번 기능의
+ * 핵심 목적(ACQ_REP IC Booked/Complete 수치 교정)이 다음 Leads/MTA Import
+ * 전까지 화면엔 반영이 안 되는 문제였음 — `runMTAPipelineTail()`과 동일하게
+ * `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/`refreshReportGenerate_()`
+ * 까지 이어서 실행하도록 확장. 이 3개 함수는 이미 제네릭(`type`/`state` 인자
+ * 또는 무인자)이라 `CONFIG.PIPELINE.TYPES.ICFUNNEL`을 그대로 넘기면
+ * README IC Funnel 행의 Events_OPS/BOFU_OPS/Search_OPS/Content_OPS/ACQ_REP/
+ * NewP1_REP/Target_REP 컬럼도 자연스럽게 채워짐(`pipelineStatusPropertyKey_()`
+ * 덕분에 Leads 상태와 안 섞임).
+ *
+ * `PIPELINE_LOCK`은 Leads/MTA와 공유(같은 PropertiesService 키) — 세
+ * 파이프라인 중 어느 것이 실행 중이어도 나머지는 겹치지 않게 스킵됨
+ * (Leads_OPS/Engine 캐시를 동시에 쓰는 경합 방지). `PIPELINE_LAST_FAILED_TYPE`은
+ * 의도적으로 안 건드림 — `runRetryPipelineTail()`은 LEADS/MTA 전용 재시도
+ * 진입점이고, IC Funnel 실패 시 수동 재시도는 `runSyncICFunnelToOPS()` 직접
+ * Run으로 충분(범위 최소화). `rebuildDealTrackerEngine_()`/`refreshCampaignSpend_()`/
+ * `refreshNaverSearchCampaignStats_()`/완전동일 중복 삭제 등 Leads/MTA
+ * 전용 단계는 IC Funnel 데이터와 무관해 포함하지 않음.
+ * ==========================================================
+ */
+function runICFunnelPipelineTail(){
+
+  deleteTriggersByHandlerName_("runICFunnelPipelineTail");
+
+  const type = CONFIG.PIPELINE.TYPES.ICFUNNEL;
+
+  const state = {
+    status: "RUNNING",
+    stage: "",
+    startedAt: nowTimestamp_(),
+    startedAtMs: Date.now(),
+    finishedAt: "",
+    error: "",
+    stages: {}
+  };
+
+  writePipelineStatusState_(type, state);
+  writePipelineStatusToReadme_();
+
+  try{
+
+    advancePipelineStage_(
+      type, state, "syncICFunnelToOPS_", syncICFunnelToOPS_, ["leadsOps"]
+    );
+
+    advancePipelineStage_(type, state, "refreshOPSSheets_", function(){
+      refreshOPSSheets_(type, state);
+    });
+
+    advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
+
+    advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
+      refreshReportGenerate_(type, state);
+    });
+
+    state.status = "DONE";
+    state.stage = "";
+    state.finishedAt = nowTimestamp_();
+    state.error = "";
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+  } catch(err){
+
+    state.status = "FAILED";
+    state.finishedAt = nowTimestamp_();
+    state.error = String(err && err.message ? err.message : err);
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+    Logger.log(
+      "[ICFunnelPipelineTail] FAILED — " +
+      (err && err.message ? err.message : err)
+    );
+
+    throw err;
+
+  } finally {
+
+    releasePipelineLock_();
+
+  }
+
+}
+
+
+/**
+ * ==========================================================
  * Run Retry Pipeline Tail
  *
  * WHY
@@ -1612,11 +1802,19 @@ function testBuildPipelineStatusGrid(){
       finishedAt: "2026-08-04 09:05:00 KST",
       error: "Boom",
       stages: { masterUpdate: "DONE", campaignSpend: "FAILED" }
+    },
+    {
+      status: "DONE",
+      stage: "",
+      startedAt: "2026-08-26 08:00:00 KST",
+      finishedAt: "2026-08-26 08:01:00 KST",
+      error: "",
+      stages: {}
     }
   );
 
   const ok =
-    grid.length === 3 &&
+    grid.length === 4 &&
     grid[0].length === 12 &&
     grid[0][0] === "Pipeline Status" &&
     grid[0][1] === "Status" &&
@@ -1627,21 +1825,37 @@ function testBuildPipelineStatusGrid(){
     grid[1][2] === "DONE" && grid[1][3] === "RUNNING" && grid[1][4] === "" &&
     grid[2][0] === "MTA Leads" &&
     grid[2][1] === "FAILED · 2026-08-04 09:05:00 KST · Boom" &&
-    grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED";
+    grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED" &&
+    grid[3][0] === "IC Funnel" &&
+    grid[3][1] === "DONE · 2026-08-26 08:01:00 KST" &&
+    grid[3][2] === "" && grid[3][11] === ""; // 세부 단계 없음 — 전부 빈 문자열
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +
     " grid=" + JSON.stringify(grid)
   );
 
-  const emptyGrid = buildPipelineStatusGrid_({}, {});
+  const emptyGrid = buildPipelineStatusGrid_({}, {}, {});
   const emptyOk =
-    emptyGrid[1][1] === "IDLE" && emptyGrid[2][1] === "IDLE" &&
-    emptyGrid[1][2] === "" && emptyGrid[2][2] === "";
+    emptyGrid.length === 4 &&
+    emptyGrid[1][1] === "IDLE" && emptyGrid[2][1] === "IDLE" && emptyGrid[3][1] === "IDLE" &&
+    emptyGrid[1][2] === "" && emptyGrid[2][2] === "" && emptyGrid[3][2] === "";
 
   Logger.log(
     "testBuildPipelineStatusGrid (empty defaults): " +
     (emptyOk ? "PASS" : "FAIL")
+  );
+
+  // icFunnelState 생략(undefined) 시에도 안전하게 4행으로 렌더링되어야 함
+  // (하위 호환 — 기존 2-인자 호출부가 있다면 깨지지 않게)
+  const legacyCallGrid = buildPipelineStatusGrid_({}, {});
+  const legacyCallOk =
+    legacyCallGrid.length === 4 && legacyCallGrid[3][0] === "IC Funnel" &&
+    legacyCallGrid[3][1] === "IDLE";
+
+  Logger.log(
+    "testBuildPipelineStatusGrid (icFunnelState omitted): " +
+    (legacyCallOk ? "PASS" : "FAIL")
   );
 
 }

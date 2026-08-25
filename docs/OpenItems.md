@@ -385,8 +385,9 @@
     보일 것 — 코드 이슈 아님, (3) 8/17주 수정 후 실측(10,443.03)과의 최종 오차가 얼마인지
     사용자가 직접 재확인한 응답은 못 받음(수정 직전 값 기준 Node 계산상 근접할 것으로 예상만
     확인). 다음 세션에서 위 3가지를 먼저 확인할 것.
-32. **ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계 — 원인 규명 완료, 해결책은 미착수
-    (2026-08-25)** — 사용자가 Salesforce "leads report"(IC Booked Date=이번 달, 전체 세그먼트)
+32. **ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계 — 원인 규명 완료(2026-08-25), 해결책
+    구현 완료(2026-08-26), 실사용 검증 대기(TODO)** — 사용자가 Salesforce "leads report"(IC
+    Booked Date=이번 달, 전체 세그먼트)
     42건 대비 ACQ_REP IC Booked 21건, IC Complete는 Salesforce 21~22건 대비 ACQ_REP 7건으로
     괴리 보고. `TEMPQA_032_ICBookedAugustSalesforceDiff.js`로 Salesforce Email 목록을
     Leads_Master→Leads_OPS→MTA_Master 순으로 대조한 결과: (1) 1건(redrock333@yahoo.com)만
@@ -409,10 +410,53 @@
     Date 존재 여부와 동일"하다는 이유로 MTA_Master 통합 방식(`syncMTAFunnelToOPS_()`)으로
     대체되며 제거됨(`docs/Changelog.md` "IC Funnel Sync 구축 및 검증" 섹션) — 그 통합이 이번
     과소집계의 구조적 원인으로 추정.
-    **해결 방향(미착수, 사용자 결정 대기)**: `ICFunnel_Raw` 방식(터치와 무관한 별도 Lead-level
-    IC Booked/Completed/Won Date 주간 export)을 IC Booked/Complete 전용으로 재도입하면 이
-    시차가 사라짐 — 단 사용자가 Salesforce에서 별도 리포트를 추가로 유지보수해야 하고,
-    SAL(Sales Accepted Date)/Revenue(Deal Tracker로 이미 전환됨, CLAUDE.md #7)는 지금 방식
-    그대로 둘지 같이 옮길지 결정 필요. 상세 배경: `docs/ACQReportDesign.md` "이번 달 IC
-    Booked/Complete 구조적 과소집계" 섹션. 이번 세션에선 조사만 완료, 구현은 보류 — 임의로
-    처리하지 말 것.
+    **✅ 해결책 구현 완료(2026-08-26)**: `ICFunnel_Raw` 재도입 — 사용자 결정: IC Booked/
+    Completed/**Opportunity Won Date 3개 필드** 전용(Revenue/SAL은 이미 별개 메커니즘으로
+    해결돼 있어 제외), `MASTER_003_MTAFunnelSync.js`(MTA_Master 기반)는 이 3개 필드에서
+    완전히 손을 떼도록 필드 소유권 분리(두 파이프라인이 같은 필드를 다른 순서로 덮어쓰는
+    위험 제거). 신규 `MASTER_009_ICFunnelSync.js`(`syncICFunnelToOPS_()`, Master 빌드
+    단계 없음 — Raw→직접 Leads_OPS sync) + `CONFIG.IC_FUNNEL`(`CORE_001_Config.js`
+    v1.43.0, 사용자가 실제 만든 Salesforce 리포트의 export 헤더로 필드명 확인 완료,
+    day-first 날짜라 `RAW_DATE_COLUMNS.IC_FUNNEL`로 Plain Text 보호) + `importICFunnelReport()`
+    메뉴 진입점 복원("📥 Update → Import IC Funnel", `IMPORT_001_Import.js`).
+    Node vm 하네스 신규/회귀 테스트 전부 PASS, 체크 스크립트 전부 통과, clasp push 완료.
+    **2026-08-26 후속 — 백그라운드 트리거로 전환**: 처음엔 동기 호출로 구현했으나, sync
+    끝의 7개 Engine refresh(Leads_OPS/MTA_Master 전체 스캔)가 IC Funnel 데이터 크기와
+    무관하게 그 자체로 무거워 업로드 다이얼로그가 안 끝나는 문제를 사용자가 실제 전체기간
+    Import(36,464행) 중 발견 — `appendNewLeads()`/`appendNewMTA()`와 동일한 설치형
+    1회성 백그라운드 트리거 패턴으로 재수정(`scheduleICFunnelPipelineTail_()` +
+    `runICFunnelPipelineTail()`, `MASTER_002_PipelineAsync.js`, `PIPELINE_LOCK`
+    Leads/MTA와 공유). **2026-08-26 추가 후속 — README 표시 추가**: 처음엔 README
+    Pipeline Status 표 미반영으로 남겼으나 사용자 요청으로 3번째 행("IC Funnel")
+    추가(`buildPipelineStatusGrid_()`/`pipelineStatusPropertyKey_()`) — 이미 자리잡은
+    3행 블록에 안전하게 1행만 끼워넣는 마이그레이션 포함.
+    **2026-08-26 추가 후속 — OPS 시트/Report 화면까지 재생성(사용자가 실행 로그로 발견)**:
+    처음엔 `syncICFunnelToOPS_()`(숨겨진 Engine 캐시만 갱신)만 부르고 끝나서, ACQ_REP
+    화면의 IC Booked/Complete 수치가 다음 Leads/MTA Import 전까지 교정 안 되는 구멍이
+    있었음 — `runMTAPipelineTail()`과 동일하게 `refreshOPSSheets_()`/
+    `refreshReportFYDropdowns_()`/`refreshReportGenerate_()`까지 이어서 실행하도록
+    확장(`runICFunnelPipelineTail()` v1.18.0). 상세: `docs/Changelog.md` 2026-08-26,
+    `docs/ACQReportDesign.md`/`docs/OperationsLayer.md`/`docs/ImportPipeline.md` 해당 섹션.
+    **남은 것(TODO)**: 사용자가 `ICFunnel_Raw` 시트(빈 탭)를 스프레드시트에 생성한 뒤 실제
+    CSV로 Import → 백그라운드 트리거 완료 후 Leads_OPS IC Booked/Completed/Won Date
+    반영 확인 → ACQ_REP 재계산 후 Salesforce 42건/21~22건과의 최종 오차 확인 — 확인
+    전까지 완료로 간주하지 말 것.
+33. **Won/Lost Deal 중 20~30%가 IC Booked/Completed Date 없이 바로 전환 — 원인 미상, 다음
+    세션으로 보류(2026-08-26)** — 32번 항목(ICFunnel_Raw 재도입) 검증 중, 사용자가 전체 기간
+    ICFunnel_Raw CSV를 뽑아보니 IC Booked Date가 Salesforce 리포트 화면에 "-"로 보이는 값들이
+    있어 "Booked 했다가 취소된 것 아니냐"고 질문 → 후속으로 `Sales Funnel Stage` 컬럼을 추가한
+    재export(`report1787695235728.csv`, 36,464행)를 받아 분석.
+    **확인된 사실**:
+    - 실제 CSV엔 리터럴 `-` 값이 전혀 없음(전부 빈 문자열 아니면 정상 날짜) — 사용자가 본 "-"는
+      Salesforce 리포트 화면의 빈 날짜 셀 렌더링으로 추정(코드 처리 불필요, 원본 파일이 이미
+      삭제돼 직접 대조는 못 함).
+    - **"Opportunity Won Date"가 실제로는 "Opportunity 전환 날짜"라는 기존 추정(5번 항목)이
+      데이터로 직접 확인됨** — Lost Deal 733건 전부(100%) Opportunity Won Date가 채워져 있고,
+      아직 결론 안 난 Sales Qualified 단계에서도 94%(1,488/1,590)가 이미 채워져 있음.
+    - Sales Funnel Stage별 IC Booked/Completed 채움 비율: Lost Deal 733건 중 Booked 586건
+      (80%)/Completed 590건(80.5%), Won Deal 918건 중 Booked 646건(70%)/Completed 669건
+      (73%) — 즉 Won/Lost Deal의 **20~30%는 IC Booked/Completed Date 없이 바로 전환**됨(이번에
+      새로 발견, 기존 파이프라인 버그와 무관 — 빈 값은 정확히 빈 값으로 처리되고 있음, 확인됨).
+    **미해결**: 이게 "IC 단계를 정상적으로 건너뛰는 케이스"(예: 재신청/기존 고객 등)인지
+    "원래 있어야 하는데 기록 누락"인지 판단 불가 — Salesforce 프로세스/데이터 지식이 필요한
+    질문이라 다음 세션으로 보류(사용자 결정, 2026-08-26). 임의로 처리하지 말 것.

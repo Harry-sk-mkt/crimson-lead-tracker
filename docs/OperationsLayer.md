@@ -72,6 +72,37 @@ sync 때 자동으로 따라잡힌다** (self-healing, 최대 1 사이클 지연
 **QA 미실행 트레이드오프**: 자동 트리거 경로는 QA(~77s)를 생략한다. 정합성 전체 점검이 필요하면
 메뉴("✅ QA → Run Leads_OPS QA") 또는 `buildLeadsOPS()`(파라미터 없이)를 편집기에서 수동 실행.
 
+## IC Funnel Sync — Lead 레벨 전용 별도 파이프라인 (2026-08-26 재도입)
+
+`syncMTAFunnelToOPS_()`는 MTA_Master(터치 단위)에서 Lead ID별 대표 터치를 뽑아 Leads_OPS로
+역동기화하지만, IC Booked/Completed/Opportunity Won Date는 Lead 레벨 스냅샷이라 **그 리드에
+새 마케팅 터치가 없으면 Salesforce 쪽 상태가 바뀌어도 영원히 반영이 안 되는 구조적 공백**이
+있었다(IC Booking/Completion은 대부분 터치 없이 세일즈 내부 프로세스로만 진행됨) — ACQ_REP IC
+Booked/Complete 구조적 과소집계의 근본 원인(`docs/OpenItems.md` #32).
+
+이 3개 필드만 전담하는 `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`)를 재도입 —
+`ICFunnel_Raw`(Append 전용, Master 빌드 없음)를 Lead 단위로 export("📥 Update → Import IC
+Funnel")하면 반영된다. `syncMTAFunnelToOPS_()`는 이제 이 3개 필드에서 손을 떼고 Revenue/
+Sales Accepted Date만 관리 — 두 파이프라인이 같은 필드를 다른 순서로 덮어쓰는 위험을 없애기
+위해 필드 소유권을 완전히 분리했다(사용자 확정).
+
+**2026-08-26 후속 — 백그라운드 트리거로 전환**: 처음엔 "Lead 단위 소규모 리포트라 무겁지
+않다"는 이유로 `importCsv()`에서 동기 호출했으나, `syncICFunnelToOPS_()` 끝의 7개 Engine
+refresh(Leads_OPS/MTA_Master 전체 스캔)는 IC Funnel 데이터 크기와 무관하게 그 자체로 무거워
+업로드 다이얼로그가 오래 안 닫히는 문제가 실사용 중 발견됨. `appendNewLeads()`/`appendNewMTA()`
+와 동일한 설치형 1회성 백그라운드 트리거 패턴으로 전환(`scheduleICFunnelPipelineTail_()` +
+`runICFunnelPipelineTail()`, `MASTER_002_PipelineAsync.js`) — `PIPELINE_LOCK`은 Leads/MTA와
+공유. README Pipeline Status 표에 "IC Funnel" 3번째 행 추가(사용자 요청,
+`buildPipelineStatusGrid_()`/`pipelineStatusPropertyKey_()`).
+
+**2026-08-26 추가 후속 — OPS 시트/Report 화면까지 재생성**: 처음엔 `syncICFunnelToOPS_()`만
+불러서 끝냈으나, 그 함수가 갱신하는 건 ACQ_Summary/Events·BOFU·Search·Content Engine 등
+숨겨진 캐시뿐이고 `buildEventsOPS()` 등(OPS 시트 재구성)이나 `generateACQReport_()` 등
+(Report 화면 재생성)은 안 불러서, 이번 기능의 핵심 목적(ACQ_REP IC Booked/Complete 수치
+교정)이 화면엔 다음 Leads/MTA Import 전까지 반영이 안 되는 문제를 사용자가 지적 —
+`runMTAPipelineTail()`과 동일하게 `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/
+`refreshReportGenerate_()`까지 이어서 실행하도록 확장(`runICFunnelPipelineTail()` v1.18.0).
+
 ## Duplicate Email Handling — ⚠️ 미해결
 
 **문서 원칙:**

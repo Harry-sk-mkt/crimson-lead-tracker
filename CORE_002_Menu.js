@@ -4,9 +4,13 @@
  * Custom Menu
  *
  * Version
- * v3.4.1
+ * v3.5.0
  *
  * Change Log
+ * v3.5.0 (2026-08-26)
+ * - "📥 Update" 메뉴에 "Import IC Funnel"(importICFunnelReport) 추가 —
+ *   ICFunnel_Raw 재도입(`docs/OpenItems.md` #32, IC Booked/Complete 구조적
+ *   과소집계 해결)의 일부.
  * v3.4.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `00_Menu.js` → 신규 `CORE_002_Menu.js`, 코드 내용 변경 없음.
  * v3.4.0 (2026-07-24)
@@ -53,6 +57,7 @@ function createImportMenu() {
     .createMenu("📥 Update")
     .addItem("Import Leads", "importLeadReport")
     .addItem("Import MTA", "importMTAReport")
+    .addItem("Import IC Funnel", "importICFunnelReport")
     .addToUi();
 
 }

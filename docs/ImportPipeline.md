@@ -27,6 +27,23 @@
 | `23_OPS_Write.js` | Leads_OPS 시트 쓰기 |
 | `99_ResetRawMaster.js` | `resetIncrementalCounters()` — Raw/Master 수동 초기화 후 카운터 리셋용 |
 
+## 2026-08-26 변경 이력
+
+- **ICFunnel_Raw 재도입**(`docs/OpenItems.md` #32 — ACQ_REP IC Booked/Complete
+  구조적 과소집계 해결): `CONFIG.IC_FUNNEL`(`CORE_001_Config.js`) 신규,
+  `importICFunnelReport()`(`IMPORT_001_Import.js`) 메뉴 진입점 복원("📥 Update →
+  Import IC Funnel"). `importCsv()`의 `case "IC_FUNNEL"`이 `writeICFunnelRaw()`
+  직후 신규 `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`)를 호출 —
+  Leads/MTA와 달리 Master 빌드 단계는 없음(Lead 단위 소규모 리포트, Raw→직접
+  Leads_OPS sync). **단, sync 끝의 Engine refresh 체인 자체는 Leads/MTA와 동일하게
+  무거워** — 처음엔 동기 호출했으나 업로드 다이얼로그가 오래 안 닫히는 문제가
+  실사용 중 발견돼(2026-08-26 후속), `appendNewLeads()`/`appendNewMTA()`와 동일한
+  설치형 1회성 백그라운드 트리거로 전환(`scheduleICFunnelPipelineTail_()` +
+  `runICFunnelPipelineTail()`, `MASTER_002_PipelineAsync.js`) — `PIPELINE_LOCK`
+  공유, README Pipeline Status 표는 의도적으로 미반영. `MASTER_003_MTAFunnelSync.js`
+  (v1.7.0)는 IC Booked/Completed/Opportunity Won Date에서 손을 떼고 Revenue/Sales Accepted
+  Date만 계속 관리 — 상세는 `docs/OperationsLayer.md` "IC Funnel Sync" 섹션 참고.
+
 ## 2026-08-25 변경 이력
 
 - **완전 동일 중복 Raw 단계 필터링 신규 도입** (`IMPORT_008_RawDeduplicator.js`

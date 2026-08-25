@@ -1,3 +1,147 @@
+# Changelog — 2026-08-26
+
+## Sync Pipeline 아키텍처 다이어그램(Artifact) 전면 갱신
+
+`docs/OpenItems.md`/`docs/OperationsLayer.md`에 반영한 위 IC Funnel 파이프라인 변경사항을
+시각 자료에도 반영. 2026-08-04에 만들어둔 Artifact("Marketing 2.0 — Sync Pipeline",
+Leads/MTA 2개 진입점 기준)가 그 뒤 자동화된 것들(Events/BOFU/Search/Content OPS 자동화,
+Ad Spend 4시간 주기 트리거 등)과 오늘 추가된 IC Funnel 파이프라인을 전혀 반영 못 하고 있어
+전면 재작성. 실제 코드(`runLeadsPipelineTail()`/`runMTAPipelineTail()`/
+`runICFunnelPipelineTail()`) 호출 순서 그대로 다이어그램 재구성, 각 단계 실측 소요시간
+포함(오늘 IC Funnel sync 24.35s + Engine 6종 36.7~54.6s 실측치, OPS 화면 재구성/Report
+생성은 미측정으로 명시 — 추측 안 함). 기존 디자인 시스템(다크 콘솔 박스, 칩 범례, 레퍼런스
+테이블) 그대로 유지, 콘텐츠만 갱신. 같은 URL로 republish:
+https://claude.ai/code/artifact/a4afa464-fdab-4e72-a6ec-3ac87e519a99
+
+## IC Funnel 백그라운드 실행이 OPS 시트/Report 화면까지 재생성하도록 확장 (실행 로그로 사용자 발견)
+
+사용자가 위 README 표에서 IC Funnel 행의 Events_OPS/BOFU_OPS/Search_OPS/Content_OPS/ACQ_REP/
+NewP1_REP 컬럼이 계속 빈 칸인 걸 보고 "OPS, REP도 전부 refresh 되는거 아니야?"라고 질문,
+이어서 실제 Executions 로그(IC Funnel Sync + 7개 Engine refresh, 총 ~5분)를 붙여주며
+재확인 — 대조해보니 `syncICFunnelToOPS_()`가 갱신하는 건 ACQ_Summary/Events·BOFU·Search·
+Content Engine 등 **숨겨진 캐시뿐**이고, `buildEventsOPS()`/`buildBOFUOPS()`/`buildSearchOPS()`/
+`buildContentOPS()`(눈에 보이는 OPS 시트 재구성)나 `generateACQReport_()`/`generateNewP1Report_()`/
+`generateTargetReport_()`(Report 화면 재생성)는 전혀 안 부르고 있었음을 확인. 이 기능을
+만든 핵심 목적(ACQ_REP IC Booked/Complete 수치 교정)이 실제 화면엔 다음 Leads/MTA Import
+전까지 반영이 안 되는 구멍이었음.
+
+**수정**: `runICFunnelPipelineTail()`(`MASTER_002_PipelineAsync.js` v1.18.0)이
+`runMTAPipelineTail()`과 동일하게 `syncICFunnelToOPS_()` → `refreshOPSSheets_()` →
+`refreshReportFYDropdowns_()` → `refreshReportGenerate_()` 순으로 이어서 실행하도록 확장 —
+전부 `advancePipelineStage_()` 패턴으로 전환(기존엔 상태 추적을 직접 손으로 했음). 세
+함수 모두 이미 제네릭(`type`/`state` 인자 또는 무인자)이라 `CONFIG.PIPELINE.TYPES.ICFUNNEL`을
+그대로 넘기면 README IC Funnel 행의 나머지 컬럼(leadsOps/eventsOps/bofuOps/searchOps/
+contentOps/acqRep/newP1Rep/targetRep)도 실제로 그 단계가 돌면서 자연스럽게 채워짐 —
+전에 사용자에게 "이 컬럼들은 IC Funnel엔 해당 없어 계속 빈 칸이 맞다"고 설명했던 것이
+정정됨(범위를 좁게 잡은 게 이번 기능의 목적과 안 맞았던 것으로 확인). Deal Tracker Engine
+재구축/Campaign Spend refresh/완전동일 중복 삭제 등 Leads/MTA 전용 단계는 IC Funnel
+데이터와 무관해 포함하지 않음. Node vm 하네스 회귀 테스트 전부 PASS, 체크 스크립트 통과,
+clasp push 완료.
+
+## README Pipeline Status 표에 IC Funnel 3번째 행 추가 (사용자 요청)
+
+위 백그라운드 트리거 전환 직후, IC Funnel도 Leads/MTA처럼 README에서 진행상태가 보이길
+원한다는 요청(`runICFunnelPipelineTail()`이 상태를 아예 기록 안 하던 것을 사용자가 지적).
+
+**구현**: `pipelineStatusPropertyKey_(type)` 신규(`MASTER_002_PipelineAsync.js` v1.17.0,
+순수 함수) — `readPipelineStatusState_()`/`writePipelineStatusState_()`에 중복돼 있던
+"`MTA`가 아니면 무조건 `LEADS` 키" 삼항 연산자를 대체(그대로 `ICFUNNEL`을 넘기면 Leads
+상태를 덮어썼을 뻔한 걸 이번에 발견). `CONFIG.PROPERTIES.PIPELINE_STATUS_ICFUNNEL`
+신규(`CORE_001_Config.js` v1.45.0). `buildPipelineStatusGrid_()`가 3번째 인자
+`icFunnelState`를 받아 "IC Funnel" 행 반환(세부 단계 없이 전체 상태만 — IC Funnel
+파이프라인은 sync 하나뿐이라 Master Update~Target_REP 같은 하위 단계 컬럼이 없음).
+
+**마이그레이션**: 이미 3행(헤더+New Leads+MTA Leads) 블록이 자리잡은 실제 README는 그냥
+겹쳐쓰면 기존 A4(빈 구분 행)가 밀리지 않고 깨질 위험이 있어, `writePipelineStatusToReadme_()`에
+1회성 분기 추가 — A4의 라벨이 아직 "IC Funnel"이 아니면 그 자리에 1행만 `insertRowsBefore`로
+끼워넣은 뒤 씀(사용자 표현 그대로 "A4 위에 새 행 추가"). `runICFunnelPipelineTail()`이 이제
+RUNNING/DONE/FAILED를 README에 반영. Node vm 하네스로 4행 그리드 케이스(`testBuildPipelineStatusGrid()`
+갱신) + 기존 lock/self-heal 테스트 전부 회귀 없음 확인, 체크 스크립트 통과, clasp push 완료.
+
+## ICFunnel_Raw Import가 백그라운드 트리거로 전환 (위 항목 실사용 중 발견·수정)
+
+아래 "ICFunnel_Raw 재도입" 구현 직후 사용자가 실제로 전체기간(36,464행) CSV를 Import하다가
+업로드 다이얼로그가 오래 안 끝나는 걸 발견. 원인: `syncICFunnelToOPS_()` 끝의 7개 Engine
+refresh(`refreshACQSummary_()` 등, `syncMTAFunnelToOPS_()`와 동일 패턴 재사용)가
+Leads_OPS(3만5천+행)/MTA_Master(8만+행) 전체를 스캔하는 무거운 함수라, IC Funnel 데이터
+자체는 작아도 이 refresh 체인만큼은 Leads/MTA와 똑같이 무겁다는 걸 놓친 설계 실수 —
+`importCsv()`에서 `syncICFunnelToOPS_()`를 직접(동기) 호출하고 있었음.
+
+**해결**: refresh를 제거하는 대신(사용자 확정 — refresh 자체는 필요), `appendNewLeads()`/
+`appendNewMTA()`가 이미 쓰고 있는 설치형 1회성 백그라운드 트리거 패턴을 그대로 재사용 —
+신규 `scheduleICFunnelPipelineTail_()`(`MASTER_009_ICFunnelSync.js`, lock 획득 후 트리거
+예약) + `runICFunnelPipelineTail()`(`MASTER_002_PipelineAsync.js` v1.16.0, 트리거 진입점,
+자기 트리거 self-delete + `syncICFunnelToOPS_()` 호출 + finally에서 lock 해제). `PIPELINE_LOCK`은
+Leads/MTA와 같은 PropertiesService 키를 공유해 세 파이프라인이 서로 겹쳐 실행되지 않도록 함
+(`CONFIG.PIPELINE.TYPES.ICFUNNEL` 신규, `CORE_001_Config.js` v1.44.0). **README Pipeline
+Status 표는 의도적으로 미반영** — 기존 `writePipelineStatusState_()`가 LEADS/MTA 2타입만
+구분하는 구조라(그 외 타입은 전부 LEADS 키로 저장됨, 코드 확인) ICFUNNEL을 그대로 얹으면
+Leads 상태를 덮어쓰게 되는 걸 발견해 범위에서 제외 — 진행상태는 Executions 로그로 확인.
+`importCsv()`의 `case "IC_FUNNEL"`/`formatAppendSummary_()`(`IMPORT_001_Import.js` v3.10.0)도
+LEADS/MTA와 동일한 `backgroundScheduled`/`backgroundSkipped` 응답 형태로 갱신.
+
+Node vm 하네스로 기존 pipeline lock/상태 그리드 테스트(`testComputePipelineLockState`,
+`testComputeSelfHealedPipelineState`, `testBuildPipelineStatusGrid`) 포함 전부 회귀 없음
+확인, 체크 스크립트 전부 통과, clasp push 완료.
+
+## ICFunnel_Raw 재도입 — ACQ_REP IC Booked/Complete 구조적 과소집계 해결 (`docs/OpenItems.md` #32)
+
+전날 세션에서 원인만 규명하고 미착수로 남겼던 건. IC Booked/Completed/Opportunity Won Date는
+Lead 레벨 스냅샷이라, MTA_Master(터치 단위) 기반 `syncMTAFunnelToOPS_()`만으로는 그 리드에
+새 마케팅 터치가 없으면 Salesforce 쪽 상태 변화가 영원히 반영이 안 되는 구조적 공백이 있었음
+(IC Booking/Completion은 대부분 터치 없이 세일즈 내부 프로세스로만 진행됨).
+
+2026-07-21에 정확히 이 문제를 풀기 위해 만들었던 `ICFunnel_Raw` + `syncICFunnelToOPS()`(터치와
+무관하게 Lead 단위로 이 3개 필드를 직접 export하는 파이프라인)가 2026-07-22에 "SAL 판별이
+사실상 IC Booked Date 존재 여부와 동일하다"는 이유로 MTA_Master 통합 방식으로 대체되며
+제거됐었는데, 그 대체가 이번 과소집계의 근본 원인으로 확인됨 — 사용자 결정으로 이 3개 필드
+전용으로 재도입.
+
+**구현**: `MASTER_009_ICFunnelSync.js`(신규) — `pickLatestICFunnelRecords_()`(ICFunnel_Raw에서
+Lead ID별 최신 레코드 채택) + `syncICFunnelToOPS_()`(Leads_OPS로 동기화, 값 있는 필드만 갱신).
+컬럼별 배치 읽기/쓰기는 `MASTER_003_MTAFunnelSync.js`의 `computeMTASyncColumnUpdates_()`(완전
+범용 순수 함수)를 그대로 재사용해 중복 구현 없이 리드당 개별 setValue() 성능 문제(과거 실측
+978.95초)를 처음부터 피함. Master 빌드 단계는 만들지 않음(Lead 단위 최신 스냅샷만 의미 있어
+이력 누적 불필요, 옛 설계와 동일 아키텍처). `MASTER_003_MTAFunnelSync.js`(v1.7.0)는 이 3개
+필드에서 손을 떼고 Revenue/Sales Accepted Date만 계속 관리 — 두 파이프라인이 같은 필드를
+다른 순서로 덮어쓰는 위험을 없애기 위해 필드 소유권을 완전히 분리(사용자 확정).
+
+`CONFIG.IC_FUNNEL`(`CORE_001_Config.js` v1.43.0)의 필드명은 사용자가 실제로 만든 Salesforce
+리포트의 export 헤더로 확인 완료(추정 아님) — "Lead ID"/"IC Booked Date"/"IC Completed Date
+(Pre-Conversion)"/"Opportunity Won Date". 날짜값이 day-first(예: "6/8/2026, 3:05 pm")로
+확인되어 `RAW_DATE_COLUMNS.IC_FUNNEL`에 반드시 포함 — Sales Accepted Date에서 이미 두 차례
+실제 사고가 났던(`docs/DateParsing.md`) locale 오해석 패턴을 처음부터 방지. 날짜 파싱은
+`parseDate(value, "DMY")`(콤마 이후 시간 부분 자동 제거) 재사용.
+
+`importICFunnelReport()`(`IMPORT_001_Import.js` v3.9.0) 메뉴 진입점 복원("📥 Update → Import
+IC Funnel"), `importCsv()`의 `case "IC_FUNNEL"`이 `writeICFunnelRaw()` 직후
+`syncICFunnelToOPS_()`를 동기 호출하도록 배선 — Leads/MTA와 달리 비동기 트리거 체인 불필요
+(Lead 단위 소규모 리포트라 무거운 전체 스캔 체인 없음). `formatAppendSummary_()`에 IC_FUNNEL
+전용 분기 추가 — 대응하는 Append 단계가 없어 기존엔 부정확했던 "Master Append를 실행해주세요"
+안내를 "IC Funnel Sync 완료" 문구로 교체.
+
+**검증**: Node vm 하네스로 신규 테스트(`testPickLatestICFunnelRecords`,
+`testComputeICFunnelByLeadId` — day-first 파싱이 month/day를 안 뒤바꾸는지 확인 포함) +
+기존 회귀 테스트(`testComputeMTASyncColumnUpdates`, `testComputeMTAFunnelByLeadId`,
+`testFormatAppendSummary`, `testFormatRawDedupSummary`) 전부 PASS 확인, `check-syntax`/
+`check-naming`/`check-version-header`/`check-duplicate-declarations` 전부 통과.
+**실사용 검증은 아직** — 사용자가 `ICFunnel_Raw` 시트 생성 후 실제 Import/sync 결과와
+ACQ_REP 재계산 값을 확인해야 완료로 간주(`docs/OpenItems.md` #32 참고).
+
+## Won/Lost Deal 중 20~30% IC Booked/Completed Date 없음 — 발견, 다음 세션으로 보류 (`docs/OpenItems.md` #33)
+
+위 ICFunnel_Raw 검증 중 사용자가 전체 기간 CSV를 뽑아보니 IC Booked Date가 Salesforce 리포트
+화면에 "-"로 표시되는 값들을 발견, "Booked 했다가 취소된 것 아니냐"고 질문 — `Sales Funnel
+Stage` 컬럼을 추가한 재export(36,464행)를 받아 분석.
+
+**확인된 사실**: 실제 CSV엔 리터럴 `-`가 없음(Salesforce 리포트 화면의 빈 셀 렌더링으로 추정).
+Sales Funnel Stage별 교차 집계 결과 "Opportunity Won Date = Opportunity 전환 날짜"라는 기존
+추정(`docs/OpenItems.md` #5)이 데이터로 확인됨(Lost Deal 733건 전부 채워져 있음). 그리고
+**Won/Lost Deal의 20~30%는 IC Booked/Completed Date 없이 바로 전환됨**(Lost Deal 733건 중
+Booked 586건/80%, Won Deal 918건 중 Booked 646건/70%) — 파이프라인 버그는 아님(빈 값 처리는
+정상 동작 확인), 다만 이게 정상 프로세스인지 데이터 누락인지는 Salesforce 도메인 지식이
+필요해 판단 보류. 사용자 결정으로 다음 세션으로 이월.
+
 # Changelog — 2026-08-25
 
 ## Import 단계 완전 동일 Raw 중복 필터링 신규 도입

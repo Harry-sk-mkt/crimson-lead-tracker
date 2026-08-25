@@ -9,18 +9,40 @@
  *
  * WHY (설계 배경)
  * SAL 판별(Lead Record Type)이 "이번 주 IC Booked Date 존재 여부"와
- * 사실상 동일한 기준이라는 게 확인되어, 별도 ICFunnel_Raw 리포트/
- * 파이프라인(08_ICFunnelSync.js, CONFIG.IC_FUNNEL) 없이 MTA_Master
- * 하나로 SAL + IC Funnel 동기화를 동시에 처리하도록 통합함.
- * ICFunnel_Raw 관련 코드/시트는 전량 제거됨 (2026-07-21).
+ * 사실상 동일한 기준이라는 게 확인되어, 2026-07-21 별도 ICFunnel_Raw 리포트/
+ * 파이프라인(08_ICFunnelSync.js, CONFIG.IC_FUNNEL)을 제거하고 MTA_Master
+ * 하나로 SAL + IC Funnel 동기화를 동시에 처리하도록 통합했었음.
+ *
+ * WHY (2026-08-26 재정정 — IC Booked/Completed/Won Date는 다시 분리)
+ * 위 통합이 구조적 과소집계 버그의 원인으로 확인됨: IC Booked/Completed/
+ * Won Date는 Lead 레벨 스냅샷이라, 그 리드에 "새 마케팅 터치"가 없으면
+ * Salesforce 쪽 상태가 바뀌어도 MTA_Master 기반으로는 영원히 반영이 안 됨
+ * (터치와 무관하게 진행되는 세일즈 내부 프로세스가 원인). ICFunnel_Raw +
+ * `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`)를 이 3개 필드
+ * 전용으로 재도입 — 이 파일은 이제 `Revenue`/`Sales Accepted Date`
+ * 2개만 계속 관리(둘 다 이미 별개 메커니즘으로 해결된 필드라 이 구조적
+ * 문제와 무관, `docs/OpenItems.md` #32 참고).
  *
  * Must NOT
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
+ * - IC Booked Date / IC Completed Date / Opportunity Won Date를 쓰지 않음
+ *   (2026-08-26부터 `MASTER_009_ICFunnelSync.js`의 전담 필드)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-26)
+ * - **IC Booked Date / IC Completed Date / Opportunity Won Date를
+ *   syncFieldMap에서 제거** — ICFunnel_Raw 재도입(`MASTER_009_ICFunnelSync.js`,
+ *   신규)으로 이관. 두 파이프라인이 같은 필드를 서로 다른 순서로 덮어쓰는
+ *   위험을 없애기 위해 소유권을 완전히 분리(사용자 확정). `Revenue`/
+ *   `Sales Accepted Date`만 계속 관리. `computeMTAFunnelByLeadId_()` 자체
+ *   (대표 터치 계산 로직)는 변경 없음 — 반환 객체에 icBookedDate/
+ *   icCompletedDate/wonDate가 남아있어도 이 파일 안에서 더 이상 안 쓰일 뿐
+ *   무해(다른 소비처 없음 확인, 불필요한 변경 범위 확장 방지). 배경:
+ *   `docs/OpenItems.md` #32, `docs/ACQReportDesign.md` "이번 달 IC
+ *   Booked/Complete 구조적 과소집계" 섹션.
  * v1.6.0 (2026-08-18)
  * - **버그 수정 — 리드당 개별 setValue() 호출로 인한 성능 문제(실측
  *   978.95초 ≈ 16.3분)**: `runMTAPipelineTail()` 실행 로그(2026-08-17) 확인
@@ -496,9 +518,6 @@ function syncMTAFunnelToOPS_(){
   //----------------------------------------------------------
 
   const syncFieldMap = {
-    "IC Booked Date": "icBookedDate",
-    "IC Completed Date": "icCompletedDate",
-    "Opportunity Won Date": "wonDate",
     "Revenue": "revenue",
     "Sales Accepted Date": "salesAcceptedDate"
   };
