@@ -385,3 +385,34 @@
     보일 것 — 코드 이슈 아님, (3) 8/17주 수정 후 실측(10,443.03)과의 최종 오차가 얼마인지
     사용자가 직접 재확인한 응답은 못 받음(수정 직전 값 기준 Node 계산상 근접할 것으로 예상만
     확인). 다음 세션에서 위 3가지를 먼저 확인할 것.
+32. **ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계 — 원인 규명 완료, 해결책은 미착수
+    (2026-08-25)** — 사용자가 Salesforce "leads report"(IC Booked Date=이번 달, 전체 세그먼트)
+    42건 대비 ACQ_REP IC Booked 21건, IC Complete는 Salesforce 21~22건 대비 ACQ_REP 7건으로
+    괴리 보고. `TEMPQA_032_ICBookedAugustSalesforceDiff.js`로 Salesforce Email 목록을
+    Leads_Master→Leads_OPS→MTA_Master 순으로 대조한 결과: (1) 1건(redrock333@yahoo.com)만
+    진짜 sync 버그(신규 리드 생성과 `syncMTAFunnelToOPS_()` 실행 사이 일회성 타이밍 공백) —
+    `runSyncMTAFunnelToOPS()` 재실행으로 해결(8,294건 갱신, IC Booked 21→22). (2) 2건은
+    Leads_Master에도 없음(신규 리드, Import 대기 — 코드 문제 아님). (3) **나머지 대다수(IC
+    Booked 17건, IC Complete 14건, 재sync 이후에도 불변)는 MTA_Master에 그 리드의 터치는
+    있지만 어떤 터치 행에도 이번 달 IC Booked/Completed Date 값 자체가 없음** — sync 버그가
+    아니라 구조적 원인.
+    **근본 원인**: `IC Booked Date`/`IC Completed Date`는 Lead 레벨 스냅샷 필드라, MTA
+    리포트에 그 리드의 **새 터치(마케팅 액티비티)가 export될 때만** 그 시점의 최신 상태가
+    실린다(`computeMTAFunnelByLeadId_()`, `MASTER_003_MTAFunnelSync.js`). 이 리드들은
+    SAL(Sales Accepted) 전후로 마지막 마케팅 터치가 있었고, 그 이후 세일즈 내부 프로세스로
+    IC Booking/Completion이 진행된 것으로 보이는데(터치 타임라인 실측 확인) 그 사이 새
+    마케팅 터치가 없어 우리 파이프라인이 그 변화를 실을 방법이 없었음 — 재Import를 반복해도
+    그 리드가 다시 터치되기 전까진 계속 공란으로 남는 구조.
+    **과거 이력과의 연관**: 2026-07-21에 정확히 이 문제를 풀기 위한 별도 Lead-level
+    리포트/파이프라인(`ICFunnel_Raw` 시트 + `syncICFunnelToOPS()`, 터치와 무관하게 IC
+    Booked/Completed/Won Date를 직접 주간 export)이 있었으나 "SAL 판별이 사실상 IC Booked
+    Date 존재 여부와 동일"하다는 이유로 MTA_Master 통합 방식(`syncMTAFunnelToOPS_()`)으로
+    대체되며 제거됨(`docs/Changelog.md` "IC Funnel Sync 구축 및 검증" 섹션) — 그 통합이 이번
+    과소집계의 구조적 원인으로 추정.
+    **해결 방향(미착수, 사용자 결정 대기)**: `ICFunnel_Raw` 방식(터치와 무관한 별도 Lead-level
+    IC Booked/Completed/Won Date 주간 export)을 IC Booked/Complete 전용으로 재도입하면 이
+    시차가 사라짐 — 단 사용자가 Salesforce에서 별도 리포트를 추가로 유지보수해야 하고,
+    SAL(Sales Accepted Date)/Revenue(Deal Tracker로 이미 전환됨, CLAUDE.md #7)는 지금 방식
+    그대로 둘지 같이 옮길지 결정 필요. 상세 배경: `docs/ACQReportDesign.md` "이번 달 IC
+    Booked/Complete 구조적 과소집계" 섹션. 이번 세션에선 조사만 완료, 구현은 보류 — 임의로
+    처리하지 말 것.

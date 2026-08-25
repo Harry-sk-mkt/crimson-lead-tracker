@@ -125,6 +125,50 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 | IC Complete | Leads_OPS | **IC Completed Date (Event)** | IC Completed Date가 그 달에 속함 |
 | Revenue | **Deal Tracker** (2026-07-28부터 — 이전엔 Leads_OPS `Opportunity Won Date`/`Revenue`, 2트랙 아키텍처 CLAUDE.md #7 참고) | **Close Date (Event, Deal Tracker 자체 필드)** | 그 달에 Close된 딜의 Revenue 합. Segment는 딜 트래커의 수동 "Segment" 컬럼(H열) 그대로 사용 — Upsell은 이 컬럼에서 이미 "Other"로 분류돼 있어 별도 제외 로직 없음 |
 
+## ⚠️ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25, 미해결)
+
+**증상**: 사용자가 Salesforce "leads report"(IC Booked Date=이번 달 필터, 전체 세그먼트 합)에서
+42건을 확인했는데 ACQ_REP IC Booked는 21건. IC Complete도 Salesforce 21~22건 대비 ACQ_REP 7건.
+
+**조사** (`TEMPQA_032_ICBookedAugustSalesforceDiff.js`): 사용자가 Salesforce에서 직접 뽑은 Email
+목록을 `Leads_Master` → `Leads_OPS` → `MTA_Master` 순으로 단계별 대조.
+- 1건(`redrock333@yahoo.com`)만 진짜 sync 버그로 확인 — 신규 리드(Create Date 당일) 생성과
+  `syncMTAFunnelToOPS_()` 실행 사이의 일회성 타이밍 공백(Leads/MTA 파이프라인이 서로 독립된
+  비동기 체인이라 발생). `runSyncMTAFunnelToOPS()` 재실행(8,294건 갱신)으로 해결, IC Booked
+  21→22 확인.
+- 2건은 `Leads_Master`에도 없음 — 신규 리드라 Leads Import 자체가 아직 안 된 것(코드 문제
+  아님).
+- **나머지 대다수(IC Booked 17건, IC Complete 14건, 전체 재sync 이후에도 불변)는 `MTA_Master`에
+  그 리드의 터치는 있지만 어떤 터치 행에도 이번 달 IC Booked/Completed Date 값 자체가 없음** —
+  sync 로직 문제가 아님이 재확인됨(재sync로 8,294건이 갱신됐는데도 이 버킷은 거의 그대로).
+
+**근본 원인**: `IC Booked Date`/`IC Completed Date`는 Lead 레벨 스냅샷 필드라, MTA 리포트에
+그 리드의 **새 터치(마케팅 액티비티)가 export될 때만** 그 시점의 최신 Salesforce 상태가 실린다
+(`computeMTAFunnelByLeadId_()`, `MASTER_003_MTAFunnelSync.js`). 실제 터치 타임라인을 찍어보면,
+이 리드들은 SAL(Sales Accepted) 전후로 마지막 마케팅 터치가 있었고 그 이후 세일즈 내부 프로세스로
+IC Booking/Completion이 진행된 것으로 보이는데(예: Sales Accepted Date는 터치 당일 찍히지만 IC
+Booked Date는 계속 공란) — 그 사이 새 마케팅 터치가 없어서 우리 파이프라인이 그 변화를 아직 실을
+방법이 없다. **재Import를 반복해도 그 리드가 다시 터치되기 전까진 계속 공란으로 남는 구조적
+문제**이며, "이번 달"처럼 아직 진행 중인 최근 구간일수록 이 효과가 더 두드러진다(시간이 지나며
+그 리드가 재터치/재export되면 점차 실제값에 수렴).
+
+**과거 이력과의 연관**: 2026-07-21에 정확히 이 문제를 풀기 위한 별도 Lead-level 리포트/파이프라인
+(`ICFunnel_Raw` 시트 + `syncICFunnelToOPS()`, 터치와 무관하게 IC Booked/Completed/Won Date를
+직접 주간 export)이 있었으나, "SAL 판별(Lead Record Type)이 사실상 IC Booked Date 존재 여부와
+동일"하다는 이유로 MTA_Master 통합 방식(`syncMTAFunnelToOPS_()`)으로 대체되며 제거됨
+(`docs/Changelog.md` "IC Funnel Sync 구축 및 검증" 섹션 참고) — 그 통합이 이번 과소집계의 구조적
+원인으로 추정된다.
+
+**영향 범위**: New Leads/New P1/All Leads/SAL은 리드 저니상 더 이른/동시 시점에 값이 찍혀 상대적으로
+영향이 적어 보임. Revenue는 2026-07-28부터 Deal Tracker 소스로 전환되어(2트랙 아키텍처, CLAUDE.md
+#7) 이 문제에서 이미 벗어남 — 남은 취약 지표는 사실상 **IC Booked/Complete뿐**.
+
+**해결 방향(미착수, 사용자 결정 대기)**: `ICFunnel_Raw` 방식(터치와 무관한 별도 Lead-level IC
+Booked/Completed/Won Date 주간 export)을 IC Booked/Complete 전용으로 재도입하면 이 시차가
+사라진다 — 단 사용자가 Salesforce에서 별도 리포트를 추가로 유지보수해야 하고, SAL(Sales Accepted
+Date)은 지금 방식 그대로 둘지 같이 옮길지 결정 필요. 상세: `docs/OpenItems.md` #32. 이번 세션에선
+조사만 완료, 구현은 보류.
+
 ## ⚠️ computeMTAFunnelByLeadId_() — "가장 오래된 터치" → "가장 최근 터치"로 정정 (2026-07-25)
 - **문제**: IC Booked/Completed/Won Date/Revenue는 Lead 레벨 스냅샷(그 터치 row가 export된 시점의
   Salesforce 상태)이라 파이프라인 진행에 따라(IC Booked → Completed → Won) 값이 갱신되는데,

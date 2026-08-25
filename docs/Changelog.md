@@ -261,6 +261,36 @@ Ads export/붙여넣기 과정의 데이터 이슈로 추정, 코드 버그 아�
 Conversions 값을 확인해 전부 0(리드/전환 자체가 없는 캠페인)임을 확인 — 매칭 로직 문제가
 아니라 정상 동작으로 최종 확인.
 
+## ACQ_REP 이번 달 IC Booked/Complete vs Salesforce 괴리 조사 — 원인 규명, 구현은 TODO로 보류
+
+사용자 보고: Salesforce "leads report"(IC Booked Date=이번 달, 전체 세그먼트)는 IC Booked
+42/IC Complete 22인데 ACQ_REP은 21/7. `OPS_006_QA.js`의 기존 진단 함수
+(`runDiagnoseICCompleteMismatch()`/`runBreakdownICCompleteByBookedMonth()`)로 먼저 Leads_OPS
+↔ MTA_Master 내부 정합성부터 확인 — 100% 일치, sync 로직 자체엔 문제 없음을 먼저 배제.
+
+사용자가 Salesforce에서 직접 뽑은 Email 목록(IC Booked 42건/IC Complete 21건)을 신규
+`TEMPQA_032_ICBookedAugustSalesforceDiff.js`로 `Leads_Master`→`Leads_OPS`→`MTA_Master` 순
+단계별 대조:
+- **진짜 sync 버그 1건 발견·수정**: `redrock333@yahoo.com`(신규 리드, Create Date 당일) —
+  Leads/MTA 파이프라인이 서로 독립된 비동기 체인이라, 이 리드가 `Leads_OPS`에 생기는 시점과
+  `syncMTAFunnelToOPS_()`가 마지막으로 돈 시점 사이에 순서가 어긋나 그 1회차 sync만 놓친
+  것으로 추정. `runSyncMTAFunnelToOPS()` 재실행(8,294건 갱신)으로 해결 확인, IC Booked
+  21→22.
+- **나머지(IC Booked 17건, IC Complete 14건)는 구조적 원인으로 확정** — 재sync 이후에도
+  불변. `MTA_Master`에 해당 리드의 터치는 있지만 어떤 터치 행에도 이번 달 IC
+  Booked/Completed Date 값 자체가 없음(터치 타임라인 직접 덤프로 확인). `IC Booked
+  Date`/`IC Completed Date`는 Lead 레벨 스냅샷이라 그 리드가 **새로 터치돼 재export될
+  때만** 갱신되는데, 이 리드들은 SAL 이후 세일즈 내부 프로세스로만 IC Booking/Completion이
+  진행돼 그 사이 새 마케팅 터치가 없었던 것으로 보임 — 재Import를 반복해도 재터치 전까진
+  계속 공란으로 남는 구조.
+- 2026-07-21에 정확히 이 문제를 막던 별도 Lead-level 리포트(`ICFunnel_Raw`/
+  `syncICFunnelToOPS()`, 터치 무관 직접 export)가 있었으나 SAL 판별 단순화를 이유로
+  MTA_Master 통합 방식으로 대체되며 제거됐던 것이 이번 과소집계의 구조적 원인으로 추정됨.
+
+`docs/ACQReportDesign.md`("이번 달 IC Booked/Complete 구조적 과소집계" 섹션)와
+`docs/OpenItems.md` #32에 조사 결과·해결 방향(ICFunnel_Raw 방식 재도입) 기록. 해결책 자체는
+사용자 판단으로 **TODO 보류** — 이번 세션은 조사 및 문서화까지만 진행.
+
 # Changelog — 2026-08-21
 
 ## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정
