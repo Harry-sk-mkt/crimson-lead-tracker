@@ -12,9 +12,23 @@
  * 않고 53_Events_Merge.js 정의를 재사용.
  *
  * Version
- * v1.9.1
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-08-25)
+ * - **Google Search stats 병합 추가(4번째 플랫폼, 사용자 확정 — Search_OPS
+ *   범위로만 한정)**. `buildNaverCampaignStatsLowerKeyMap_()`의 원래 본문을
+ *   `buildCampaignStatsLowerKeyMap_(statsMap, overrideTable)`로 일반화하고,
+ *   신규 `buildGoogleSearchCampaignStatsLowerKeyMap_()`(override 없음 —
+ *   Google Search 캠페인명이 Meta처럼 Search_OPS 키와 직접 매칭됨을 사용자
+ *   샘플 대조로 확인)를 추가. 신규 `mergeCampaignStatsLowerKeyMaps_()`(순수,
+ *   두 lower-key 맵을 키 충돌 시 합산)로 Naver Search + Google Search 결과를
+ *   합쳐 `applySearchNaverCampaignStats_()`(함수명은 하위 호환 위해 유지)에
+ *   전달. `mergeSearchOPS_()`에 `googleStatsMap` 파라미터 추가(4번째 인자,
+ *   선택 — 안 넘기면 기존과 동일 동작). 신규 테스트
+ *   `testMergeCampaignStatsLowerKeyMaps()` PASS, 기존
+ *   `testApplySearchNaverCampaignStats()` 재검증 PASS. 상세:
+ *   AD_007_GoogleSearch.js/SEARCH_003_Build.js 참고.
  * v1.9.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `73_Search_Merge.js` → 신규 `SEARCH_004_Merge.js`, 코드 내용 변경 없음.
  * v1.9.0 (2026-08-09)
@@ -95,6 +109,101 @@
 
 /**
  * ==========================================================
+ * Merge Campaign Stats Lower-Key Maps (순수 함수, 2026-08-25 신규)
+ *
+ * WHY
+ * Search_OPS GROUP_3A_AUTO가 이제 Naver Search + Google Search 2개 플랫폼의
+ * stats를 같은 컬럼에 합쳐서 보여줘야 함(사용자 확정 — 별도 컬럼 분리
+ * 없이 그대로 합산, ACQ_REP "Spent" 컬럼이 Meta+Naver Search를 이미 합쳐서
+ * 보여주는 것과 동일 관행). 두 lower-key 맵을 같은 키(같은 Search_OPS
+ * 캠페인) 충돌 시 합산(impressions/clicks/results/spent 전부 더하고, name은
+ * " + "로 연결)하는 동일 규칙을 buildCampaignStatsLowerKeyMap_() 내부
+ * 충돌 처리와 맞춰 재사용.
+ *
+ * INPUT
+ * mapA, mapB : Object  {lowerKey: {name, impressions, clicks, spent, results}}
+ *
+ * OUTPUT
+ * Object  같은 형태, 두 맵 병합 결과(원본 불변)
+ *
+ * TEST
+ * testMergeCampaignStatsLowerKeyMaps() 참고
+ * ==========================================================
+ */
+function mergeCampaignStatsLowerKeyMaps_(mapA, mapB) {
+
+  const result = {};
+
+  Object.keys(mapA || {}).forEach(function (key) { result[key] = mapA[key]; });
+
+  Object.keys(mapB || {}).forEach(function (key) {
+
+    const b = mapB[key];
+    const a = result[key];
+
+    if (!a) {
+      result[key] = b;
+      return;
+    }
+
+    const combinedSpent = (a.spent === undefined && b.spent === undefined)
+      ? undefined
+      : ((a.spent || 0) + (b.spent || 0));
+
+    result[key] = {
+      name: a.name + " + " + b.name,
+      impressions: a.impressions + b.impressions,
+      clicks: a.clicks + b.clicks,
+      spent: combinedSpent,
+      results: a.results + b.results
+    };
+
+  });
+
+  return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeCampaignStatsLowerKeyMaps_()
+ * ==========================================================
+ */
+function testMergeCampaignStatsLowerKeyMaps() {
+
+  const mapA = {
+    "campaign x": { name: "Campaign X", impressions: 100, clicks: 10, spent: 50, results: 2 },
+    "campaign y": { name: "Campaign Y", impressions: 200, clicks: 20, spent: undefined, results: 1 }
+  };
+
+  const mapB = {
+    "campaign x": { name: "Campaign X (Google)", impressions: 300, clicks: 30, spent: 75, results: 4 },
+    "campaign z": { name: "Campaign Z", impressions: 400, clicks: 40, spent: 20, results: 3 }
+  };
+
+  const merged = mergeCampaignStatsLowerKeyMaps_(mapA, mapB);
+
+  const pass =
+    Object.keys(merged).length === 3 &&
+    merged["campaign x"].name === "Campaign X + Campaign X (Google)" &&
+    merged["campaign x"].impressions === 400 &&
+    merged["campaign x"].clicks === 40 &&
+    merged["campaign x"].spent === 125 &&
+    merged["campaign x"].results === 6 &&
+    merged["campaign y"].spent === undefined &&
+    merged["campaign y"].impressions === 200 &&
+    merged["campaign z"].name === "Campaign Z" &&
+    merged["campaign z"].impressions === 400;
+
+  Logger.log("Merged: " + JSON.stringify(merged));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Merge Search_Engine + Existing Search_OPS
  *
  * `naverStatsMap`(선택, 2026-08-05 신규): {campaignName: {impressions, clicks, spent}}
@@ -104,12 +213,21 @@
  * Campaign/Impressions/Link clicks/Spent(GROUP_3A_AUTO)를 자동으로 덮어씀.
  * 안 넘기거나(undefined) 매칭이 없으면 기존 값(수동 입력 또는 빈 값) 그대로
  * 유지 — 사용자 요청.
+ *
+ * `googleStatsMap`(선택, 2026-08-25 신규): {campaignName: {impressions, clicks,
+ * spent, results}} (AD_007_GoogleSearch.js의 `computeGoogleSearchStatsSummary_()`
+ * 결과, Cost가 이미 NZD라 환율 변환 없음) — naverStatsMap과 같은 Search_OPS
+ * 키로 매칭되면 mergeCampaignStatsLowerKeyMaps_()로 합산, 서로 다른 키면
+ * 둘 다 독립적으로 반영.
  * ==========================================================
  */
-function mergeSearchOPS_(existingOps, engineMap, naverStatsMap) {
+function mergeSearchOPS_(existingOps, engineMap, naverStatsMap, googleStatsMap) {
 
   const existingMap = createSearchKeyMap_(existingOps);
+
   const naverStatsLower = buildNaverCampaignStatsLowerKeyMap_(naverStatsMap);
+  const googleStatsLower = buildGoogleSearchCampaignStatsLowerKeyMap_(googleStatsMap);
+  const combinedStatsLower = mergeCampaignStatsLowerKeyMaps_(naverStatsLower, googleStatsLower);
 
   const allKeys = {};
 
@@ -149,7 +267,7 @@ function mergeSearchOPS_(existingOps, engineMap, naverStatsMap) {
 
     }
 
-    applySearchNaverCampaignStats_(row, key, naverStatsLower);
+    applySearchNaverCampaignStats_(row, key, combinedStatsLower);
     applySearchGroup4Computed_(row, engineRow);
     applySearchDerivedDateColumns_(row);
 
@@ -282,18 +400,57 @@ const NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE = {
  */
 function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
 
+  return buildCampaignStatsLowerKeyMap_(naverStatsMap, NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE);
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Google Search Campaign Stats Lower-Key Map (순수 함수, 2026-08-25)
+ *
+ * WHY
+ * Google Search 캠페인명(예: "KR_core_2021-04-01_search-kr_brand-crimson_
+ * contact")은 Meta와 동일하게 `KR_core_YYYY-MM-DD_slug_tag` 네이밍을 쓰고,
+ * 사용자가 대조한 실 샘플에서 다수가 Search_OPS 키(Lead Source Detail)와
+ * 이미 그대로 일치함을 확인(2026-08-25) — Naver Search 같은 별도 override
+ * 테이블이 필요 없음(캠페인 수가 많아 전수 육안 대조도 비현실적). 매칭 안
+ * 되는 캠페인은 buildCampaignStatsLowerKeyMap_()의 기존 안전망(override
+ * 없으면 원본 캠페인명 그대로 키로 사용)에 따라 그냥 매칭 실패로 남고,
+ * applySearchNaverCampaignStats_()가 기존 값을 그대로 보존한다(정상 동작).
+ * ==========================================================
+ */
+function buildGoogleSearchCampaignStatsLowerKeyMap_(googleStatsMap) {
+
+  return buildCampaignStatsLowerKeyMap_(googleStatsMap, {});
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Campaign Stats Lower-Key Map (순수 함수, 제너릭 — 2026-08-25 도입)
+ *
+ * WHY
+ * buildNaverCampaignStatsLowerKeyMap_()의 원래 본문을 override 테이블을
+ * 파라미터로 받도록 일반화 — Naver Search(override 테이블 있음)/Google
+ * Search(override 없음, 직접 매칭)가 동일 로직을 공유한다.
+ * ==========================================================
+ */
+function buildCampaignStatsLowerKeyMap_(statsMap, overrideTable) {
+
   const lower = {};
 
-  Object.keys(naverStatsMap || {}).forEach(function (name) {
+  Object.keys(statsMap || {}).forEach(function (name) {
 
     const searchOpsKey =
-      NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE[name.trim().toLowerCase()] || name;
+      (overrideTable || {})[name.trim().toLowerCase()] || name;
 
     const lowerKey = searchOpsKey.trim().toLowerCase();
     const existing = lower[lowerKey];
-    const rawSpent = naverStatsMap[name].spent;
+    const rawSpent = statsMap[name].spent;
     const spent = rawSpent === undefined ? undefined : (Number(rawSpent) || 0);
-    const results = Number(naverStatsMap[name].results) || 0;
+    const results = Number(statsMap[name].results) || 0;
 
     const combinedSpent = (existing && existing.spent === undefined && spent === undefined)
       ? undefined
@@ -301,14 +458,14 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
 
     lower[lowerKey] = existing ? {
       name: existing.name + " + " + name,
-      impressions: existing.impressions + naverStatsMap[name].impressions,
-      clicks: existing.clicks + naverStatsMap[name].clicks,
+      impressions: existing.impressions + statsMap[name].impressions,
+      clicks: existing.clicks + statsMap[name].clicks,
       spent: combinedSpent,
       results: existing.results + results
     } : {
       name: name,
-      impressions: naverStatsMap[name].impressions,
-      clicks: naverStatsMap[name].clicks,
+      impressions: statsMap[name].impressions,
+      clicks: statsMap[name].clicks,
       spent: spent,
       results: results
     };
@@ -325,7 +482,7 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
  * Apply Search Naver Campaign Stats (GROUP_3A_AUTO 자동 매칭 덮어쓰기)
  *
  * WHY
- * Search_OPS 키가 Naver 캠페인 실제 이름과 매칭되면 Campaign/Impressions/
+ * Search_OPS 키가 캠페인 실제 이름과 매칭되면 Campaign/Impressions/
  * Link clicks/Spent/Results(2026-08-05 추가)를 캐시값으로 덮어쓴다. 매칭
  * 안 되면 아무것도 하지 않음 — 호출 시점에 row에 이미 들어있는 값(기존
  * 행이면 copyColumns_()로 복사된 이전 값, 신규 행이면
@@ -334,6 +491,12 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
  * Spent 컬럼은 건드리지 않음**(72_Search_Build.js가 KRW→NZD 환율 조회 실패
  * 시 spent 변환을 건너뛰는 경우 — Campaign/Impressions/Link clicks/Results는
  * 정상 갱신하되 Spent는 기존 값을 0으로 잘못 덮어쓰지 않도록 보호).
+ *
+ * **2026-08-25**: 함수명은 그대로 유지하지만(하위 호환), 넘어오는
+ * `statsLower`는 이제 Naver Search 단독이 아니라 mergeSearchOPS_()가
+ * mergeCampaignStatsLowerKeyMaps_()로 Naver Search + Google Search를 합쳐
+ * 넘기는 combinedStatsLower — 함수 자체는 출처 플랫폼을 몰라도 되므로
+ * 동작 변경 없음.
  * ==========================================================
  */
 function applySearchNaverCampaignStats_(row, key, naverStatsLower) {

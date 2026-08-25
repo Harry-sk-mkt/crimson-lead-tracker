@@ -12,9 +12,16 @@
  * 실행도 계속 가능.
  *
  * Version
- * v1.3.1
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-08-25)
+ * - `computeGoogleSearchStatsSummary_()`(AD_007_GoogleSearch.js) 결과를
+ *   `mergeSearchOPS_()`의 4번째 인자로 전달 — Google Search 자동 매칭
+ *   (사용자 확정, Search_OPS 범위로만 한정). Google Search 읽기는 KRW→NZD
+ *   환율 조회처럼 try/catch로 격리(실패해도 나머지 Build는 정상 진행) —
+ *   Cost가 이미 NZD라 환율 변환 자체는 없음. 상세: SEARCH_004_Merge.js/
+ *   AD_007_GoogleSearch.js 참고.
  * v1.3.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `72_Search_Build.js` → 신규 `SEARCH_003_Build.js`, 코드 내용 변경 없음.
  * v1.3.0 (2026-08-05)
@@ -65,11 +72,22 @@ function buildSearchOPS() {
       );
     }
 
+    let googleStatsMap = {};
+
+    try {
+      googleStatsMap = computeGoogleSearchStatsSummary_();
+    } catch (googleError) {
+      Logger.log(
+        "⚠️ Google Search 캠페인 stats 조회 실패 — 이번 실행에서 Google Search 자동 매칭 스킵" +
+        "(Naver Search/수동 값은 정상 진행): " + googleError
+      );
+    }
+
     //======================================
     // Merge
     //======================================
 
-    const result = mergeSearchOPS_(existing, engineMap, naverStatsMap);
+    const result = mergeSearchOPS_(existing, engineMap, naverStatsMap, googleStatsMap);
 
     //======================================
     // Write

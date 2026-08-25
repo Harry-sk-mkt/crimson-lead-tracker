@@ -232,6 +232,35 @@ Impressions/Reach/CTR 등이 더 있으나 필요한 컬럼만 매핑")을 재�
 대비로 유지. `docs/OpenItems.md`에 잔여 확인 필요 사항 갱신 필요할 수 있음(8/24주 Meta_Raw
 데이터 자체가 아직 비어있음 — 사용자가 export 붙여넣기 예정, 코드 이슈 아님).
 
+## Google Search(4번째 캠페인 지출 플랫폼) 연동 — Search_OPS 범위로 착수
+
+사용자가 `GoogleSearch_Raw` 탭(캠페인 지출 스프레드시트)에 Google Ads 검색광고 리포트를
+수동 붙여넣기 완료했다고 알려와 착수. 확인 결과 Meta/Naver Search와 달리 **Google Ads
+리포트 테이블 자체에 기간(날짜) 컬럼이 없고**(사용자 확인 — "구글에 start and end date를
+추출할 수 없다"), 업로드된 데이터도 all-time(전체 기간) 합계라 월별로 쪼갤 방법이 없음 —
+사용자 결정("우선 지금은 search_ops에만 반영해두자, 리포팅 영역은 배제해두고")에 따라
+FY/Month/Segment 집계·`Ad_Spend_Cache`·ACQ_REP/Target_REP/FY_REP 연결은 하지 않고, Naver
+Search의 `NAVER_SEARCH_CAMPAIGN_STATS` 패턴(Search_OPS `GROUP_3A_AUTO` 자동 매칭)만
+재사용하기로 범위를 좁힘.
+
+`AD_007_GoogleSearch.js` 신규(캠페인별 Impressions/Clicks/Spent/Results 집계, Cost는 이미
+NZD라 환율 변환 불필요) + `SEARCH_004_Merge.js`(Naver 전용이던 매칭 로직을
+`buildCampaignStatsLowerKeyMap_(statsMap, overrideTable)`로 일반화, 신규
+`mergeCampaignStatsLowerKeyMaps_()`로 두 플랫폼 결과를 키 충돌 시 합산) +
+`SEARCH_003_Build.js`(Google Search stats 조회를 try/catch로 격리해 호출) 구현. 캠페인명은
+Meta처럼 `KR_core_YYYY-MM-DD_slug_tag` 네이밍이 Search_OPS 키(Salesforce MKT UTM
+Campaign)와 다수 직접 일치함을 사용자가 제공한 실 캠페인명으로 확인 — Naver Search 같은
+별도 override 매핑 테이블 불필요.
+
+실행 검증(`buildSearchOPS()`): 105개 키 정상 갱신. 이후 사용자가 "Campaign 데이터가
+blank인 키가 많다"고 보고해, 채팅 붙여넣기 텍스트 대신 라이브 시트를 직접 비교하는 진단
+함수 `runDebugGoogleSearchCampaignMatches()`(AD_007_GoogleSearch.js v1.1.0) 신규 추가해
+원인 규명: GoogleSearch_Raw 44개 캠페인 중 16개 매칭, 28개 미매칭. 미매칭 중 4개는 한 셀에
+캠페인 2개(`..._contact` + `KR-Core-...-Google-Rep-Test`)가 붙어 들어간 것으로 확인(Google
+Ads export/붙여넣기 과정의 데이터 이슈로 추정, 코드 버그 아님). 나머지는 사용자가 직접
+Conversions 값을 확인해 전부 0(리드/전환 자체가 없는 캠페인)임을 확인 — 매칭 로직 문제가
+아니라 정상 동작으로 최종 확인.
+
 # Changelog — 2026-08-21
 
 ## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정

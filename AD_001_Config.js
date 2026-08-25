@@ -21,9 +21,26 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.22.0
+ * v1.23.0
  *
  * Change Log
+ * v1.23.0 (2026-08-25)
+ * - **`GOOGLE_SEARCH` 신규 — 4번째 플랫폼(Google Search) 착수, Search_OPS
+ *   전용 범위로 한정(사용자 확정, 2026-08-25)**. `RAW_SHEET["Google Search"]`
+ *   ("GoogleSearch_Raw", 사용자가 이미 수동 붙여넣기 완료)/`GOOGLE_SEARCH.COLUMNS`
+ *   (실제 헤더: Campaign status/Campaign/Conversions/CTR/Cost/Clicks/Impr.,
+ *   사용자 확인 — 기간 컬럼 자체가 없음)/`LEAD_SOURCE_OVERRIDE`("google search",
+ *   Naver Search와 동일 이유 — Search Business Segment 재사용 시 `_contact`류
+ *   오분류 방지, 단 이번 범위에선 미사용 — FY/Month/Segment 집계·Ad_Spend_Cache
+ *   연결은 하지 않음). **범위 축소 사유**: Google Ads 리포트 테이블 자체에
+ *   기간(날짜) 컬럼이 없고(사용자 확인 — Google 쪽에서 시작/종료일 추출
+ *   불가), 현재 업로드된 데이터도 all-time(전체 기간) 합계라 월별로 쪼갤
+ *   방법이 없음 — 사용자 결정("우선 지금은 search_ops에만 반영해두자,
+ *   리포팅 영역은 배제해두고")에 따라 Naver Search의 `NAVER_SEARCH_CAMPAIGN_STATS`
+ *   패턴(Search_OPS GROUP_3A_AUTO 자동 매칭)만 재사용, FY/Month 그레인이
+ *   필요한 Meta/Naver Search류 지출 집계 파이프라인(AD_004_SpendCache.js)엔
+ *   연결하지 않음. Cost는 이미 NZD(사용자 확인) — 환율 변환 불필요. 구현은
+ *   `AD_007_GoogleSearch.js`/`SEARCH_004_Merge.js`/`SEARCH_003_Build.js` 참고.
  * v1.22.0 (2026-08-25)
  * - `META.COLUMNS`에 `IMPRESSIONS`("Impressions")/`REACH`("Reach") 추가
  *   (사용자 요청) — BOFU_OPS/Content_OPS의 Impressions/Reach 자동 집계용
@@ -243,7 +260,8 @@ const AD = {
 
   RAW_SHEET: {
     Meta: "Meta_Raw",
-    "Kakao Channel": "KakaoSMS_Raw"
+    "Kakao Channel": "KakaoSMS_Raw",
+    "Google Search": "GoogleSearch_Raw"
   },
 
   /*
@@ -374,6 +392,42 @@ const AD = {
     LAST_FETCHED_THROUGH_PROPERTY_KEY: "NAVER_SEARCHAD_CAMPAIGN_STATS_LAST_FETCHED_THROUGH",
 
     MAX_QUERY_RANGE_DAYS: 90
+
+  },
+
+  /*
+  ==========================================================
+  GOOGLE SEARCH — Google Ads 검색광고 수동 붙여넣기(2026-08-25 착수, 4번째
+  플랫폼). Search_OPS GROUP_3A_AUTO 자동 매칭 범위로만 한정(사용자 확정 —
+  "우선 지금은 search_ops에만 반영해두자, 리포팅 영역은 배제해두고") — 위
+  Change Log v1.23.0 참고. Google Ads 리포트 테이블 자체에 기간 컬럼이
+  없어(사용자 확인) Meta/Naver Search처럼 FY/Month 집계 불가, 지금
+  업로드된 데이터도 all-time 합계.
+  ==========================================================
+  */
+
+  GOOGLE_SEARCH: {
+
+    COLUMNS: {
+      CAMPAIGN_STATUS: "Campaign status",
+      CAMPAIGN_NAME: "Campaign",
+      CONVERSIONS: "Conversions",
+      COST: "Cost",
+      CLICKS: "Clicks",
+      IMPRESSIONS: "Impr."
+    },
+
+    /*
+    ==========================================================
+    LEAD SOURCE OVERRIDE (2026-08-25 사용자 확인, 현재 미사용)
+    Naver Search와 동일 이유로 확정된 값이나, 이번 범위(Search_OPS 매칭만)
+    에선 getBusinessSegment() 분류 자체를 하지 않아 실제로 참조되지 않음 —
+    FY/Month/Segment 집계 파이프라인(Ad_Spend_Cache 연결)을 나중에 추가할
+    때 재사용할 수 있도록 값만 미리 확정해서 남겨둠.
+    ==========================================================
+    */
+
+    LEAD_SOURCE_OVERRIDE: "google search"
 
   },
 

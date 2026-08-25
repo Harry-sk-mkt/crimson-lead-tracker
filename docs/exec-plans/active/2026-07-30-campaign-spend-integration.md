@@ -509,6 +509,76 @@
       중복선언 검사 통과, `clasp push` 완료. 사용자가 `runRefreshAdSpendCache()` 재실행해서
       Search 세그먼트 정상 채워지는지 확인 예정.
 
+### Google Search (4번째 플랫폼, 착수 2026-08-25)
+
+- [x] **탭 확인(2026-08-25, 사용자 확인)** — `GoogleSearch_Raw`(AD.SPREADSHEET_ID
+      안, 사용자가 이미 수동 붙여넣기 완료). 실제 헤더: Campaign status/
+      Campaign/Conversions/CTR/Cost/Clicks/Impr. — 기간(날짜) 컬럼 자체가
+      없음.
+- [x] **기간 그레인 확보 불가 확정(2026-08-25, 사용자 확인)** — Google Ads
+      리포트 테이블 자체에서 캠페인 시작/종료일을 추출할 수 없음("구글에
+      start and end date를 추출할 수 없다"). 지금 업로드된 데이터도
+      all-time(전체 기간) 합계라 Meta(교집합 균등분배)/Naver Search(API
+      정확 기간 조회) 어느 패턴도 적용 불가.
+- [x] **범위 축소 결정(2026-08-25, 사용자 확정)** — "우선 지금은 search_ops에만
+      반영해두자. 리포팅 영역은 배제해두고" — FY/Month/Segment 집계,
+      `Ad_Spend_Cache` 연결, ACQ_REP/Target_REP/FY_REP 소비는 이번 범위에
+      포함하지 않음. Naver Search의 `NAVER_SEARCH_CAMPAIGN_STATS` 패턴
+      (Search_OPS `GROUP_3A_AUTO` 자동 매칭)만 재사용.
+- [x] **통화 확인(2026-08-25, 사용자 확인)** — Cost 컬럼은 이미 NZD, 환율
+      변환 불필요(Naver Search/Kakao Channel의 KRW→NZD 변환과 다름).
+- [x] **캠페인명 → Search_OPS 키 매칭 방식 확정(2026-08-25, 사용자 제공 실
+      샘플로 확인)** — Google Search 캠페인명이 Meta와 동일한
+      `KR_core_YYYY-MM-DD_slug_tag` 네이밍을 쓰고, 실제 Search_OPS
+      "Lead Source Detail" 값과 다수가 그대로 일치함을 사용자가 제공한
+      두 목록(GoogleSearch_Raw 캠페인명 샘플 vs Search_OPS 키 목록) 대조로
+      확인 — Naver Search처럼 캠페인당 수기 대조하는 override 테이블은
+      필요 없음(캠페인 수가 많아 전수 대조도 비현실적). 매칭 안 되는
+      캠페인은 기존 "매칭되는 것만 자동, 나머지는 그대로" 원칙에 따라
+      Search_OPS에 반영되지 않을 뿐 — 정상 동작(신규 리드 유입 전이거나
+      revenue 없는 캠페인 등).
+- [x] **`AD_007_GoogleSearch.js` 구현 완료(2026-08-25)** — 순수 함수
+      `computeGoogleSearchRowStatsEntry_()`(행 1개 → {campaignName,
+      impressions, clicks, spent, results}, `parseCurrencyValue_()`로
+      콤마 방어 파싱)/`aggregateGoogleSearchStatsByCampaign_()`(캠페인명
+      기준 합산 — 재붙여넣기 대비 방어적, Naver stats cache와 동일 출력
+      형태). IO 래퍼 `readGoogleSearchRawRows_()`(sheetToObjects() 재사용)/
+      `computeGoogleSearchStatsSummary_()`. 수동 실행:
+      `setupGoogleSearchRawSheet()`(탭 이미 있어 no-op)/
+      `runComputeGoogleSearchStatsSummary()`/`runDebugGoogleSearchRawFirstRow()`
+      (진단). `AD_001_Config.js`(v1.23.0)에 `RAW_SHEET["Google Search"]`
+      ("GoogleSearch_Raw")/`GOOGLE_SEARCH.COLUMNS`/`LEAD_SOURCE_OVERRIDE`
+      ("google search", 나중에 FY/Month/Segment 집계 추가 시 재사용 목적으로
+      확정만 해둠, 현재 미사용) 신규.
+- [x] **Search_OPS 병합 로직 일반화(2026-08-25)** — `SEARCH_004_Merge.js`
+      (v1.10.0) `buildNaverCampaignStatsLowerKeyMap_()`의 원래 본문을
+      `buildCampaignStatsLowerKeyMap_(statsMap, overrideTable)`로 일반화,
+      신규 `buildGoogleSearchCampaignStatsLowerKeyMap_()`(override 없음)/
+      `mergeCampaignStatsLowerKeyMaps_()`(순수, 두 플랫폼 lower-key 맵을
+      키 충돌 시 합산 — ACQ_REP W열이 Meta+Naver Search를 합쳐서 보여주는
+      것과 동일 관행)로 Naver Search + Google Search를 합쳐
+      `applySearchNaverCampaignStats_()`(함수명은 하위 호환 유지)에 전달.
+      `mergeSearchOPS_()`에 `googleStatsMap` 4번째 인자 추가(선택).
+      `SEARCH_003_Build.js`(v1.4.0)의 `buildSearchOPS()`가
+      `computeGoogleSearchStatsSummary_()`를 try/catch로 격리해 호출(실패해도
+      나머지 Build 진행). Node 하네스로 신규 테스트 4개
+      (`testComputeGoogleSearchRowStatsEntry`/
+      `testAggregateGoogleSearchStatsByCampaign`/
+      `testMergeCampaignStatsLowerKeyMaps`) + 기존
+      `testApplySearchNaverCampaignStats`(회귀 확인) 전부 PASS,
+      `node --check`/naming/version-header/중복선언 검사 전부 통과,
+      `clasp push` 완료.
+- [ ] **사용자 실행 대기** — `SEARCH_003_Build.js`의 `buildSearchOPS()`
+      실행(또는 자동 파이프라인 트리거 대기)으로 Search_OPS에 Google Search
+      Campaign/Impressions/Link clicks/Spent/Results 90D 실제 반영 확인 필요.
+      진단이 필요하면 `AD_007_GoogleSearch.js`의
+      `runDebugGoogleSearchRawFirstRow()`/`runComputeGoogleSearchStatsSummary()`
+      먼저 실행 권장.
+- [ ] **나중에(리포팅 영역 확장 결정 필요)** — Google Search를 FY/Month/Segment
+      집계 + `Ad_Spend_Cache` 연결까지 확장할지는 보류(사용자 확정, 임의로
+      진행하지 말 것). 확장하려면 기간 그레인 문제(현재 all-time만 export
+      가능, 월별 필터링 export가 가능한지 재확인)부터 풀어야 함.
+
 ## Surprises & Discoveries
 
 - 원래 Roadmap.md에 적혀있던 소스(외부 `Monthly{채널}` 요약 시트)는 세그먼트별 분리가 원천적으로
