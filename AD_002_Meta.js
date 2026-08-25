@@ -34,9 +34,92 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.9.0
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-08-25)
+ * - **버그 수정 — v1.15.0의 일수 보정이 이중 집계로 이어지던 문제.**
+ *   v1.14.0에서 `isMetaRowWeekPrecise_()`가 화~일(6일) 부분 export를 "정밀
+ *   아님"으로 판정하도록 좁혀놨는데, v1.15.0에서 `computeMetaRowWeeklySpend_()`가
+ *   그 부분 export를 7일치로 보정(prorate)하도록 고쳐도, `isMetaRowWeekPrecise_()`
+ *   가 여전히 "정밀 아님"이라 `aggregateMetaSpendByWeekSegment_()`의 dedup이
+ *   이 보정값을 override로 안 쓰고 기존 lump 조각과 **그냥 더해버려** 오히려
+ *   더 나빠짐(사용자 실측: 8/17주 10,443.03 실제 vs 14,818.38로 과다집계,
+ *   v1.14.0 직후의 13,706.50보다도 더 벌어짐). 근본 원인: "정밀"의 자격
+ *   기준(월~일 7일 전체 커버)과 "보정 대상" 기준(report-limited 부분 커버)이
+ *   서로 어긋나 있었던 것 — `isMetaRowWeekPrecise_()`를 "reportStart/reportEnd가
+ *   정확히 7일인지"가 아니라 **"실효 구간(캠페인 활성기간 ∩ 보고 조회기간)이
+ *   정확히 한 주에만 걸치는지"**로 재정의(며칠을 커버하든 그 주에 대해 이
+ *   행이 유일한 근거이므로 항상 override 자격이 있음 — 실제 정확도는
+ *   `prorateSingleWeekMetaSpend_()`가 담당). Node로 두 행(장기 lump + 화~일
+ *   부분 정밀)을 합성해 dedup+보정 파이프라인 전체를 시뮬레이션, 이중 집계
+ *   없이 한 번만 반영됨을 확인 후 배포(사용자 확인, "응 진행해줘").
+ *   `testIsMetaRowWeekPrecise()` 케이스를 새 정의에 맞게 갱신(부분 주 export도
+ *   이제 true가 정답).
+ * v1.15.0 (2026-08-25)
+ * - **버그 수정 — 단일 주(週)만 커버하는 Meta export가 실제 며칠치인지 상관없이
+ *   spent 전액을 "그 주 값"으로 인정하던 문제.** v1.14.0에서 화~일(6일) export를
+ *   "정밀"에서 탈락시켜 lump 분배로 완전히 대체했더니, 이번엔 실측(10,443.03)
+ *   보다 훨씬 큰 값(13,706.50)이 나옴 — 6일치 실측 자체는 정확하니 버릴
+ *   이유가 없고, 일수 비율로 7일치로 늘리면(8,897.07×7/6=10,379.58) 실측과
+ *   오차 0.6%로 거의 일치함을 사용자 실측으로 확인(사용자 확인 후 진행).
+ *   신규 `prorateSingleWeekMetaSpend_()`(순수 함수) — `computeMetaRowWeeklySpend_()`가
+ *   effectiveStart~effectiveEnd를 단 하나의 주(週) 버킷에만 걸치는 것으로
+ *   판단했을 때 이 헬퍼를 호출해, 그 결측이 export 조회기간(report) 탓인지
+ *   캠페인 자체가 그 주 중간에 진짜로 시작/종료된 탓인지 구분해서 전자만
+ *   7일 기준으로 보정한다(해당 함수 WHY 참고, `testProrateSingleWeekMetaSpend()`
+ *   3케이스: report-limited 보정/campaign-limited 무보정/7일 전체 커버 무변화).
+ *   `computeMetaSpendWeeklySummary_()`(Target_REP Actual CPNP1의 근간)의 과거
+ *   출력값이 다시 바뀌는 변경 — 월 단위 함수(`computeMetaRowMonthlySpend_()`)는
+ *   건드리지 않음(ACQ_REP/FY_REP 영향 없음).
+ * v1.14.0 (2026-08-25)
+ * - **버그 수정 — `isMetaRowWeekPrecise_()`가 부분(예: 화~일) 주 export를
+ *   "정밀"로 오인해 그 주 월요일 지출이 통째로 증발하던 문제.**
+ *   `runDebugTargetWeekAllSegmentsAudit()` 진단으로 원인 확정(WHY 상세는
+ *   `isMetaRowWeekPrecise_()` 주석 참고, 사용자 확인 후 진행) — "reportStart와
+ *   reportEnd가 같은 주 버킷에 속하는지"만 보던 조건에 "reportStart가 그 주의
+ *   월요일이고 reportEnd가 일요일인지"(7일 전체 커버) 조건을 추가. 부분 주
+ *   export는 이제 분배(lump) 추정치를 밀어내지 못하고 그대로 근사값이 쓰인다.
+ *   `computeMetaSpendWeeklySummary_()`(Target_REP Actual CPNP1의 근간, AD_004_SpendCache.js
+ *   `refreshAdSpendWeeklyCache_()`가 소비)의 과거 출력값이 바뀌는 변경 —
+ *   `testIsMetaRowWeekPrecise()`에 화~일 부분 export 회귀 케이스 추가. 사용자가
+ *   앞으로는 매주 월요일에 전주(월~일) 데이터를 온전히 export하기로 확정
+ *   (2026-08-25) — 이 케이스는 재발 방지용 방어 로직으로 유지.
+ * v1.13.0 (2026-08-25)
+ * - `runDebugTargetWeekAllSegmentsAudit()` 보강 — 8/17주(Webinar=8,897.07)
+ *   전수 조사 결과 다른 세그먼트로 새는 캠페인은 안 보였는데도 사용자 실측
+ *   (10,443.03)과 여전히 1,545.96 차이가 남아, `isMetaRowWeekPrecise_()`가
+ *   "reportStart/reportEnd가 같은 주(월~일) 안에 있는지"만 확인하고 "그
+ *   export가 월요일~일요일 7일 전체를 커버하는지"는 확인하지 않는다는 점에
+ *   착안 — 부분(예: 수~일) export가 "정밀"로 오인되면 분배(lump)값을 통째로
+ *   대체하면서 커버 안 된 나머지 요일분이 누락될 수 있다는 가설 검증용. 정밀
+ *   행에 reportStart/reportEnd를 요일과 함께 출력하고, 월요일 시작·일요일
+ *   종료가 아니면 "부분 export 의심" 경고를 표시.
+ * v1.12.0 (2026-08-25)
+ * - `runDebugTargetWeekAllSegmentsAudit()` 신규 — 캐시 갱신(`runRefreshAdSpendWeeklyCache()`)
+ *   후에도 8/17주 캐시(9,154.25)가 사용자 실측(Meta 실제 집행 10,443.03)보다
+ *   여전히 1,288.78 적어, "캐시 오래됨" 문제가 아니라 "그 주 캠페인 일부가
+ *   Webinar가 아닌 다른 세그먼트로 분류되고 있거나 정밀 export 우선 규칙에
+ *   의해 그 주 기여분이 잘못 버려지고(dropped) 있을 가능성"을 좁혀 조사하기
+ *   위한 진단. 대상 주(아래 상수, 기본 2026-08-17)에 걸치는 Meta_Raw 전체
+ *   캠페인을 세그먼트 무관하게 나열하고 dropped 행도 표시.
+ * v1.11.0 (2026-08-25)
+ * - `runDebugTargetWebinarAugustSpendAudit()` 신규 — `runDebugTargetCampaignTrace()`로
+ *   개별 캠페인 1건은 정상 반영을 확인했으나, 사용자가 제시한 8월 Webinar
+ *   총 Spend(27,635.75)와 Target_REP 3주 캐시 합계(15,907.28) 사이에 약
+ *   11,728 격차가 발견돼(캠페인 1건 문제로는 설명 안 되는 규모) 원인 범위를
+ *   넓혀 조사하기 위한 진단. 캐시 vs 즉석 재계산(캐시 staleness 확인) +
+ *   공식 월 합계(중복 제거 적용) + Meta_Raw Webinar AUG 캠페인 전체 목록
+ *   (중복 제거 미적용, 참고용)을 함께 출력.
+ * v1.10.0 (2026-08-25)
+ * - `runDebugTargetCampaignTrace()` 신규 — 사용자 리포트("메인 프로그램 외
+ *   사이드 리타겟팅 캠페인이 Target_REP Actual CPNP1에 반영 안 되는 것
+ *   같다", 예: "KR_core_2026-08-05_consolidated-retargeting-lplg_event-online")
+ *   조사용 진단. Meta_Raw 존재 여부 → `getBusinessSegment()` 분류 →
+ *   `computeMetaRowWeeklySpend_()` 주간 분배 → Target_Engine Cutover Date
+ *   게이트 → `Ad_Spend_Cache_Weekly` 반영 여부까지 파이프라인 전 구간을
+ *   한 번에 짚어 어느 단계에서 빠지는지 보여준다(기존
+ *   `runDebugMetaRawLastRows()`류 진단과 동일하게 TEMP, 테스트 없음).
  * v1.9.0 (2026-08-25)
  * - `readMetaRawRows_()`가 `impressions`("Impressions")/`reach`("Reach")도
  *   반환하도록 확장(additive, 기존 필드 변경 없음) — BOFU_OPS/Content_OPS
@@ -723,15 +806,29 @@ function testGenerateAdSpendWeekRange(){
 
 /**
  * ==========================================================
- * Is Meta Row Week Precise (순수 함수)
+ * Is Meta Row Week Precise (순수 함수) — 2026-08-25 정의 재설계
  *
  * WHY
- * isMetaRowMonthPrecise_()의 주 버전 — reportStart/reportEnd가 같은 주(월~일)
- * 안에 있으면 그 행의 Spent를 "그 주 정확 값"으로 신뢰할 수 있다. 실무
- * export가 보통 월 단위라 이 조건을 만족하는 행은 드물 것으로 예상됨(사용자가
- * 주 단위 export로 바꾸기 전까지) — 만족하는 행이 있으면 우선 채택하고,
- * 없으면 computeMetaRowWeeklySpend_()의 균등분배 근사값으로 대체된다
- * (aggregateMetaSpendByWeekSegment_()의 정밀 우선 규칙).
+ * v1.14.0에서 "reportStart가 그 주의 월요일이고 reportEnd가 일요일인 경우"
+ * (=7일 전체를 실제로 커버하는 export)로만 좁혔더니, 화~일(6일) 부분 export가
+ * "정밀" 자격을 잃고 lump 분배로 완전히 대체되면서 그 6일치 실측값(정확함)이
+ * 통째로 버려지고 실측보다 훨씬 큰 lump 평균값이 대신 채택되는 역효과가
+ * 발생(사용자 실측: 실제 10,443.03 vs lump 대체 13,706.50). v1.15.0에서
+ * `computeMetaRowWeeklySpend_()`가 부분 export를 일수 비율로 7일치로
+ * 보정(prorate)하도록 고쳤는데, 이 함수가 여전히 "정밀 아님"으로 판정하면
+ * `aggregateMetaSpendByWeekSegment_()`의 dedup이 이 보정값을 override로 안 쓰고
+ * 기존 lump 조각과 **그냥 더해버려** 이중 집계가 발생(사용자 실측: 14,818.38로
+ * 더 나빠짐).
+ *
+ * **결론(2026-08-25 최종)**: "정밀"의 진짜 의미는 "reportStart/reportEnd가
+ * 정확히 월~일 7일을 채우는지"가 아니라, **"이 행의 실효 구간(캠페인 활성기간
+ * ∩ 보고 조회기간)이 정확히 한 주(週)에만 걸치는지"** — 며칠을 커버하든, 그
+ * 캠페인의 그 주에 대해서는 이 행이 유일한 근거 데이터이므로(다른 행은 다른
+ * 기간을 담당) 항상 다른 다주(多週) lump 분배 조각보다 우선해야 한다. 실제
+ * "그 주 값이 얼마인지"의 정확도는 `computeMetaRowWeeklySpend_()`/
+ * `prorateSingleWeekMetaSpend_()`가 담당(부분 export면 비례 보정, 캠페인이
+ * 진짜 그 주 중간에 시작/종료했으면 원본 그대로) — 이 함수는 오직 "이 행이
+ * 그 주의 override 자격이 있는가"만 판단한다.
  *
  * @param {Object} record
  * @return {boolean}
@@ -745,7 +842,20 @@ function isMetaRowWeekPrecise_(record){
   if(!(record.reportStart instanceof Date) || isNaN(record.reportStart.getTime())) return false;
   if(!(record.reportEnd instanceof Date) || isNaN(record.reportEnd.getTime())) return false;
 
-  return getMondayOfWeek_(record.reportStart).getTime() === getMondayOfWeek_(record.reportEnd).getTime();
+  const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
+  const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
+
+  const effectiveStart = (hasCampaignStart && record.campaignStart > record.reportStart)
+    ? record.campaignStart
+    : record.reportStart;
+
+  const effectiveEnd = (hasCampaignEnd && record.campaignEnd < record.reportEnd)
+    ? record.campaignEnd
+    : record.reportEnd;
+
+  if(effectiveEnd < effectiveStart) return false;
+
+  return generateAdSpendWeekRange_(effectiveStart, effectiveEnd).length === 1;
 
 }
 
@@ -757,18 +867,40 @@ function isMetaRowWeekPrecise_(record){
  */
 function testIsMetaRowWeekPrecise(){
 
-  const precise = isMetaRowWeekPrecise_({
-    reportStart: new Date(2026, 7, 3),
-    reportEnd: new Date(2026, 7, 9)
+  const fullWeek = isMetaRowWeekPrecise_({
+    reportStart: new Date(2026, 7, 3),  // 2026-08-03 월요일
+    reportEnd: new Date(2026, 7, 9),    // 2026-08-09 일요일
+    campaignStart: new Date(2020, 0, 1),
+    campaignEnd: null
   });
 
   const lump = isMetaRowWeekPrecise_({
     reportStart: new Date(2026, 6, 1),
-    reportEnd: new Date(2026, 6, 31)
+    reportEnd: new Date(2026, 6, 31),
+    campaignStart: new Date(2020, 0, 1),
+    campaignEnd: null
   });
 
-  Logger.log("precise=" + precise + " (expected true), lump=" + lump + " (expected false)");
-  Logger.log((precise === true && lump === false) ? "✅ PASS" : "❌ FAIL");
+  // 2026-08-25 재설계 핵심 케이스 — 화~일(6일) 부분 export도 실효 구간이 한
+  // 주에만 걸치면 "정밀"(=override 자격 있음)이어야 한다. 값 보정은
+  // computeMetaRowWeeklySpend_()가 별도로 담당.
+  const partialWeek = isMetaRowWeekPrecise_({
+    reportStart: new Date(2026, 7, 18), // 2026-08-18 화요일
+    reportEnd: new Date(2026, 7, 23),   // 2026-08-23 일요일
+    campaignStart: new Date(2026, 7, 5),
+    campaignEnd: new Date(2026, 8, 11)
+  });
+
+  const pass =
+    fullWeek === true &&
+    lump === false &&
+    partialWeek === true;
+
+  Logger.log(
+    "fullWeek=" + fullWeek + " (expected true), lump=" + lump + " (expected false), " +
+    "partialWeek(화~일)=" + partialWeek + " (expected true)"
+  );
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -783,6 +915,18 @@ function testIsMetaRowWeekPrecise(){
  * 가진다(장기 lump 행일수록 실제 주간 변동을 못 담음) — 정밀 export가 월
  * 단위인 한 이 함수의 대부분 출력은 근사값이라는 걸 유의(파일 헤더 Change
  * Log v1.7.0 WHY 참고).
+ *
+ * **단일 주 보정(2026-08-25 추가)**: effectiveStart~effectiveEnd가 한 주(월~일)
+ * 버킷 안에만 들어올 때, 예전엔 며칠치인지 상관없이 spent 전액을 "그 주 값"
+ * 으로 그대로 인정했다 — 사용자가 화~일(6일)만 export하면 그 6일치 값이
+ * 통째로 "정밀"이 돼 나머지 요일(월요일) 지출이 증발하는 문제로 이어짐
+ * (`isMetaRowWeekPrecise_()` v1.14.0 수정 배경). 그런데 그 반대로 "정밀에서
+ * 탈락시키고 lump 분배로 완전히 대체"하면 실측보다 훨씬 크게 어긋남(사용자
+ * 검증: 8/17주 실측 10,443.03 vs lump 대체값 13,706.50) — 6일치 실측 자체는
+ * 정확하므로 버릴 이유가 없고, 일수 비율로 7일치로 늘리면(8,897.07×7/6=
+ * 10,379.58) 실측과 오차 0.6%로 거의 일치함을 확인. `prorateSingleWeekMetaSpend_()`
+ * 로 분리 — 그 결측이 export 조회기간 탓인지 캠페인이 진짜 그 주 중간에
+ * 시작/종료된 탓인지 구분해서, 후자면 보정하지 않는다(해당 함수 WHY 참고).
  *
  * INPUT
  * record : Object  computeMetaRowMonthlySpend_()와 동일
@@ -816,11 +960,149 @@ function computeMetaRowWeeklySpend_(record){
 
   if(weeks.length === 0) return [];
 
+  if(weeks.length === 1){
+
+    const proratedSpent = prorateSingleWeekMetaSpend_(record, effectiveStart, effectiveEnd, weeks[0].weekStart);
+
+    return [{ weekStart: weeks[0].weekStart, segment: segment, spent: proratedSpent }];
+
+  }
+
   const perWeekSpent = (Number(record.spent) || 0) / weeks.length;
 
   return weeks.map(function(w){
     return { weekStart: w.weekStart, segment: segment, spent: perWeekSpent };
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Prorate Single-Week Meta Spend (순수 함수, 2026-08-25 신규)
+ *
+ * WHY
+ * computeMetaRowWeeklySpend_()의 단일 주 케이스 전용 헬퍼 — 위 WHY 참고.
+ * 핵심 판단: **그 주의 결측일이 "export 조회기간(reportStart/reportEnd)이
+ * 좁아서" 생긴 건지, "캠페인 자체가 그 주 중간에 진짜로 시작/종료돼서" 생긴
+ * 건지** 구분한다. 전자만 보정 대상 — 캠페인이 이미 그 주 월요일 이전부터
+ * 활성 상태였는데(campaignStart가 그 주 월요일 이전/없음) reportStart가 그
+ * 주 중간이면, 그 이전 요일들의 지출은 실제로 있었는데 export에만 안 담긴
+ * 것 → 보정. 반대로 effectiveStart가 campaignStart로 결정됐다면(=캠페인이
+ * 정말 그 주 중간에 막 시작함) 그 이전 요일은 진짜로 캠페인이 없어서 지출이
+ * 0인 것 → 보정하면 실제보다 부풀림, 하지 않음. reportEnd/campaignEnd 쪽도
+ * 동일 논리(대칭).
+ *
+ * INPUT
+ * record : Object  {spent, reportStart, reportEnd, campaignStart, campaignEnd}
+ * effectiveStart, effectiveEnd : Date  호출부가 이미 계산한 교집합
+ * weekMonday : Date  그 주(유일하게 걸치는 주)의 월요일
+ *
+ * OUTPUT
+ * number  보정된(또는 원본 그대로인) 그 주 Spent
+ *
+ * TEST
+ * testProrateSingleWeekMetaSpend() 참고
+ * ==========================================================
+ */
+function prorateSingleWeekMetaSpend_(record, effectiveStart, effectiveEnd, weekMonday){
+
+  const spent = Number(record.spent) || 0;
+
+  const weekSunday = addDaysToDate_(weekMonday, 6);
+
+  const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
+  const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
+
+  const leftIsReportLimited =
+    effectiveStart.getTime() > weekMonday.getTime() &&
+    effectiveStart.getTime() === record.reportStart.getTime() &&
+    (!hasCampaignStart || record.campaignStart.getTime() <= weekMonday.getTime());
+
+  const leftIsCampaignLimited = effectiveStart.getTime() > weekMonday.getTime() && !leftIsReportLimited;
+
+  const rightIsReportLimited =
+    effectiveEnd.getTime() < weekSunday.getTime() &&
+    effectiveEnd.getTime() === record.reportEnd.getTime() &&
+    (!hasCampaignEnd || record.campaignEnd.getTime() >= weekSunday.getTime());
+
+  const rightIsCampaignLimited = effectiveEnd.getTime() < weekSunday.getTime() && !rightIsReportLimited;
+
+  // 캠페인이 그 주 중간에 진짜로 시작/종료됐다면(=진짜 결측일) 보정하지 않는다.
+  if(leftIsCampaignLimited || rightIsCampaignLimited) return spent;
+
+  const daysCovered = Math.round((effectiveEnd.getTime() - effectiveStart.getTime()) / 86400000) + 1;
+
+  if(daysCovered <= 0 || daysCovered >= 7) return spent;
+
+  return spent * (7 / daysCovered);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — prorateSingleWeekMetaSpend_()
+ * ==========================================================
+ */
+function testProrateSingleWeekMetaSpend(){
+
+  const weekMonday = new Date(2026, 7, 17); // 2026-08-17
+
+  // Case A — 사용자 실측 케이스: 캠페인은 그 주 이전부터(8/5) 활성, export만
+  // 화(8/18)~일(8/23) 6일치 → report-limited, 7/6로 보정돼야 함.
+  const reportLimitedRecord = {
+    spent: 8897.07,
+    reportStart: new Date(2026, 7, 18),
+    reportEnd: new Date(2026, 7, 23),
+    campaignStart: new Date(2026, 7, 5),
+    campaignEnd: new Date(2026, 8, 11)
+  };
+
+  const proratedA = prorateSingleWeekMetaSpend_(
+    reportLimitedRecord, new Date(2026, 7, 18), new Date(2026, 7, 23), weekMonday
+  );
+
+  const expectedA = 8897.07 * (7 / 6);
+
+  // Case B — 캠페인이 그 주 수요일(8/19)에 진짜로 시작(campaignStart===effectiveStart) →
+  // 월~화 이틀은 실제로 캠페인이 없어서 지출 0인 것, 보정하면 안 됨(원본 그대로).
+  const campaignLimitedRecord = {
+    spent: 500,
+    reportStart: new Date(2026, 7, 17),
+    reportEnd: new Date(2026, 7, 23),
+    campaignStart: new Date(2026, 7, 19),
+    campaignEnd: null
+  };
+
+  const proratedB = prorateSingleWeekMetaSpend_(
+    campaignLimitedRecord, new Date(2026, 7, 19), new Date(2026, 7, 23), weekMonday
+  );
+
+  // Case C — 7일 전체 커버(기존 정상 정밀 export) → 변화 없음.
+  const fullWeekRecord = {
+    spent: 1000,
+    reportStart: new Date(2026, 7, 17),
+    reportEnd: new Date(2026, 7, 23),
+    campaignStart: new Date(2020, 0, 1),
+    campaignEnd: null
+  };
+
+  const proratedC = prorateSingleWeekMetaSpend_(
+    fullWeekRecord, new Date(2026, 7, 17), new Date(2026, 7, 23), weekMonday
+  );
+
+  const pass =
+    Math.abs(proratedA - expectedA) < 1e-9 &&
+    proratedB === 500 &&
+    proratedC === 1000;
+
+  Logger.log(
+    "A(report-limited, 6일→7일 보정)=" + proratedA.toFixed(2) + " (expected " + expectedA.toFixed(2) + ")"
+  );
+  Logger.log("B(campaign-limited, 보정 안 함)=" + proratedB + " (expected 500, 원본 그대로)");
+  Logger.log("C(7일 전체 커버, 변화 없음)=" + proratedC + " (expected 1000)");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1179,5 +1461,321 @@ function runDebugMetaRawLastRows(){
   duplicated.slice(0, 5).forEach(function(name){
     Logger.log("  중복 예시: \"" + name + "\" (" + nameCounts[name] + "회)");
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 특정 캠페인의 Target_REP Actual CPNP1 반영 여부 추적 진단
+ *
+ * WHY (2026-08-25)
+ * 사용자 리포트: "KR_core_2026-08-05_consolidated-retargeting-lplg_event-online"
+ * 같은 메인 프로그램 외 사이드 리타겟팅 캠페인이 Target_REP Actual CPNP1
+ * 계산에 반영 안 되는 것 같다 — Meta_Raw 존재 여부/`getBusinessSegment()`
+ * 세그먼트 분류/`computeMetaRowWeeklySpend_()` 주간 분배/Target_Engine
+ * Cutover Date 게이트/`Ad_Spend_Cache_Weekly` 캐시 반영까지 파이프라인 전
+ * 구간을 한 번에 짚어 어느 단계에서 빠지는지 확인한다. 대상 캠페인 키워드는
+ * 아래 상수를 직접 고쳐서 재사용.
+ * ==========================================================
+ */
+function runDebugTargetCampaignTrace(){
+
+  const keyword = "consolidated-retargeting-lplg";
+
+  const records = readMetaRawRows_().filter(function(r){
+    return String(r.campaignName || "").toLowerCase().indexOf(keyword.toLowerCase()) !== -1;
+  });
+
+  Logger.log("Meta_Raw에서 \"" + keyword + "\" 포함 캠페인 " + records.length + "건 발견");
+
+  if(records.length === 0){
+    Logger.log("=> Meta_Raw 자체에 해당 캠페인 데이터가 없음 — Meta Ads Manager export를 다시 확인/붙여넣기 필요.");
+    return;
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
+  const cutoverDate = engineSheet ? readTargetEngineInputs_(engineSheet).cutoverDate : null;
+  const cutoverMonday = (cutoverDate instanceof Date && !isNaN(cutoverDate.getTime()))
+    ? getMondayOfWeek_(cutoverDate) : null;
+
+  Logger.log("Cutover Monday: " + (cutoverMonday ? cutoverMonday.toString() : "(Target_Engine Cutover Date 읽기 실패)"));
+
+  const weeklyCacheMap = readAdSpendWeeklyCacheMap_();
+
+  records.forEach(function(record){
+
+    const segment = getBusinessSegment(record.campaignName);
+
+    Logger.log(
+      "\n캠페인: " + record.campaignName +
+      "\n  Spent=" + record.spent +
+      " reportStart=" + JSON.stringify(record.reportStart) +
+      " reportEnd=" + JSON.stringify(record.reportEnd) +
+      " campaignStart=" + JSON.stringify(record.campaignStart) +
+      " campaignEnd=" + JSON.stringify(record.campaignEnd) +
+      "\n  getBusinessSegment() => " + segment
+    );
+
+    const weeklyEntries = computeMetaRowWeeklySpend_(record);
+
+    if(weeklyEntries.length === 0){
+      Logger.log("  => 주간 분배 결과 0건(reportStart/reportEnd 유효성 또는 활성기간 겹침 없음 확인 필요)");
+      return;
+    }
+
+    weeklyEntries.forEach(function(entry){
+
+      const weekKey = Utilities.formatDate(entry.weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+      const beforeCutover = cutoverMonday && entry.weekStart < cutoverMonday;
+      const cacheKey = weekKey + "|" + entry.segment;
+      const cacheValue = weeklyCacheMap[cacheKey];
+
+      Logger.log(
+        "  " + weekKey + " | segment=" + entry.segment + " | 분배액=" + entry.spent.toFixed(2) +
+        (beforeCutover ? " | ⚠️ Cutover 이전 주 — Ad_Spend_Cache_Weekly에서 애초에 제외됨" : "") +
+        " | Ad_Spend_Cache_Weekly[" + cacheKey + "]=" +
+        (cacheValue === undefined ? "(없음 — 캐시 미반영/미갱신 가능성)" : cacheValue.toFixed(2))
+      );
+
+    });
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — Webinar 8월 Spend 전수 감사 (캐시 vs 실시간, 캠페인별 내역)
+ *
+ * WHY (2026-08-25)
+ * 사용자 리포트: 8월 Webinar 집행비용 27,635.75 / New P1 93건이면 CPNP1이
+ * 270+ 나와야 하는데, Target_REP 주별 Actual CPNP1이 $162.77/$188.59/$163.44로
+ * 훨씬 낮게(=달성으로 잘못) 표시됨. `runDebugTargetCampaignTrace()`로 확인한
+ * 개별 캠페인 1건은 정상 반영되고 있었으나, 8/3·8/10·8/17 3주 캐시 합계
+ * (5371.49+5469.04+5066.75=15907.28)가 사용자 총액(27,635.75)과 약 11,728
+ * 차이 — 이 정도 격차는 캠페인 1건 문제가 아니라 더 넓은 원인(캐시가 최신
+ * Meta_Raw를 반영 못했거나, 다른 Webinar 캠페인 다수가 누락/오분류)일
+ * 가능성이 높음. 이 함수는 (1) 캐시값과 지금 Meta_Raw로 즉석 재계산한 값을
+ * 주별로 나란히 비교(캐시 staleness 확인)하고, (2) Meta_Raw 전체에서
+ * Webinar로 분류되는 AUG 캠페인을 캠페인별로 나열해 눈으로 사용자의 27,635.75
+ * 산출과 대조할 수 있게 한다.
+ *
+ * **주의**: (2)의 캠페인별 목록/합계는 `computeMetaRowMonthlySpend_()`를
+ * 캠페인별로 그대로 나열한 것이라 "정밀 export 우선" 중복 제거가 적용 안 됨
+ * (같은 캠페인이 lump/정밀 두 행으로 겹치면 합계가 실제보다 부풀 수 있음) —
+ * 공식 월 합계는 별도로 `computeMetaSpendSummary_()`(중복 제거 적용)로 함께
+ * 출력하니 그 값을 기준으로 판단할 것, 캠페인별 목록은 어떤 캠페인이 있는지
+ * 확인하는 용도로만 사용.
+ * ==========================================================
+ */
+function runDebugTargetWebinarAugustSpendAudit(){
+
+  const segment = "Webinar";
+  const weeklyWeeks = ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"];
+
+  Logger.log("=== 1) " + segment + " 주별 Spend — 저장된 캐시 vs 지금 Meta_Raw로 즉석 재계산(Meta만, Naver/Kakao 제외) ===");
+
+  const liveWeekly = computeMetaSpendWeeklySummary_();
+  const cachedWeekly = readAdSpendWeeklyCacheMap_();
+
+  let liveTotal = 0;
+  let cachedTotal = 0;
+
+  weeklyWeeks.forEach(function(weekKey){
+
+    const key = weekKey + "|" + segment;
+    const liveValue = liveWeekly[key] || 0;
+    const cachedValue = cachedWeekly[key] || 0;
+
+    liveTotal += liveValue;
+    cachedTotal += cachedValue;
+
+    Logger.log(
+      weekKey + " | 캐시(Ad_Spend_Cache_Weekly, Meta+Naver+Kakao)=" + cachedValue.toFixed(2) +
+      " | 즉석 재계산(Meta만)=" + liveValue.toFixed(2) +
+      (Math.abs(liveValue - cachedValue) > 1 ? "  ⚠️ 차이 " + (liveValue - cachedValue).toFixed(2) : "")
+    );
+
+  });
+
+  Logger.log(
+    "4주 합계 | 캐시=" + cachedTotal.toFixed(2) + " | 즉석 재계산(Meta만)=" + liveTotal.toFixed(2) +
+    " | 사용자 제시 총액=27635.75"
+  );
+
+  Logger.log(
+    "\n=== 2) 공식 월간 합계(중복 제거 적용, computeMetaSpendSummary_) — FY27 AUG " + segment + " ==="
+  );
+
+  const officialMonthly = computeMetaSpendSummary_();
+  Logger.log("27|AUG|" + segment + " = " + (officialMonthly["27|AUG|" + segment] || "(없음)"));
+
+  const cachedMonthly = readAdSpendCacheMap_();
+  Logger.log("Ad_Spend_Cache(월 단위) 27|AUG|" + segment + " = " + (cachedMonthly["27|AUG|" + segment] !== undefined ? cachedMonthly["27|AUG|" + segment] : "(없음)"));
+
+  Logger.log("\n=== 3) Meta_Raw에서 " + segment + "로 분류되는 AUG 캠페인 전체 내역(중복 제거 미적용 — 참고용) ===");
+
+  const records = readMetaRawRows_();
+  const details = [];
+
+  records.forEach(function(record){
+
+    computeMetaRowMonthlySpend_(record).forEach(function(entry){
+
+      if(entry.segment === segment && entry.month === "AUG"){
+        details.push({
+          campaign: record.campaignName,
+          fy: entry.fy,
+          spent: entry.spent,
+          isPrecise: isMetaRowMonthPrecise_(record)
+        });
+      }
+
+    });
+
+  });
+
+  details.sort(function(a, b){ return b.spent - a.spent; });
+
+  let listTotal = 0;
+
+  details.forEach(function(d){
+    listTotal += d.spent;
+    Logger.log(
+      "FY" + d.fy + " AUG | " + d.spent.toFixed(2) + (d.isPrecise ? " (정밀)" : " (분배)") + " | " + d.campaign
+    );
+  });
+
+  Logger.log("목록 합계(중복 제거 미적용, 참고용) = " + listTotal.toFixed(2) + " — " + details.length + "건");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — 특정 주(월~일)에 걸치는 전체 캠페인 세그먼트 무관 전수 감사
+ *
+ * WHY (2026-08-25)
+ * `runDebugTargetWebinarAugustSpendAudit()`로 캐시 staleness는 해결했지만
+ * (8/17주 캐시 5,066.75→9,154.25로 갱신), 사용자 실측(8/17~23주 Meta 실제
+ * 집행 10,443.03)과 비교하면 캐시 갱신 후에도, 심지어 Meta+Naver+Kakao를
+ * 다 더한 캐시값(9,154.25)조차 여전히 1,288.78 부족 — 이제 "캐시가 오래됨"
+ * 문제가 아니라 "그 주에 Meta_Raw가 갖고 있는 캠페인 중 일부가 Webinar가
+ * 아닌 다른 세그먼트로 분류되고 있거나, 정밀 export 우선 규칙에 의해 그
+ * 주 기여분이 잘못 버려지고 있거나(dropped), 애초에 Meta_Raw에 그 주를
+ * 커버하는 캠페인이 부족한 것"인지 좁혀야 한다. 이 함수는 대상 주(아래
+ * 상수, 기본 2026-08-17)에 걸치는 Meta_Raw의 **모든** 캠페인을 세그먼트
+ * 무관하게 나열하고, 정밀 우선 규칙으로 그 주 기여분이 버려진(dropped)
+ * 행도 표시해 어디서 얼마가 빠지는지 한눈에 보여준다.
+ * ==========================================================
+ */
+function runDebugTargetWeekAllSegmentsAudit(){
+
+  const targetWeekStart = new Date(2026, 7, 17); // 2026-08-17(월)
+
+  const toKey = function(weekStart){
+    return Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+  };
+
+  const targetKey = toKey(targetWeekStart);
+
+  const records = readMetaRawRows_();
+
+  // aggregateMetaSpendByWeekSegment_()와 동일한 "정밀 우선" 커버리지 계산
+  // (같은 캠페인의 같은 주를 정밀 행이 커버하면 분배 행의 그 주 기여분은 버려짐).
+  const preciseCoverageByCampaign = {};
+
+  records.forEach(function(record){
+
+    if(!isMetaRowWeekPrecise_(record)) return;
+
+    computeMetaRowWeeklySpend_(record).forEach(function(entry){
+
+      const campaign = record.campaignName;
+
+      if(!preciseCoverageByCampaign[campaign]) preciseCoverageByCampaign[campaign] = {};
+
+      preciseCoverageByCampaign[campaign][toKey(entry.weekStart)] = true;
+
+    });
+
+  });
+
+  const bySegmentTotal = {};
+  const rowsForWeek = [];
+
+  records.forEach(function(record){
+
+    const isPrecise = isMetaRowWeekPrecise_(record);
+    const coverage = preciseCoverageByCampaign[record.campaignName];
+
+    computeMetaRowWeeklySpend_(record).forEach(function(entry){
+
+      const weekKey = toKey(entry.weekStart);
+
+      if(weekKey !== targetKey) return;
+
+      const dropped = !isPrecise && !!(coverage && coverage[weekKey]);
+
+      if(!dropped){
+        bySegmentTotal[entry.segment] = (bySegmentTotal[entry.segment] || 0) + entry.spent;
+      }
+
+      rowsForWeek.push({
+        campaign: record.campaignName,
+        segment: entry.segment,
+        spent: entry.spent,
+        isPrecise: isPrecise,
+        dropped: dropped,
+        reportStart: record.reportStart,
+        reportEnd: record.reportEnd
+      });
+
+    });
+
+  });
+
+  Logger.log("=== " + targetKey + "(월~일) 주 — 세그먼트별 Spend 합계(정밀 우선 규칙 적용, dropped 제외) ===");
+
+  Object.keys(bySegmentTotal).sort().forEach(function(seg){
+    Logger.log(seg + " = " + bySegmentTotal[seg].toFixed(2));
+  });
+
+  Logger.log("\n=== " + targetKey + " 주에 걸치는 Meta_Raw 전체 캠페인 내역(세그먼트 무관, dropped 표시 포함) ===");
+
+  rowsForWeek.sort(function(a, b){
+    if(a.segment !== b.segment) return a.segment < b.segment ? -1 : 1;
+    return b.spent - a.spent;
+  });
+
+  let adoptedTotal = 0;
+
+  rowsForWeek.forEach(function(r){
+
+    if(!r.dropped) adoptedTotal += r.spent;
+
+    // "정밀"이 같은 주(월~일) 안에 있다는 것만 확인할 뿐, reportStart가 실제로
+    // 그 주의 월요일이고 reportEnd가 일요일인지(=7일 전체를 커버하는지)는 별도
+    // 확인 필요 — 부분(예: 수~일) export가 "정밀"로 인식돼 분배값을 통째로
+    // 대체해버리면 나머지 요일분이 누락될 수 있다(이 진단의 핵심 가설).
+    const spansFullWeek = r.isPrecise &&
+      r.reportStart instanceof Date && r.reportEnd instanceof Date &&
+      r.reportStart.getDay() === 1 && r.reportEnd.getDay() === 0;
+
+    Logger.log(
+      r.segment + " | " + r.spent.toFixed(2) + (r.isPrecise ? " (정밀)" : " (분배)") +
+      (r.dropped ? " ⚠️DROPPED(같은 캠페인 정밀 우선으로 그 주 기여분 제외됨)" : "") +
+      (r.isPrecise ? " | reportStart=" + Utilities.formatDate(r.reportStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd(E)") +
+        " reportEnd=" + Utilities.formatDate(r.reportEnd, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd(E)") +
+        (spansFullWeek ? "" : " ⚠️7일 전체 커버 아님(부분 export 의심)") : "") +
+      " | " + r.campaign
+    );
+
+  });
+
+  Logger.log("\n전체 채택 합계(세그먼트 무관, dropped 제외) = " + adoptedTotal.toFixed(2) + " — " + rowsForWeek.length + "행");
 
 }

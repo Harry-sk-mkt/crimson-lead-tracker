@@ -206,6 +206,32 @@ Impressions/Reach/CTR 등이 더 있으나 필요한 컬럼만 매핑")을 재�
 소수점 제거("#,##0"), `Spent`는 `$` 표시("$#,##0.00", Revenue/CPL/CPNP1/ROAS는 기존 서식
 유지) — `BOFU_006_Styles.js` v1.3.0/`CONTENT_006_Styles.js` v1.2.0.
 
+## Target_REP Actual CPNP1 과소집계 — Meta 주간 지출 파이프라인 버그 2건 발견·수정
+
+사용자가 Target_REP 8월 Webinar Actual CPNP1이 비정상적으로 낮게(=달성으로 잘못) 표시된다고
+리포트("270+ 나와야 하는데 $162~189대로 나옴"). `AD_002_Meta.js`에 진단 함수들
+(`runDebugTargetCampaignTrace()`/`runDebugTargetWebinarAugustSpendAudit()`/
+`runDebugTargetWeekAllSegmentsAudit()`, 전부 TEMP)을 신규 추가해 단계적으로 원인을 좁힘:
+
+1. **`Ad_Spend_Cache_Weekly` 단순 미갱신** — `Meta_Raw` 갱신 후 캐시를 안 돌려서 최신 주(週)가
+   반영 안 됨. `runRefreshAdSpendWeeklyCache()` 재실행으로 해소(코드 변경 없음).
+2. **`isMetaRowWeekPrecise_()` 정의 버그(핵심)** — "reportStart/reportEnd가 같은 주(월~일)
+   버킷에 속하는지"만 확인하고 "그 export가 7일 전체를 커버하는지"는 확인 안 함. 사용자가
+   화~일(6일)만 export한 배치가 "정밀"로 오인되며, 그 주 전체를 통째로 대체하면서 **월요일
+   하루치 지출이 증발**(실측: 8/17주 캐시 5,066.75, 실제 8,897.07). 1차 수정(월~일 7일 전체
+   커버만 정밀로 인정)은 반대로 6일치 실측값을 lump 평균으로 완전 대체해버려 더 크게
+   과다집계(13,706.50, 실측 10,443.03)로 역효과 — 2차로 `isMetaRowWeekPrecise_()`를
+   "reportStart/reportEnd가 정확히 월~일인지"가 아니라 **"실효 구간(캠페인 활성기간 ∩ 보고
+   조회기간)이 정확히 한 주에만 걸치는지"**로 재정의, 신규 `prorateSingleWeekMetaSpend_()`가
+   그 결측이 export 조회기간 탓이면 일수 비율로 7일치 보정, 캠페인이 진짜 그 주 중간에
+   시작/종료된 탓이면 보정 안 함으로 구분. Node로 dedup+보정 파이프라인 전체를 시뮬레이션해
+   이중 집계 없음을 확인 후 배포(사용자 확인, `AD_002_Meta.js` v1.14.0~v1.16.0).
+
+사용자가 앞으로 매주 월요일에 전주(월~일) 데이터를 온전히 업로드하기로 확정 — 이번에 발견된
+부분(partial) export 케이스 자체가 크게 줄어들 것으로 예상되나, 방어 로직(위 보정)은 재발
+대비로 유지. `docs/OpenItems.md`에 잔여 확인 필요 사항 갱신 필요할 수 있음(8/24주 Meta_Raw
+데이터 자체가 아직 비어있음 — 사용자가 export 붙여넣기 예정, 코드 이슈 아님).
+
 # Changelog — 2026-08-21
 
 ## Events_OPS 유령 프로그램 행("...LG Form" 접미사 미제거) 근본 원인 발견 및 수정
