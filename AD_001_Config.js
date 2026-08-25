@@ -21,9 +21,17 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.21.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-08-25)
+ * - `META.COLUMNS`에 `IMPRESSIONS`("Impressions")/`REACH`("Reach") 추가
+ *   (사용자 요청) — BOFU_OPS/Content_OPS의 Impressions/Reach 자동 집계용
+ *   (`EVENTS_002_Engine.js` `aggregateMetaCampaignDataByProgram_()`,
+ *   `AD_002_Meta.js` `readMetaRawRows_()`). 실제 Meta_Raw 헤더는
+ *   `runDebugMetaRawFirstRow()`로 재확인(사용자 실행, 2026-08-25) —
+ *   정확히 "Impressions"/"Reach"(둘 다 숫자값), 이전 CLICKS/RESULTS 추가
+ *   때와 동일 검증 절차.
  * v1.21.0 (2026-08-19)
  * - `META.COLUMNS`에 `CLICKS`("Link clicks")/`RESULTS`("Results") 추가 —
  *   Events_OPS의 Clicks/Results 자동 집계용(`EVENTS_002_Engine.js` 참고).
@@ -242,8 +250,10 @@ const AD = {
   ==========================================================
   META — Ads Manager Export 컬럼 매핑 (실 라이브 export로 검증 완료, 2026-07-30
   — 처음엔 사용자가 옮겨 적어준 한국어 샘플을 썼으나 실제는 영어 헤더였음,
-  runDebugMetaRawFirstRow() 진단으로 정정. 실제 헤더는 이 외에도 Impressions/
-  Reach/CTR 등이 있으나, CPNP1 계산에 필요한 컬럼만 매핑)
+  runDebugMetaRawFirstRow() 진단으로 정정. 실제 헤더엔 이 외에도 CTR/Click
+  to Lead CvR/Cost per results 등이 더 있으나, 지금까지 필요한 컬럼만
+  매핑(2026-08-25 IMPRESSIONS/REACH 추가로 Impressions/Reach도 이제 매핑됨,
+  runDebugMetaRawFirstRow() 재확인)
   ==========================================================
   */
 
@@ -258,7 +268,9 @@ const AD = {
       SPENT: "Amount spent (NZD)",
       ACCOUNT_ID: "Account ID",
       CLICKS: "Link clicks",
-      RESULTS: "Results"
+      RESULTS: "Results",
+      IMPRESSIONS: "Impressions",
+      REACH: "Reach"
     },
 
     /*

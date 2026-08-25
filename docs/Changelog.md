@@ -141,6 +141,70 @@ Channel 캠페인 연결 오류**로 확인:
 356→357행, 신규 키 생성 확인). **다음 세션 첫 단계**: `buildEventsOPS()` 실행해 Events_OPS
 시트에 이 프로그램 행이 정상적으로 나타나는지 최종 확인 필요(이번 세션에서 요청만 하고
 실행 확인 전에 종료).
+## BOFU_OPS/Content_OPS — SF NLP1s/CPNP1 상위·하위 25% 하이라이트 신규
+
+사용자 요청으로 Events_OPS에만 있던 상위 25% 배경색(`#01ef18`) 강조를 BOFU_OPS/Content_OPS의
+SF NLP1s(값이 높을수록 좋음, 상위 25%)/CPNP1(비용 지표라 낮을수록 좋음, 하위 25%) 컬럼에도
+추가. Events의 `buildPercentileHighlightFormula_()`/`applyTop25HighlightRules_()`
+(`EVENTS_006_Styles.js`)는 상위 25% 방향으로 고정돼 있어, 컬럼별 방향(top/bottom)을 인자로
+받는 제네릭 버전 `applyPercentileHighlightRules_()`/`buildBottomPercentileHighlightFormula_()`
+(`OPS_002_Styles.js` v3.3.0)를 신규 작성해 top 방향은 기존 함수를 그대로 재사용. `BOFU.
+TOP25_HIGHLIGHT`/`CONTENT.TOP25_HIGHLIGHT`(`BOFU_001_Config.js`/`CONTENT_001_Config.js`) 신규
+설정, `BOFU_006_Styles.js`/`CONTENT_006_Styles.js`에서 호출. 이후 사용자 요청으로 강조 셀에
+볼드체도 추가(`.setBold(true)`, `OPS_002_Styles.js` v3.4.0).
+
+## Content_OPS/BOFU_OPS "Spent"가 사실상 비어있던 문제 발견 및 Meta_Raw 자동 집계로 전환
+
+사용자가 "Content의 Spent가 전체 데이터를 다 담고 있는 것 같지 않다"고 지적 —
+`TEMPQA_029_ContentSpentCompletenessAudit.js`(신규)로 FY|Month 버킷별 수동 Spent 합계를
+검증된 소스 `Ad_Spend_Cache`(Meta+Naver+Kakao 합산, ACQ_REP가 쓰는 것과 동일)와 대조한 결과
+**FY23~27 전체 39개 정상 버킷이 전부 $0**로 확인(Ad_Spend_Cache Content 세그먼트 합계는
+동기간 $941,743.60). BOFU도 동일 구조로 확인(`TEMPQA_030_BOFUSpentCompletenessAudit.js`
+신규, Ad_Spend_Cache BOFU 합계 $177,705.82 대비 전부 $0). 원인: `Spent`가
+`GROUP_3_MANUAL`(Ops가 Meta Ads Manager에서 손으로 옮겨 적는 컬럼)에 남아있어 자동 집계가
+전혀 없었음 — Events_OPS만 2026-08-06에 이미 자동화 전환된 상태였음.
+
+Events_OPS가 쓰던 캠페인명→Marketo Program 매칭(`UTIL_002_UtmProgramDictionary.js`
++ `EVENTS_002_Engine.js`의 매칭 로직)을 도메인 무관 제네릭 버전
+`resolveMetaCampaignProgramKey_()`/`aggregateMetaSpendByProgram_()`(이후
+`aggregateMetaCampaignDataByProgram_()`로 확장, 아래 참고)로 분리해 재사용 — Events 전용
+EVENT_TYPE_PREFIXES 필터 대신 Business Segment 기반 자격 판정(`isEligibleBOFUProgram_()`/
+`isEligibleContentProgram_()`, `getBusinessSegment(name, name)` 관례 재사용). `BOFU_001_
+Config.js`/`CONTENT_001_Config.js`에서 `Spent`를 `GROUP_3_MANUAL`→`GROUP_4_COMPUTED`로 이동,
+`BOFU_002_Engine.js`/`CONTENT_002_Engine.js`의 `refreshBOFUEngine_()`/`refreshContentEngine_()`
+에 배선. 디버깅 중 "Engine 시트엔 정상 계산됐는데 OPS 시트엔 0"으로 보였던 건 실제로는
+`buildBOFUOPS()`/`buildContentOPS()` 재실행 누락이었음(`TEMPQA_031_
+BOFUContentMetaSpendMatchDiagnostic.js`로 단계별 확인). 매칭 커버리지는 완전하지 않음 —
+Meta_Raw 919행 중 554행만 UTM_Program_Dictionary에서 매칭(365행은 애초에 딕셔너리에 없음),
+그중 Content 115행/BOFU 67행만 각 세그먼트로 귀속 — 딕셔너리가 못 찾는 오래된/소규모
+캠페인은 여전히 $0(수동 입력도 마찬가지로 채우기 어려웠을 것).
+
+## BOFU_OPS/Content_OPS 나머지 캠페인 데이터(Campaign/Off-On/Start Date/End Date/Impressions/
+Reach/Link clicks/Results) 자동 집계 확장
+
+Spent 자동화에 이어 사용자가 "수동입력영역도 그냥 캠페인 데이터 가져오는 걸로 변경해줘"
+요청. `aggregateMetaSpendByProgram_()`를 `aggregateMetaCampaignDataByProgram_()`
+(`EVENTS_002_Engine.js` v1.20.0)로 확장해 Spend 외 Clicks/Results/Impressions/Reach/캠페인명
+목록/캠페인 시작·종료일/진행중 여부(hasOngoing)까지 한 번에 계산. 다만 `Start Date`/`Off/On`은
+실측 결과(`runDumpContentOPSRowRawCells_()`) 이미 실제 값이 들어차 있는 필드라, Meta_Raw가
+커버 못 하는 프로그램(Content 144개 중 87개/BOFU 138개 중 92개)까지 무조건 덮어쓰면 기존
+수동값이 날아가는 회귀가 생김 — **Meta 매칭이 있는 프로그램만** 덮어쓰고 매칭 없으면 기존
+수동값을 그대로 보존하는 정책(`applyBOFUMetaCampaignDataIfMatched_()`/
+`applyContentMetaCampaignDataIfMatched_()`, `BOFU_004_Merge.js`/`CONTENT_004_Merge.js` 신규)
+채택. `mergeBOFUOPS_()`/`mergeContentOPS_()`에 `metaAgg` 파라미터 추가,
+`BOFU_003_Build.js`/`CONTENT_003_Build.js`가 빌드 시점에 직접 계산해 전달(Date/배열 값을
+Engine 시트 캐시로 왕복시키면 타입 손실 위험이 있어 Spent와 달리 Engine 경유 안 함).
+
+Impressions/Reach는 처음엔 "Meta_Raw 원본에 컬럼 자체가 없다"고 잘못 판단해 자동화 대상에서
+제외했으나, 사용자가 "값이 없다"고 재차 지적 — `AD_001_Config.js`의 기존 주석("실제 헤더는
+Impressions/Reach/CTR 등이 더 있으나 필요한 컬럼만 매핑")을 재확인하고
+`runDebugMetaRawFirstRow()`로 실제 헤더("Impressions"/"Reach", 둘 다 숫자)를 재검증한 뒤
+`AD.META.COLUMNS`에 매핑 추가(`AD_001_Config.js` v1.22.0, `AD_002_Meta.js`
+`readMetaRawRows_()` v1.9.0) — 나머지 필드와 동일하게 매칭 시 자동 채움으로 편입.
+
+마지막으로 서식 요청 반영: `Impressions`/`Reach`/`Link clicks`/`Results`는 천 단위 콤마+
+소수점 제거("#,##0"), `Spent`는 `$` 표시("$#,##0.00", Revenue/CPL/CPNP1/ROAS는 기존 서식
+유지) — `BOFU_006_Styles.js` v1.3.0/`CONTENT_006_Styles.js` v1.2.0.
 
 # Changelog — 2026-08-21
 

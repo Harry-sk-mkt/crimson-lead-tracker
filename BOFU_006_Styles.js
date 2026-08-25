@@ -11,9 +11,20 @@
  * 그대로 재사용.
  *
  * Version
- * v1.1.1
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-08-25)
+ * - 사용자 요청 서식 변경 — `Spent`만 `Revenue`/`CPL`/`CPNP1`/`ROAS`에서
+ *   분리해 "$#,##0.00"(달러 표시)로 변경. `Impressions`/`Reach`/`Link
+ *   clicks`/`Results`(Meta 자동 집계 대상, v1.2.0 하이라이트와 별개로
+ *   이번 세션에 자동화됨) 신규 "Count Columns" 서식 블록 추가 —
+ *   "#,##0"(천 단위 콤마, 소수점 없음).
+ * v1.2.0 (2026-08-25)
+ * - applyPercentileHighlightRules_() 호출 추가(사용자 요청) — SF NLP1s
+ *   (상위 25%)/CPNP1(하위 25%) 컬럼에 배경색 #01ef18 강조.
+ *   BOFU.TOP25_HIGHLIGHT(BOFU_001_Config.js v1.4.0) 참고, 실제 규칙
+ *   생성 로직은 OPS_002_Styles.js applyPercentileHighlightRules_().
  * v1.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `65_BOFU_Styles.js` → 신규 `BOFU_006_Styles.js`, 코드 내용 변경 없음.
  * v1.1.0 (2026-07-24)
@@ -116,17 +127,43 @@ function applyBOFUOPSStyle(sheet) {
 
   /*
   ==========================================================
-  Currency Columns
+  Currency Columns (Spent만 $ 표시 — 사용자 요청, 2026-08-25)
   ==========================================================
   */
 
-  ["Spent", "Revenue", "CPL", "CPNP1", "ROAS"].forEach(function (name) {
+  if (map["Spent"]) {
+
+    sheet
+      .getRange(BOFU.ROWS.DATA_START, map["Spent"], dataRowCount, 1)
+      .setNumberFormat("$#,##0.00");
+
+  }
+
+  ["Revenue", "CPL", "CPNP1", "ROAS"].forEach(function (name) {
 
     if (map[name]) {
 
       sheet
         .getRange(BOFU.ROWS.DATA_START, map[name], dataRowCount, 1)
         .setNumberFormat("#,##0.00");
+
+    }
+
+  });
+
+  /*
+  ==========================================================
+  Count Columns (천 단위 콤마, 소수점 없음 — 사용자 요청, 2026-08-25)
+  ==========================================================
+  */
+
+  ["Impressions", "Reach", "Link clicks", "Results"].forEach(function (name) {
+
+    if (map[name]) {
+
+      sheet
+        .getRange(BOFU.ROWS.DATA_START, map[name], dataRowCount, 1)
+        .setNumberFormat("#,##0");
 
     }
 
@@ -149,6 +186,21 @@ function applyBOFUOPSStyle(sheet) {
     }
 
   });
+
+  /*
+  ==========================================================
+  Top/Bottom 25% Highlight (BOFU.TOP25_HIGHLIGHT)
+  ==========================================================
+  */
+
+  applyPercentileHighlightRules_(
+    sheet,
+    map,
+    BOFU.ROWS.DATA_START,
+    lastRow,
+    BOFU.TOP25_HIGHLIGHT.COLUMNS,
+    BOFU.TOP25_HIGHLIGHT.COLOR
+  );
 
   /*
   ==========================================================

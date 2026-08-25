@@ -21,9 +21,29 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.5.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-25)
+ * - `computeContentMetaSpendAggregates_()` → `computeContentMetaCampaignDataAggregates_()`로
+ *   교체(사용자 요청, Spent 자동화에 이은 2단계) — `refreshContentEngine_()`의
+ *   `metaSpendAgg` 참조도 `metaAgg.spend`로 변경(Spent 계산 자체는 동일,
+ *   참조 경로만 변경). `CONTENT_004_Merge.js`의
+ *   `applyContentMetaCampaignDataIfMatched_()`가 이 함수의 반환값을 직접
+ *   받아 Campaign/Off-On/Start Date/End Date/Link clicks/Results를 매칭된
+ *   프로그램에 한해 자동으로 채운다(Engine 시트를 거치지 않고
+ *   `buildContentOPS()` 실행 시점에 직접 계산).
+ * v1.6.0 (2026-08-25)
+ * - Spent 자동 집계 추가(사용자 요청, `CONTENT_001_Config.js` v1.3.0에서
+ *   `Spent`를 `GROUP_3_MANUAL`→`GROUP_4_COMPUTED`로 이동한 것과 짝) —
+ *   `TEMPQA_029_ContentSpentCompletenessAudit.js` 감사에서 수동 Spent가
+ *   사실상 비어있던 게 발견돼 착수. 신규
+ *   `isEligibleContentProgram_()`/`computeContentMetaSpendAggregates_()`,
+ *   `EVENTS_002_Engine.js` v1.18.0의 제네릭
+ *   `aggregateMetaSpendByProgram_()`/`resolveMetaCampaignProgramKey_()`
+ *   재사용(BOFU_002_Engine.js v1.5.0과 동일 패턴, Business Segment로 자격
+ *   판정). `refreshContentEngine_()`가 이 집계도 allKeys 합집합에 포함하고
+ *   rows 배열 마지막에 붙이도록 배선.
  * v1.5.0 (2026-08-25)
  * - runDeleteDeadContentOPSRows()에 `force`(기본 false) 파라미터 추가 —
  *   Deal 필터 버그로 잘못 살아있었던 죽은 키 144건이 전부 수동 컬럼(Off/On
@@ -105,6 +125,7 @@ function refreshContentEngine_() {
   const leadsAgg = computeContentLeadsAggregates_();
   const funnelAgg = computeContentFunnelAggregates_(leadsAgg.leadIdToKey);
   const dealAgg = computeContentDealAggregates_();
+  const metaAgg = computeContentMetaCampaignDataAggregates_();
 
   const allKeys = {};
 
@@ -112,7 +133,8 @@ function refreshContentEngine_() {
     mtaAgg.allRegistered, mtaAgg.p1All,
     leadsAgg.newRegistered, leadsAgg.nlP1,
     funnelAgg.icRequest, funnelAgg.icBooked,
-    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue
+    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue,
+    metaAgg.spend
   ].forEach(function (map) {
     Object.keys(map).forEach(function (key) {
       allKeys[key] = true;
@@ -131,7 +153,8 @@ function refreshContentEngine_() {
       funnelAgg.icBooked[key] || 0,
       funnelAgg.icComplete[key] || 0,
       dealAgg.dealsWon[key] || 0,
-      dealAgg.revenue[key] || 0
+      dealAgg.revenue[key] || 0,
+      metaAgg.spend[key] || 0
     ];
 
   });
@@ -143,6 +166,72 @@ function refreshContentEngine_() {
   Logger.log(
     CONFIG.LOG.PREFIX + " Content Engine Refresh Completed : " +
     rows.length + " rows (" + seconds + "s)"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Is Eligible Content Program (순수 함수)
+ *
+ * WHY
+ * UTM_Program_Dictionary가 찾아낸 Marketo Program명이 진짜 Content
+ * 프로그램인지 판정 — `BOFU_002_Engine.js`의 `isEligibleBOFUProgram_()`와
+ * 동일 패턴(Content도 단일 세그먼트라 Business Segment 체크 하나로 충분).
+ * `getBusinessSegment(programName, programName)` — 문자열 하나를
+ * campaign/detail 두 인자 모두에 넣는 게 이미 확립된 관례
+ * (`AD_006_KakaoMoments.js` `computeKakaoMomentsSyncRow_()` 참고).
+ *
+ * TEST
+ * testIsEligibleContentProgram 참고
+ * ==========================================================
+ */
+function isEligibleContentProgram_(programName) {
+
+  return isKoreanProgram_(programName) &&
+    CONTENT.SEGMENTS.indexOf(getBusinessSegment(programName, programName)) !== -1;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEligibleContentProgram_()
+ * ==========================================================
+ */
+function testIsEligibleContentProgram() {
+
+  const pass =
+    isEligibleContentProgram_("WF-2026-07-KOR-MOFU-Core Hyperlocalized Rising 8~9 Roadmap eBook") === true &&
+    isEligibleContentProgram_("WB-2026-02-KOR-MOFU-Core Application Tips") === false &&
+    isEligibleContentProgram_("WF-2026-08-KOR-BOFU-Core Duke CAO advise") === false &&
+    isEligibleContentProgram_("") === false;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Content Meta Campaign Data Aggregates (IO 래퍼)
+ *
+ * WHY
+ * `EVENTS_002_Engine.js`의 제네릭 `aggregateMetaCampaignDataByProgram_()`/
+ * `resolveMetaCampaignProgramKey_()`를 Content 전용 자격 판정
+ * (`isEligibleContentProgram_()`)으로 감싼 IO 래퍼 —
+ * `refreshContentEngine_()`가 `CONTENT.GROUP_4_COMPUTED`(v1.3.0에서 Spent
+ * 추가)의 Spent를 채우는 데 쓰고, `CONTENT_004_Merge.js`의
+ * `applyContentMetaCampaignDataIfMatched_()`가 Campaign/Off-On/Start
+ * Date/End Date/Link clicks/Results 자동 덮어쓰기에 반환값 전체를
+ * 사용(2026-08-25, Spent 자동화에 이은 2단계 사용자 요청).
+ * ==========================================================
+ */
+function computeContentMetaCampaignDataAggregates_() {
+
+  return aggregateMetaCampaignDataByProgram_(
+    readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleContentProgram_
   );
 
 }

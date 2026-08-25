@@ -11,7 +11,21 @@
  * 그대로 재사용.
  *
  * Version
- * v1.0.1
+ * v1.2.0
+ *
+ * Change Log
+ * v1.2.0 (2026-08-25)
+ * - 사용자 요청 서식 변경 — `Spent`만 `Revenue`/`CPL`/`CPNP1`/`ROAS`에서
+ *   분리해 "$#,##0.00"(달러 표시)로 변경. `Impressions`/`Reach`/`Link
+ *   clicks`/`Results`(이번 세션에 Meta 자동 집계 대상이 됨) 신규 "Count
+ *   Columns" 서식 블록 추가 — "#,##0"(천 단위 콤마, 소수점 없음).
+ * v1.1.0 (2026-08-25)
+ * - applyPercentileHighlightRules_() 호출 추가(사용자 요청) — SF NLP1s
+ *   (상위 25%)/CPNP1(하위 25%) 컬럼에 배경색 #01ef18 강조.
+ *   CONTENT.TOP25_HIGHLIGHT(CONTENT_001_Config.js v1.2.0) 참고, 실제
+ *   규칙 생성 로직은 OPS_002_Styles.js applyPercentileHighlightRules_().
+ * v1.0.1 이전
+ * - Change Log 도입 전 — 상세 이력 없음.
  * ==========================================================
  */
 
@@ -107,17 +121,43 @@ function applyContentOPSStyle(sheet) {
 
   /*
   ==========================================================
-  Currency Columns
+  Currency Columns (Spent만 $ 표시 — 사용자 요청, 2026-08-25)
   ==========================================================
   */
 
-  ["Spent", "Revenue", "CPL", "CPNP1", "ROAS"].forEach(function (name) {
+  if (map["Spent"]) {
+
+    sheet
+      .getRange(CONTENT.ROWS.DATA_START, map["Spent"], dataRowCount, 1)
+      .setNumberFormat("$#,##0.00");
+
+  }
+
+  ["Revenue", "CPL", "CPNP1", "ROAS"].forEach(function (name) {
 
     if (map[name]) {
 
       sheet
         .getRange(CONTENT.ROWS.DATA_START, map[name], dataRowCount, 1)
         .setNumberFormat("#,##0.00");
+
+    }
+
+  });
+
+  /*
+  ==========================================================
+  Count Columns (천 단위 콤마, 소수점 없음 — 사용자 요청, 2026-08-25)
+  ==========================================================
+  */
+
+  ["Impressions", "Reach", "Link clicks", "Results"].forEach(function (name) {
+
+    if (map[name]) {
+
+      sheet
+        .getRange(CONTENT.ROWS.DATA_START, map[name], dataRowCount, 1)
+        .setNumberFormat("#,##0");
 
     }
 
@@ -140,6 +180,21 @@ function applyContentOPSStyle(sheet) {
     }
 
   });
+
+  /*
+  ==========================================================
+  Top/Bottom 25% Highlight (CONTENT.TOP25_HIGHLIGHT)
+  ==========================================================
+  */
+
+  applyPercentileHighlightRules_(
+    sheet,
+    map,
+    CONTENT.ROWS.DATA_START,
+    lastRow,
+    CONTENT.TOP25_HIGHLIGHT.COLUMNS,
+    CONTENT.TOP25_HIGHLIGHT.COLOR
+  );
 
   /*
   ==========================================================

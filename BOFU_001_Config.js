@@ -22,9 +22,42 @@
  * 해석 — 함수명까지 그대로 복제하면 전역 중복 선언 에러가 남.
  *
  * Version
- * v1.3.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-08-25)
+ * - `GROUP_3_MANUAL` 문서 주석 정정 — v1.6.0에서 "Impressions/Reach만
+ *   Meta_Raw에 대응 컬럼이 없어 순수 수동"이라고 적었는데, 사용자가
+ *   실제 시트를 보고 "Impressions/Reach 값이 없다"고 지적, 확인해보니
+ *   Meta_Raw 원본에 그 둘도 실제로 있었음(그동안 CPNP1 계산에 필요한
+ *   컬럼만 매핑해서 안 쓰였을 뿐) — `runDebugMetaRawFirstRow()` 재실행해
+ *   정확한 헤더("Impressions"/"Reach") 확인 후 `AD_001_Config.js`
+ *   v1.22.0에 매핑 추가, 이 8개 필드 전부 동일하게 자동화됨.
+ * v1.6.0 (2026-08-25)
+ * - `GROUP_3_MANUAL` 문서 주석 갱신(사용자 요청, Spent 자동화 2단계) —
+ *   `Off/On`/`Campaign`/`Start Date`/`End Date`/`Link clicks`/`Results`는
+ *   이제 Meta_Raw 매칭이 있으면 자동 덮어쓰기(매칭 없으면 기존 수동값
+ *   유지, `BOFU_004_Merge.js` `applyBOFUMetaCampaignDataIfMatched_()`
+ *   참고) — 배열 자체(순서/멤버)는 변경 없음, 여전히 `copyColumns_()`가
+ *   baseline으로 보존. `Impressions`/`Reach`만 Meta_Raw에 대응 컬럼이
+ *   없어 순수 수동으로 남음.
+ * v1.5.0 (2026-08-25)
+ * - **`Spent`을 `GROUP_3_MANUAL` → `GROUP_4_COMPUTED`로 이동(사용자
+ *   요청)** — `TEMPQA_029_ContentSpentCompletenessAudit.js` 감사 결과
+ *   Content_OPS의 수동 Spent가 사실상 비어있는 게 확인되면서, BOFU도
+ *   동일 구조라 같은 문제가 있을 가능성이 높다고 판단(2026-08-06
+ *   EVENTS_001_Config.js v1.9.0과 동일 조치 — Meta_Raw 기준 매 재빌드마다
+ *   새로 계산, 수동 보존 안 함). 실제 집계 로직은
+ *   `BOFU_002_Engine.js` `computeBOFUMetaSpendAggregates_()` 참고.
+ *   HEADER/HEADER_COLOR_GROUPS/RATIO_FORMULAS는 전부 이름 기준 lookup이라
+ *   변경 불필요.
+ * v1.4.0 (2026-08-25)
+ * - TOP25_HIGHLIGHT 추가(사용자 요청) — SF NLP1s(값이 높을수록 좋음,
+ *   상위 25%)/CPNP1(비용 지표라 값이 낮을수록 좋음, 하위 25%) 컬럼에
+ *   배경색 #01ef18 강조. EVENTS.TOP25_HIGHLIGHT(EVENTS_001_Config.js)와
+ *   달리 컬럼마다 방향(direction: top/bottom)이 다를 수 있어 배열 형태로
+ *   확장 — 실제 규칙 생성은 OPS_002_Styles.js
+ *   applyPercentileHighlightRules_() 참고(BOFU_006_Styles.js에서 호출).
  * v1.3.0 (2026-08-19)
  * - `BOFU_ENGINE_HEADERS`에 "Earliest Lead Date" 보조 컬럼 추가(사용자
  *   요청) — Start Date가 비어있는 신규 런칭 프로그램이
@@ -160,6 +193,13 @@ const BOFU = {
 
   ],
 
+  /*
+  2026-08-25(사용자 요청, Spent 자동화 2단계 — Impressions/Reach도
+  Meta_Raw에 실제로 있음을 사용자 지적으로 재확인 후 포함): 이 8개
+  필드 전부 Meta_Raw 매칭이 있으면 BOFU_004_Merge.js의
+  applyBOFUMetaCampaignDataIfMatched_()가 자동 덮어쓰고, 매칭 없으면
+  이 배열이 기존 수동값을 baseline으로 보존한다(copyColumns_() 그대로).
+  */
   GROUP_3_MANUAL: [
 
     "Off/On",
@@ -169,8 +209,7 @@ const BOFU = {
     "Impressions",
     "Reach",
     "Link clicks",
-    "Results",
-    "Spent"
+    "Results"
 
   ],
 
@@ -184,7 +223,8 @@ const BOFU = {
     "IC Bked",
     "IC Complete",
     "#Deals",
-    "Revenue"
+    "Revenue",
+    "Spent"
 
   ],
 
@@ -325,6 +365,28 @@ const BOFU = {
     SF: "#0369a1",
     META: "#1877F2",
     DERIVED: "#434343"
+
+  },
+
+  /*
+  ==========================================================
+  TOP 25% HIGHLIGHT (2026-08-25 사용자 요청)
+
+  SF NLP1s(리드 수 — 높을수록 좋음)는 상위 25%(PERCENTILE 0.75 이상),
+  CPNP1(비용 — 낮을수록 좋음)은 하위 25%(PERCENTILE 0.25 이하)를 배경색
+  #01ef18로 강조. 컬럼별 독립 계산(둘 다 상위/하위에 들 필요 없음) —
+  OPS_002_Styles.js applyPercentileHighlightRules_()에서 참조.
+  ==========================================================
+  */
+
+  TOP25_HIGHLIGHT: {
+
+    COLUMNS: [
+      { name: "SF NLP1s", direction: "top", percentile: 0.75 },
+      { name: "CPNP1", direction: "bottom", percentile: 0.25 }
+    ],
+
+    COLOR: "#01ef18"
 
   }
 

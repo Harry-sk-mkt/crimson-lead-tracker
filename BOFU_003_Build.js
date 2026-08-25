@@ -12,9 +12,14 @@
  * 실행도 계속 가능.
  *
  * Version
- * v1.1.1
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-08-25)
+ * - `computeBOFUMetaCampaignDataAggregates_()`(BOFU_002_Engine.js v1.6.0)
+ *   호출 추가 — Campaign/Off-On/Start Date/End Date/Link clicks/Results
+ *   자동 채움에 필요한 Meta_Raw 매칭 결과를 `mergeBOFUOPS_()`(BOFU_004_Merge.js
+ *   v1.4.0)에 전달(사용자 요청, Spent 자동화 2단계).
  * v1.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `62_BOFU_Build.js` → 신규 `BOFU_003_Build.js`, 코드 내용 변경 없음.
  * v1.1.0 (2026-08-05)
@@ -40,11 +45,13 @@ function buildBOFUOPS() {
 
     const engineMap = readBOFUEngineMap_();
 
+    const metaAgg = computeBOFUMetaCampaignDataAggregates_();
+
     //======================================
     // Merge
     //======================================
 
-    const result = mergeBOFUOPS_(existing, engineMap);
+    const result = mergeBOFUOPS_(existing, engineMap, metaAgg);
 
     //======================================
     // Write

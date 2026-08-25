@@ -34,9 +34,14 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-25)
+ * - `readMetaRawRows_()`가 `impressions`("Impressions")/`reach`("Reach")도
+ *   반환하도록 확장(additive, 기존 필드 변경 없음) — BOFU_OPS/Content_OPS
+ *   Impressions/Reach 자동 집계용(`AD_001_Config.js` v1.22.0/
+ *   `EVENTS_002_Engine.js` `aggregateMetaCampaignDataByProgram_()` 참고).
  * v1.8.0 (2026-08-19)
  * - `readMetaRawRows_()`가 `clicks`("Link clicks")/`results`("Results")도
  *   반환하도록 확장(additive, 기존 필드 변경 없음) — Events_OPS Clicks/
@@ -591,6 +596,8 @@ function readMetaRawRows_(){
       spent: raw[cols.SPENT],
       clicks: raw[cols.CLICKS],
       results: raw[cols.RESULTS],
+      impressions: raw[cols.IMPRESSIONS],
+      reach: raw[cols.REACH],
       reportStart: normalizeDate(raw[cols.REPORT_START]),
       reportEnd: normalizeDate(raw[cols.REPORT_END]),
       campaignStart: normalizeDate(raw[cols.CAMPAIGN_START]),

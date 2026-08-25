@@ -15,9 +15,23 @@
  * "Start Date" 기준이라 이름이 달라 새로 작성).
  *
  * Version
- * v1.3.2
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-25)
+ * - `applyBOFUMetaCampaignDataIfMatched_()`에 Impressions/Reach 추가
+ *   (additive) — Meta_Raw 원본에 실제로 있던 컬럼임을 사용자 지적으로
+ *   재확인(`AD_001_Config.js` v1.22.0에 매핑 추가), v1.4.0에서 빠졌던
+ *   두 필드를 마저 자동화.
+ * v1.4.0 (2026-08-25)
+ * - `applyBOFUMetaCampaignDataIfMatched_()` 신규(사용자 요청, Spent
+ *   자동화에 이은 2단계) — Campaign/Off-On/Start Date/End Date/Link
+ *   clicks/Results를 Meta_Raw 매칭이 있는 프로그램에 한해 자동으로
+ *   채운다(매칭 없으면 기존 수동값 그대로 유지). `mergeBOFUOPS_()`
+ *   시그니처에 `metaAgg` 파라미터 추가(`BOFU_003_Build.js`가
+ *   `computeBOFUMetaCampaignDataAggregates_()` 결과를 전달) —
+ *   `applyBOFUGroup4Computed_()` 다음, `applyBOFUAutoDerivedFieldsIfBlank_()`
+ *   이전에 호출.
  * v1.3.2 (2026-08-19)
  * - `applyBOFUAutoDerivedFieldsIfBlank_()` 신규(사용자 요청) — Start Date가
  *   비어있으면 engineRow["Earliest Lead Date"](BOFU_002_Engine.js
@@ -53,7 +67,7 @@
  * Merge BOFU_Engine + Existing BOFU_OPS
  * ==========================================================
  */
-function mergeBOFUOPS_(existingOps, engineMap) {
+function mergeBOFUOPS_(existingOps, engineMap, metaAgg) {
 
   const existingMap = createBOFUKeyMap_(existingOps);
 
@@ -95,6 +109,7 @@ function mergeBOFUOPS_(existingOps, engineMap) {
     }
 
     applyBOFUGroup4Computed_(row, engineRow);
+    applyBOFUMetaCampaignDataIfMatched_(row, metaAgg, key);
     applyBOFUAutoDerivedFieldsIfBlank_(row, engineRow);
     applyBOFUDerivedDateColumns_(row);
 
@@ -151,6 +166,114 @@ function applyBOFUGroup4Computed_(row, engineRow) {
   BOFU.GROUP_4_COMPUTED.forEach(function (col) {
     row[col] = (engineRow && Number(engineRow[col])) || 0;
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply BOFU Meta Campaign Data If Matched (Campaign/Off-On/Start Date/
+ * End Date/Impressions/Reach/Link clicks/Results — 매칭된 프로그램에 한해
+ * 자동 덮어쓰기)
+ *
+ * WHY (2026-08-25, 사용자 요청 — Spent 자동화에 이은 2단계)
+ * `GROUP_3_MANUAL`에 남아있는 이 7개 필드 중 Spent를 제외한 나머지도
+ * Meta_Raw에서 자동으로 채워달라는 요청(Impressions/Reach는 처음엔
+ * Meta_Raw 원본에 없다고 판단했으나, 사용자 지적으로 `runDebugMetaRawFirstRow()`
+ * 재확인 결과 원본에 있었음을 확인 — `AD_001_Config.js` v1.22.0에 매핑
+ * 추가). 다만 `Spent`/`Link clicks`/`Results`/`Impressions`/`Reach`와 달리
+ * `Start Date`/`Off/On`은 실측 결과(`runDumpContentOPSRowRawCells_()`,
+ * TEMPQA_031) 이미 실제 값이 들어차 있는 필드라, Meta_Raw가 커버 못 하는
+ * 프로그램(현재 BOFU 138개 중 92개)까지 무조건 덮어쓰면 기존 수동값이
+ * 전부 날아가 FY/Month 공란·정렬 회귀(`compareByStartDateBlankLast_()`가
+ * 빈 Start Date를 맨 아래로 보냄)로 이어진다. 그래서 **Meta 매칭이 있는
+ * 키만** 덮어쓰고, 매칭이 없으면(`metaAgg.campaignNames[key]`가 비어있음)
+ * 아무것도 건드리지 않는다 — `applyBOFUAutoDerivedFieldsIfBlank_()`("비어
+ * 있을 때만 채움")와 자매 격 정책("매칭 있으면 우선")으로 같은 파일에
+ * 나란히 둔다. `mergeBOFUOPS_()`에서 `applyBOFUGroup4Computed_()` 다음,
+ * `applyBOFUAutoDerivedFieldsIfBlank_()` 이전에 호출 — 이 함수가 이미
+ * Start Date를 채웠으면 그 "비어있을 때만" fallback은 자동으로 스킵됨.
+ *
+ * Off/On 판정: Meta_Raw엔 활성/비활성을 직접 나타내는 필드가 없어
+ * `campaignEnd` 기준 근사(사용자 확정) — 매칭된 캠페인 중 종료일 없는
+ * 게 하나라도 있으면(`hasOngoing`) "On", 전부 종료일이 있고 그 중
+ * 최댓값이 오늘보다 과거면 "Off", 아니면(오늘 이후 종료 예정) "On".
+ *
+ * INPUT
+ * row       : Object  (in-place 수정)
+ * metaAgg   : Object  (computeBOFUMetaCampaignDataAggregates_() 결과)
+ * key       : string  (BOFU.KEY 값)
+ *
+ * TEST
+ * testApplyBOFUMetaCampaignDataIfMatched 참고
+ * ==========================================================
+ */
+function applyBOFUMetaCampaignDataIfMatched_(row, metaAgg, key) {
+
+  const names = metaAgg && metaAgg.campaignNames && metaAgg.campaignNames[key];
+
+  if (!names || names.length === 0) return;
+
+  row["Campaign"] = names.join(", ");
+  row["Link clicks"] = metaAgg.clicks[key] || 0;
+  row["Results"] = metaAgg.results[key] || 0;
+  row["Impressions"] = metaAgg.impressions[key] || 0;
+  row["Reach"] = metaAgg.reach[key] || 0;
+
+  if (metaAgg.campaignStart[key]) row["Start Date"] = metaAgg.campaignStart[key];
+  if (metaAgg.campaignEnd[key]) row["End Date"] = metaAgg.campaignEnd[key];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const isEnded = metaAgg.campaignEnd[key] instanceof Date && metaAgg.campaignEnd[key] < today;
+
+  row["Off/On"] = (metaAgg.hasOngoing[key] || !isEnded) ? "On" : "Off";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyBOFUMetaCampaignDataIfMatched_()
+ * ==========================================================
+ */
+function testApplyBOFUMetaCampaignDataIfMatched() {
+
+  const metaAgg = {
+    clicks: { A: 10, B: 5 },
+    results: { A: 2, B: 1 },
+    impressions: { A: 1000, B: 500 },
+    reach: { A: 800, B: 400 },
+    campaignNames: { A: ["campA1", "campA2"], B: ["campB1"] },
+    campaignStart: { A: new Date(2026, 0, 1), B: new Date(2026, 1, 1) },
+    campaignEnd: { A: new Date(2020, 0, 1) }, // 과거 종료 — B는 종료일 없음(hasOngoing)
+    hasOngoing: { B: true }
+  };
+
+  const rowMatchedEnded = { "Campaign": "", "Start Date": "old", "End Date": "", "Off/On": "old" };
+  applyBOFUMetaCampaignDataIfMatched_(rowMatchedEnded, metaAgg, "A");
+
+  const rowMatchedOngoing = { "Campaign": "", "Start Date": "", "End Date": "", "Off/On": "" };
+  applyBOFUMetaCampaignDataIfMatched_(rowMatchedOngoing, metaAgg, "B");
+
+  const rowUnmatched = { "Campaign": "keep-me", "Start Date": "keep-me", "Off/On": "keep-me" };
+  applyBOFUMetaCampaignDataIfMatched_(rowUnmatched, metaAgg, "C");
+
+  const pass =
+    rowMatchedEnded["Campaign"] === "campA1, campA2" &&
+    rowMatchedEnded["Link clicks"] === 10 &&
+    rowMatchedEnded["Results"] === 2 &&
+    rowMatchedEnded["Impressions"] === 1000 &&
+    rowMatchedEnded["Reach"] === 800 &&
+    rowMatchedEnded["Start Date"].getTime() === new Date(2026, 0, 1).getTime() &&
+    rowMatchedEnded["Off/On"] === "Off" &&
+    rowMatchedOngoing["Off/On"] === "On" &&
+    rowUnmatched["Campaign"] === "keep-me" &&
+    rowUnmatched["Start Date"] === "keep-me" &&
+    rowUnmatched["Off/On"] === "keep-me";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

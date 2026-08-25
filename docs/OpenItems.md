@@ -357,3 +357,18 @@
     실제 라이브 데이터에 영향 있는지(Leads_Master/MTA_Master의 Paid Social 리드가 실제로
     Other로 잘못 떨어지고 있는지) 아직 확인 안 됨 — 다음 세션에 실측 확인 후 처리 방향
     결정할 것, 임의로 처리하지 말 것.
+30. **BOFU_OPS/Content_OPS Meta 매칭 커버리지 부족 — 자동화 자체는 정상, 딕셔너리가 못
+    찾는 프로그램은 여전히 공란/0(2026-08-25)** — Spent/Campaign/Off-On/Start Date/End
+    Date/Impressions/Reach/Link clicks/Results를 Meta_Raw 자동 집계로 전환했으나(`BOFU_004_
+    Merge.js`/`CONTENT_004_Merge.js` `applyBOFUMetaCampaignDataIfMatched_()`/
+    `applyContentMetaCampaignDataIfMatched_()`), 캠페인명→Marketo Program 매칭이
+    `UTIL_002_UtmProgramDictionary.js`(MTA_Master/Leads_Master 터치 데이터에서 자동 채굴)에
+    의존해 커버리지가 완전하지 않음 — `TEMPQA_031_BOFUContentMetaSpendMatchDiagnostic.js`
+    실측 결과 Meta_Raw 919행 중 554행만 딕셔너리 매칭 성공(365행은 딕셔너리에 아예 없음),
+    그중 Content 115행/BOFU 67행만 각 세그먼트로 귀속(Content_OPS 144개 프로그램 중 87개/
+    BOFU_OPS 138개 중 92개는 매칭 없음 — 이 프로그램들은 이 8개 필드 전부 기존 수동값
+    그대로, 자동화 안 됨). Events_OPS는 이 문제를 딕셔너리 매칭 실패 시 사용하는 수동
+    override 맵(`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`, 사람이 직접 확인한 케이스만
+    소수 등록)으로 일부 보완하고 있음 — BOFU/Content는 아직 이런 override 안전망이 없음.
+    딕셔너리 자체를 넓히거나(모호한 UTM 재검토 등) override 맵을 BOFU/Content에도 도입할지는
+    사용자 확인 필요, 임의로 처리하지 말 것.

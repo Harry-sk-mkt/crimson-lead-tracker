@@ -17,9 +17,35 @@
  * 방지).
  *
  * Version
- * v1.1.1
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-08-25)
+ * - `GROUP_3_MANUAL` 문서 주석 정정(BOFU_001_Config.js v1.7.0과 동일) —
+ *   Impressions/Reach도 Meta_Raw 원본에 실제로 있었음을 사용자 지적으로
+ *   재확인(`runDebugMetaRawFirstRow()`, `AD_001_Config.js` v1.22.0에 매핑
+ *   추가) — 이 8개 필드 전부 동일하게 자동화됨.
+ * v1.4.0 (2026-08-25)
+ * - `GROUP_3_MANUAL` 문서 주석 갱신(사용자 요청, Spent 자동화 2단계,
+ *   BOFU_001_Config.js v1.6.0과 동일) — `Off/On`/`Campaign`/`Start
+ *   Date`/`End Date`/`Link clicks`/`Results`는 이제 Meta_Raw 매칭이
+ *   있으면 자동 덮어쓰기(매칭 없으면 기존 수동값 유지,
+ *   `CONTENT_004_Merge.js` `applyContentMetaCampaignDataIfMatched_()`
+ *   참고) — 배열 자체는 변경 없음. `Impressions`/`Reach`만 순수 수동으로
+ *   남음.
+ * v1.3.0 (2026-08-25)
+ * - **`Spent`을 `GROUP_3_MANUAL` → `GROUP_4_COMPUTED`로 이동(사용자
+ *   요청)** — `TEMPQA_029_ContentSpentCompletenessAudit.js` 감사 결과 실제
+ *   수동 Spent가 FY23~27 전체에서 사실상 $0인 게 확인됨(Ad_Spend_Cache
+ *   Content 세그먼트 합계 $941,743.60 대비). Events_OPS가 이미 한 것과
+ *   동일한 전환(2026-08-06, EVENTS_001_Config.js v1.9.0) — Meta_Raw 기준
+ *   매 재빌드마다 새로 계산, 수동 보존 안 함. 실제 집계 로직은
+ *   `CONTENT_002_Engine.js` `computeContentMetaSpendAggregates_()` 참고.
+ * v1.2.0 (2026-08-25)
+ * - TOP25_HIGHLIGHT 추가(사용자 요청) — BOFU_001_Config.js v1.4.0과 동일
+ *   스펙: SF NLP1s(상위 25%)/CPNP1(비용 지표라 하위 25%) 컬럼에 배경색
+ *   #01ef18 강조. 실제 규칙 생성은 OPS_002_Styles.js
+ *   applyPercentileHighlightRules_() 참고(CONTENT_006_Styles.js에서 호출).
  * v1.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `80_Content_Config.js` → 신규 `CONTENT_001_Config.js`, 코드 내용 변경 없음.
  * v1.1.0 (2026-08-09)
@@ -133,6 +159,13 @@ const CONTENT = {
 
   ],
 
+  /*
+  2026-08-25(사용자 요청, Spent 자동화 2단계 — Impressions/Reach도
+  Meta_Raw에 실제로 있음을 사용자 지적으로 재확인 후 포함): 이 8개
+  필드 전부 Meta_Raw 매칭이 있으면 CONTENT_004_Merge.js의
+  applyContentMetaCampaignDataIfMatched_()가 자동 덮어쓰고, 매칭 없으면
+  이 배열이 기존 수동값을 baseline으로 보존한다(copyColumns_() 그대로).
+  */
   GROUP_3_MANUAL: [
 
     "Off/On",
@@ -142,8 +175,7 @@ const CONTENT = {
     "Impressions",
     "Reach",
     "Link clicks",
-    "Results",
-    "Spent"
+    "Results"
 
   ],
 
@@ -157,7 +189,8 @@ const CONTENT = {
     "IC Bked",
     "IC Complete",
     "#Deals",
-    "Revenue"
+    "Revenue",
+    "Spent"
 
   ],
 
@@ -295,6 +328,28 @@ const CONTENT = {
     SF: "#0369a1",
     META: "#1877F2",
     DERIVED: "#434343"
+
+  },
+
+  /*
+  ==========================================================
+  TOP 25% HIGHLIGHT (2026-08-25 사용자 요청, BOFU_001_Config.js와 동일 스펙)
+
+  SF NLP1s(리드 수 — 높을수록 좋음)는 상위 25%(PERCENTILE 0.75 이상),
+  CPNP1(비용 — 낮을수록 좋음)은 하위 25%(PERCENTILE 0.25 이하)를 배경색
+  #01ef18로 강조. 컬럼별 독립 계산 — OPS_002_Styles.js
+  applyPercentileHighlightRules_()에서 참조.
+  ==========================================================
+  */
+
+  TOP25_HIGHLIGHT: {
+
+    COLUMNS: [
+      { name: "SF NLP1s", direction: "top", percentile: 0.75 },
+      { name: "CPNP1", direction: "bottom", percentile: 0.25 }
+    ],
+
+    COLOR: "#01ef18"
 
   }
 

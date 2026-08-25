@@ -15,9 +15,36 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.17.0
+ * v1.20.0
  *
  * Change Log
+ * v1.20.0 (2026-08-25)
+ * - `aggregateMetaCampaignDataByProgram_()`에 `impressions`/`reach` 추가
+ *   (additive) — `AD_001_Config.js` v1.22.0/`AD_002_Meta.js` v1.9.0에서
+ *   Meta_Raw의 Impressions/Reach 컬럼을 새로 매핑한 것과 짝(사용자가
+ *   Impressions/Reach도 원본에 있다고 확인, `runDebugMetaRawFirstRow()`로
+ *   재검증). Clicks/Results와 동일하게 단순 합산(캠페인 간 겹치는 Reach를
+ *   중복 제거하지 않는 근사치 — Clicks/Results도 동일한 한계).
+ * v1.19.0 (2026-08-25)
+ * - `aggregateMetaSpendByProgram_()`(v1.18.0에서 이번 세션에 막 추가,
+ *   외부 안정 계약 아님)를 `aggregateMetaCampaignDataByProgram_()`로
+ *   교체 — Spend 외 Clicks/Results/캠페인명 목록/캠페인 시작·종료일/진행중
+ *   여부(hasOngoing)까지 한 번에 반환하도록 확장(사용자 요청 —
+ *   BOFU_OPS/Content_OPS의 Campaign/Off-On/Start Date/End Date/Link
+ *   clicks/Results 자동화, Spent에 이어 2단계). `BOFU_002_Engine.js`/
+ *   `CONTENT_002_Engine.js`의 호출부도 이름/반환구조에 맞춰 갱신.
+ * v1.18.0 (2026-08-25)
+ * - `resolveMetaCampaignProgramKey_()`/`aggregateMetaSpendByProgram_()`
+ *   신규(사용자 요청) — 기존 `resolveMetaCampaignEventsKey_()`/
+ *   `aggregateMetaMetricsByEventsProgram_()`(Events 전용, EVENT_TYPE_PREFIXES
+ *   필터 + `META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE` 내장)는 그대로 두고
+ *   그 옆에 제네릭 버전을 추가 — eligibility 판정 함수를 인자로 받아
+ *   BOFU_OPS/Content_OPS의 Spent 자동 집계(`BOFU_002_Engine.js`
+ *   `computeBOFUMetaSpendAggregates_()`, `CONTENT_002_Engine.js`
+ *   `computeContentMetaSpendAggregates_()`)가 재사용. 매칭/정규화 로직
+ *   (`readUtmProgramDictionaryMap_()`/`stripLGSuffix_()`/
+ *   `stripRegistrationFormSuffix_()`)은 기존 함수와 동일하게 재사용 —
+ *   새로 만들지 않음.
  * v1.17.0 (2026-08-25)
  * - **버그 수정 — computeEventsDealAggregates_()에 Business Segment 필터가
  *   없었음**(Content_002_Engine.js에서 동일 패턴으로 먼저 발견, 사용자
@@ -1008,6 +1035,241 @@ function testAggregateMetaMetricsByEventsProgram() {
 function computeEventsMetaMetricsAggregates_() {
 
   return aggregateMetaMetricsByEventsProgram_(readMetaRawRows_(), readUtmProgramDictionaryMap_());
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Meta Campaign Program Key (순수 함수, 도메인 무관 제네릭 버전)
+ *
+ * WHY
+ * `resolveMetaCampaignEventsKey_()`와 동일한 매칭 로직(UTM_Program_Dictionary
+ * + 접미사 정규화)이지만, Events 전용 하드코딩(EVENT_TYPE_PREFIXES 필터,
+ * `META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`, `applyEventsProgramKeyOverride_()`
+ * EXPO 변형 통합)이 없다 — BOFU/Content는 "1 Program = 1 Meta Campaign"이라
+ * 변형 통합이 불필요하고, 자격 판정 기준도 도메인마다 달라(Business
+ * Segment) 호출자가 `isEligibleProgram` predicate로 직접 넘긴다(2026-08-25
+ * 사용자 요청 — Content_OPS/BOFU_OPS Spent 자동 집계).
+ *
+ * INPUT
+ * campaignName            : string  (Meta Ads Manager 자체 캠페인명)
+ * utmProgramDictionaryMap : Object  (readUtmProgramDictionaryMap_() 결과)
+ * isEligibleProgram        : function(programName: string): boolean
+ *
+ * OUTPUT
+ * string|null  (매칭 실패/자격 미달 시 null)
+ *
+ * TEST
+ * testResolveMetaCampaignProgramKey 참고
+ * ==========================================================
+ */
+function resolveMetaCampaignProgramKey_(campaignName, utmProgramDictionaryMap, isEligibleProgram) {
+
+  const name = String(campaignName || "").trim();
+
+  if (!name) return null;
+
+  const dict = utmProgramDictionaryMap || {};
+  const dictProgram = stripLGSuffix_(stripRegistrationFormSuffix_(dict[name.toLowerCase()]));
+
+  if (!dictProgram || !isEligibleProgram(dictProgram)) return null;
+
+  return dictProgram;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveMetaCampaignProgramKey_()
+ * ==========================================================
+ */
+function testResolveMetaCampaignProgramKey() {
+
+  const dict = {
+    "kr_core_2026-01-01_some-ebook_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook",
+    "kr_core_2026-01-01_some-webinar_lead": "WB-2026-01-KOR-MOFU-Core Some WebinarㅣRegistered for Webinar from FB LG Form"
+  };
+
+  const onlyWF = function (programName) { return String(programName).indexOf("WF-") === 0; };
+
+  const pass =
+    resolveMetaCampaignProgramKey_("kr_core_2026-01-01_some-ebook_lead", dict, onlyWF) ===
+      "WF-2026-01-KOR-MOFU-Core Some Ebook" &&
+    resolveMetaCampaignProgramKey_("kr_core_2026-01-01_some-webinar_lead", dict, onlyWF) === null &&
+    resolveMetaCampaignProgramKey_("kr_core_2026-01-01_unmatched_lead", dict, onlyWF) === null &&
+    resolveMetaCampaignProgramKey_("", dict, onlyWF) === null;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Meta Campaign Data By Program (순수 함수, 도메인 무관 제네릭 버전)
+ *
+ * WHY
+ * `aggregateMetaMetricsByEventsProgram_()`의 제네릭 버전 — Spend/Clicks/
+ * Results뿐 아니라 캠페인명 목록(BOFU_OPS/Content_OPS "Campaign" 컬럼용,
+ * 쉼표로 join해 표시, 사용자 확정)/캠페인 시작일 최소값/종료일 최댓값
+ * ("Start Date"/"End Date" 컬럼용)/종료일 없는 캠페인 존재 여부("Off/On"
+ * 판정용, hasOngoing)까지 한 번의 순회로 같이 계산한다(2026-08-25 사용자
+ * 요청 — Impressions/Reach 제외 나머지 GROUP_3_MANUAL 필드 자동화).
+ * 이전 버전(Spend만 반환하던 `aggregateMetaSpendByProgram_()`, 같은
+ * 세션에 추가돼 BOFU/Content Engine에서만 쓰이던 내부 함수)을 대체 —
+ * 외부에 노출된 안정 계약이 아니라 이름 변경/구조 확장에 하위호환 부담
+ * 없음. Meta_Raw의 정밀/분배 export 이중계상 방지
+ * (`aggregateMetaSpendByFYMonthSegment_()`, AD_002_Meta.js)는 여기서도
+ * 재사용하지 않음 — 기존 `aggregateMetaMetricsByEventsProgram_()`도
+ * 동일하게 단순 합산만 하고 있어(이미 실사용 중) 일관성을 맞춘다.
+ *
+ * INPUT
+ * records                 : Object[]  (readMetaRawRows_() 결과 —
+ *                             {campaignName, spent, clicks, results,
+ *                              campaignStart, campaignEnd, ...})
+ * utmProgramDictionaryMap : Object   (readUtmProgramDictionaryMap_() 결과)
+ * isEligibleProgram        : function(programName: string): boolean
+ *
+ * OUTPUT
+ * {
+ *   spend: {programKey: totalSpentNZD}, clicks: {programKey: totalClicks},
+ *   results: {programKey: totalResults},
+ *   impressions: {programKey: totalImpressions}, reach: {programKey: totalReach},
+ *   campaignNames: {programKey: string[]} (중복 제거된 Meta 캠페인명 목록),
+ *   campaignStart: {programKey: Date} (매칭된 캠페인들의 최소 시작일),
+ *   campaignEnd: {programKey: Date} (매칭된 캠페인들의 최대 종료일,
+ *     종료일이 있는 캠페인만 반영),
+ *   hasOngoing: {programKey: true} (매칭된 캠페인 중 종료일 없는 게
+ *     하나라도 있으면 true — "아직 진행 중" 신호)
+ * }
+ *
+ * TEST
+ * testAggregateMetaCampaignDataByProgram 참고
+ * ==========================================================
+ */
+function aggregateMetaCampaignDataByProgram_(records, utmProgramDictionaryMap, isEligibleProgram) {
+
+  const spend = {};
+  const clicks = {};
+  const results = {};
+  const impressions = {};
+  const reach = {};
+  const campaignNames = {};
+  const campaignStart = {};
+  const campaignEnd = {};
+  const hasOngoing = {};
+
+  (records || []).forEach(function (r) {
+
+    const key = resolveMetaCampaignProgramKey_(r.campaignName, utmProgramDictionaryMap, isEligibleProgram);
+
+    if (!key) return;
+
+    spend[key] = (spend[key] || 0) + (Number(r.spent) || 0);
+    clicks[key] = (clicks[key] || 0) + (Number(r.clicks) || 0);
+    results[key] = (results[key] || 0) + (Number(r.results) || 0);
+    impressions[key] = (impressions[key] || 0) + (Number(r.impressions) || 0);
+    reach[key] = (reach[key] || 0) + (Number(r.reach) || 0);
+
+    if (!campaignNames[key]) campaignNames[key] = [];
+
+    if (campaignNames[key].indexOf(r.campaignName) === -1) {
+      campaignNames[key].push(r.campaignName);
+    }
+
+    const hasStart = r.campaignStart instanceof Date && !isNaN(r.campaignStart.getTime());
+
+    if (hasStart && (!campaignStart[key] || r.campaignStart < campaignStart[key])) {
+      campaignStart[key] = r.campaignStart;
+    }
+
+    const hasEnd = r.campaignEnd instanceof Date && !isNaN(r.campaignEnd.getTime());
+
+    if (hasEnd) {
+
+      if (!campaignEnd[key] || r.campaignEnd > campaignEnd[key]) {
+        campaignEnd[key] = r.campaignEnd;
+      }
+
+    } else {
+
+      hasOngoing[key] = true;
+
+    }
+
+  });
+
+  return {
+    spend: spend,
+    clicks: clicks,
+    results: results,
+    impressions: impressions,
+    reach: reach,
+    campaignNames: campaignNames,
+    campaignStart: campaignStart,
+    campaignEnd: campaignEnd,
+    hasOngoing: hasOngoing
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateMetaCampaignDataByProgram_()
+ * ==========================================================
+ */
+function testAggregateMetaCampaignDataByProgram() {
+
+  const dict = {
+    "kr_core_2026-01-01_some-ebook_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook",
+    "kr_core_2026-01-05_some-ebook-v2_lead": "WF-2026-01-KOR-MOFU-Core Some Ebook",
+    "kr_core_2026-02-01_ongoing-ebook_lead": "WF-2026-02-KOR-MOFU-Core Ongoing Ebook"
+  };
+
+  const onlyWF = function (programName) { return String(programName).indexOf("WF-") === 0; };
+
+  const records = [
+    {
+      campaignName: "KR_core_2026-01-01_some-ebook_lead", spent: 100, clicks: 10, results: 2,
+      impressions: 1000, reach: 800,
+      campaignStart: new Date(2026, 0, 1), campaignEnd: new Date(2026, 0, 31)
+    },
+    {
+      campaignName: "KR_core_2026-01-05_some-ebook-v2_lead", spent: 50, clicks: 5, results: 1,
+      impressions: 500, reach: 400,
+      campaignStart: new Date(2026, 0, 5), campaignEnd: new Date(2026, 1, 10)
+    },
+    {
+      campaignName: "KR_core_2026-02-01_ongoing-ebook_lead", spent: 30, clicks: 3, results: 0,
+      impressions: 200, reach: 150,
+      campaignStart: new Date(2026, 1, 1), campaignEnd: null
+    },
+    { campaignName: "KR_core_2026-01-01_unmatched_lead", spent: 999, clicks: 1, results: 0, impressions: 100, reach: 90 }
+  ];
+
+  const result = aggregateMetaCampaignDataByProgram_(records, dict, onlyWF);
+
+  const ebookKey = "WF-2026-01-KOR-MOFU-Core Some Ebook";
+  const ongoingKey = "WF-2026-02-KOR-MOFU-Core Ongoing Ebook";
+
+  const pass =
+    result.spend[ebookKey] === 150 &&
+    result.clicks[ebookKey] === 15 &&
+    result.results[ebookKey] === 3 &&
+    result.impressions[ebookKey] === 1500 &&
+    result.reach[ebookKey] === 1200 &&
+    result.campaignNames[ebookKey].length === 2 &&
+    result.campaignStart[ebookKey].getTime() === new Date(2026, 0, 1).getTime() &&
+    result.campaignEnd[ebookKey].getTime() === new Date(2026, 1, 10).getTime() &&
+    !result.hasOngoing[ebookKey] &&
+    result.hasOngoing[ongoingKey] === true &&
+    result.campaignEnd[ongoingKey] === undefined &&
+    Object.keys(result.spend).length === 2;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

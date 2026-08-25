@@ -32,9 +32,29 @@
  * 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.4.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-25)
+ * - `computeBOFUMetaSpendAggregates_()` → `computeBOFUMetaCampaignDataAggregates_()`로
+ *   교체(사용자 요청, Spent 자동화에 이은 2단계) — `refreshBOFUEngine_()`의
+ *   `metaSpendAgg` 참조도 `metaAgg.spend`로 변경(Spent 계산 자체는 동일,
+ *   참조 경로만 변경). `BOFU_004_Merge.js`의
+ *   `applyBOFUMetaCampaignDataIfMatched_()`가 이 함수의 반환값을 직접
+ *   받아 Campaign/Off-On/Start Date/End Date/Link clicks/Results를 매칭된
+ *   프로그램에 한해 자동으로 채운다(Engine 시트를 거치지 않고
+ *   `buildBOFUOPS()` 실행 시점에 직접 계산 — Date/배열 값을 시트 캐시로
+ *   왕복시키면 타입 손실 위험 있음, 오늘 겪은 Content_OPS Month 셀 Date
+ *   강제변환 사례 참고).
+ * v1.5.0 (2026-08-25)
+ * - Spent 자동 집계 추가(사용자 요청, `BOFU_001_Config.js` v1.5.0에서
+ *   `Spent`를 `GROUP_3_MANUAL`→`GROUP_4_COMPUTED`로 이동한 것과 짝)  —
+ *   신규 `isEligibleBOFUProgram_()`/`computeBOFUMetaSpendAggregates_()`,
+ *   `EVENTS_002_Engine.js` v1.18.0의 제네릭
+ *   `aggregateMetaSpendByProgram_()`/`resolveMetaCampaignProgramKey_()`
+ *   재사용(Events 전용 EVENT_TYPE_PREFIXES 필터 없이 Business Segment로
+ *   자격 판정). `refreshBOFUEngine_()`가 이 집계도 allKeys 합집합에
+ *   포함하고 rows 배열 마지막에 붙이도록 배선.
  * v1.4.0 (2026-08-19)
  * - **Start Date 자동 채움이 여전히 공란인 사례 다수 발견(사용자 보고,
  *   "Duke CAO advise" 등 20건+) — 원인: 1차 소스였던 Leads_Master
@@ -102,6 +122,7 @@ function refreshBOFUEngine_() {
   const leadsAgg = computeBOFULeadsAggregates_();
   const funnelAgg = computeBOFUFunnelAggregates_(leadsAgg.leadIdToKey);
   const dealAgg = computeBOFUDealAggregates_();
+  const metaAgg = computeBOFUMetaCampaignDataAggregates_();
 
   const allKeys = {};
 
@@ -109,7 +130,8 @@ function refreshBOFUEngine_() {
     mtaAgg.allRegistered, mtaAgg.p1All,
     leadsAgg.newRegistered, leadsAgg.nlP1,
     funnelAgg.icRequest, funnelAgg.icBooked,
-    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue
+    funnelAgg.icComplete, dealAgg.dealsWon, dealAgg.revenue,
+    metaAgg.spend
   ].forEach(function (map) {
     Object.keys(map).forEach(function (key) {
       allKeys[key] = true;
@@ -129,7 +151,8 @@ function refreshBOFUEngine_() {
       funnelAgg.icBooked[key] || 0,
       funnelAgg.icComplete[key] || 0,
       dealAgg.dealsWon[key] || 0,
-      dealAgg.revenue[key] || 0
+      dealAgg.revenue[key] || 0,
+      metaAgg.spend[key] || 0
     ];
 
   });
@@ -192,6 +215,76 @@ function testPickEarliestDate() {
     pickEarliestDate_(undefined, undefined) === "";
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Is Eligible BOFU Program (순수 함수)
+ *
+ * WHY
+ * UTM_Program_Dictionary가 찾아낸 Marketo Program명이 진짜 BOFU
+ * 프로그램인지 판정 — `EVENTS_002_Engine.js`의
+ * `isEligibleEventProgram_()`(EVENT_TYPE_PREFIXES 필터)와 동일 역할이지만
+ * BOFU는 단일 세그먼트라 Business Segment 체크 하나로 충분(BOFU_002_Engine.js
+ * 파일 헤더 WHY와 동일 원칙 — "Events와 달리 EVENT_TYPE_PREFIXES 필터가
+ * 없다"). `getBusinessSegment(programName, programName)` — 문자열 하나를
+ * campaign/detail 두 인자 모두에 넣는 게 이미 확립된 관례
+ * (`AD_006_KakaoMoments.js` `computeKakaoMomentsSyncRow_()` 참고, 한쪽
+ * 인자만 넣으면 "wb-"/"ev-" 등 detail 전용 신호를 놓쳐 분류가 실패함).
+ *
+ * TEST
+ * testIsEligibleBOFUProgram 참고
+ * ==========================================================
+ */
+function isEligibleBOFUProgram_(programName) {
+
+  return isKoreanProgram_(programName) &&
+    BOFU.SEGMENTS.indexOf(getBusinessSegment(programName, programName)) !== -1;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEligibleBOFUProgram_()
+ * ==========================================================
+ */
+function testIsEligibleBOFUProgram() {
+
+  const pass =
+    isEligibleBOFUProgram_("WF-2026-08-KOR-BOFU-Core Duke CAO advise") === true &&
+    isEligibleBOFUProgram_("WB-2026-02-KOR-MOFU-Core Application Tips") === false &&
+    isEligibleBOFUProgram_("WF-2026-01-KOR-MOFU-Core Some Ebook") === false &&
+    isEligibleBOFUProgram_("") === false;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute BOFU Meta Campaign Data Aggregates (IO 래퍼)
+ *
+ * WHY
+ * `EVENTS_002_Engine.js`의 제네릭 `aggregateMetaCampaignDataByProgram_()`/
+ * `resolveMetaCampaignProgramKey_()`를 BOFU 전용 자격 판정
+ * (`isEligibleBOFUProgram_()`)으로 감싼 IO 래퍼 — `refreshBOFUEngine_()`가
+ * `BOFU.GROUP_4_COMPUTED`(v1.5.0에서 Spent 추가)의 Spent를 채우는 데
+ * 쓰고, `BOFU_004_Merge.js`의 `applyBOFUMetaCampaignDataIfMatched_()`가
+ * Campaign/Off-On/Start Date/End Date/Link clicks/Results 자동 덮어쓰기에
+ * 반환값 전체(spend 외 clicks/results/campaignNames/campaignStart/
+ * campaignEnd/hasOngoing)를 사용(2026-08-25, Spent 자동화에 이은 2단계
+ * 사용자 요청).
+ * ==========================================================
+ */
+function computeBOFUMetaCampaignDataAggregates_() {
+
+  return aggregateMetaCampaignDataByProgram_(
+    readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleBOFUProgram_
+  );
 
 }
 
