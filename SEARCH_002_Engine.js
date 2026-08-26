@@ -23,9 +23,23 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.15.1
+ * v1.16.0
  *
  * Change Log
+ * v1.16.0 (2026-08-26)
+ * - **resolveSearchEngineKey_() — Lead Source Detail의 Naver SA/Google SA
+ *   신호를 SEARCH_UTM_TO_PROGRAM_OVERRIDE보다 우선하도록 순서 변경**(사용자
+ *   확정). 원인: 이 override는 "detail이 비어있는 옛날 터치 구제" 목적으로
+ *   만들어졌는데(2026-07-29), 우선순위가 Detail 체크보다 앞이라 detail이
+ *   있어도 무조건 override가 이겨버림 — 같은 raw UTM("kr_core_2021-04-01_
+ *   search-kr_tier1-college-specific_contact")을 재사용하는 신규 Marketo
+ *   Program("WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy")의
+ *   리드까지 전부 옛날 "2025-12-KOR-Naver SA & Google Ivy League" 버킷으로
+ *   합산돼 GoogleSearch_Raw 지출이 매칭 안 되는 문제로 발견(사용자 보고).
+ *   Detail 체크를 override 체크보다 앞으로 이동 — override는 이제 원래
+ *   의도대로 detail에 신호가 없을 때만 적용됨. 신규 테스트
+ *   `testResolveSearchEngineKeyDetailBeatsStaleOverride()`, 기존
+ *   `testResolveSearchEngineKey()` 재검증 PASS.
  * v1.15.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `71_Search_Engine.js` → 신규 `SEARCH_002_Engine.js`, 코드 내용 변경 없음.
  * v1.15.0 (2026-08-05)
@@ -313,12 +327,13 @@ const SEARCH_MERGE_INTO_ORGANIC_SEARCH = ["chatgpt.com", "website-consultation-b
  * 그대로 키로 사용 — 문자열 패턴 매칭이라 향후 신규 프로그램도 하드코딩
  * 없이 자동으로 잡힘.
  *
- * 우선순위:
- * 0) raw UTM Campaign이 SEARCH_UTM_TO_PROGRAM_OVERRIDE에 있음 → 매핑된
- *    Program명(사용자 육안 검토로 확정, detail이 비어있는 터치 구제)
- * 0.5) raw UTM Campaign이 SEARCH_MERGE_INTO_ORGANIC_SEARCH에 있음(예:
+ * 우선순위 (2026-08-26 재조정 — 상세는 하단 v1.16.0 Change Log 참고):
+ * 0) Lead Source Detail에 "Naver SA"/"Google SA" 포함 → Program명 그대로
+ * 0.5) raw UTM Campaign이 SEARCH_UTM_TO_PROGRAM_OVERRIDE에 있음 → 매핑된
+ *    Program명(사용자 육안 검토로 확정, detail이 비어있는 터치 구제 —
+ *    그래서 detail 기반 매칭보다 후순위)
+ * 0.7) raw UTM Campaign이 SEARCH_MERGE_INTO_ORGANIC_SEARCH에 있음(예:
  *    "chatgpt.com") → "Organic Search" 버킷으로 강제 병합
- * 1) Lead Source Detail에 "Naver SA"/"Google SA" 포함 → Program명 그대로
  * 2) raw UTM Campaign 있음 → 기존처럼 그대로 사용(stripRegistrationFormSuffix_)
  * 3) UTM도 없고 Lead Source Category="Google Search Ads" → "Google UTM"
  *    placeholder(사용자 확정 — Google Search Ads는 전용 프로그램이 없던
@@ -336,19 +351,19 @@ function resolveSearchEngineKey_(campaignRaw, leadSourceRaw, detailRaw, category
 
   const campaignLower = String(campaignRaw || "").trim().toLowerCase();
 
+  const detail = String(detailRaw || "").trim();
+  const detailLower = detail.toLowerCase();
+
+  if (detailLower.includes("naver sa") || detailLower.includes("google sa")) {
+    return detail;
+  }
+
   if (SEARCH_UTM_TO_PROGRAM_OVERRIDE[campaignLower]) {
     return SEARCH_UTM_TO_PROGRAM_OVERRIDE[campaignLower];
   }
 
   if (SEARCH_MERGE_INTO_ORGANIC_SEARCH.indexOf(campaignLower) !== -1) {
     return "Organic Search";
-  }
-
-  const detail = String(detailRaw || "").trim();
-  const detailLower = detail.toLowerCase();
-
-  if (detailLower.includes("naver sa") || detailLower.includes("google sa")) {
-    return detail;
   }
 
   const campaignKey = stripRegistrationFormSuffix_(campaignRaw);
@@ -388,6 +403,73 @@ function testResolveSearchEngineKey() {
     // 2026-07-29 추가 — 비정보성 UTM → Organic Search 병합
     resolveSearchEngineKey_("chatgpt.com", "", "", "") === "Organic Search" &&
     resolveSearchEngineKey_("website-consultation-booking", "Organic Search", "", "") === "Organic Search";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveSearchEngineKey_() Detail이 SEARCH_UTM_TO_PROGRAM_OVERRIDE
+ * 보다 우선해야 함 (2026-08-26)
+ *
+ * WHY
+ * `SEARCH_UTM_TO_PROGRAM_OVERRIDE["kr_core_2021-04-01_search-kr_tier1-
+ * college-specific_contact"] = "2025-12-KOR-Naver SA & Google Ivy League"`는
+ * 2026-07-29 당시 "이 raw UTM을 쓰는 옛날 리드는 detail이 비어있어서 Naver
+ * SA 프로그램명으로 못 잡히니 수동으로 매핑해주자"는 fallback 목적으로
+ * 추가된 것인데(detail이 비어있는 터치만 구제할 의도), 우선순위가
+ * Detail 기반 매칭보다 앞에 있어서 실제로는 detail이 있어도 무조건
+ * 이겨버리는 문제가 있었음. 그 결과 같은 raw UTM을 재사용하는 신규
+ * Marketo Program("WF-2026-08-KOR-BOFU-Core Google SA College
+ * Specific-Ivy")의 리드까지 전부 옛날 "2025-12-KOR-Naver SA & Google Ivy
+ * League" 버킷으로 잘못 합산되고 있었음(사용자 보고 — GoogleSearch_Raw
+ * 지출이 이 UTM 캠페인에 매칭 안 되는 문제로 발견). Detail 체크를 override
+ * 체크보다 앞으로 옮겨 수정 — override는 이제 detail에 Naver SA/Google SA
+ * 신호가 없을 때만(원래 의도대로) 적용됨.
+ * ==========================================================
+ */
+function testResolveSearchEngineKeyDetailBeatsStaleOverride(){
+
+  const cases = [
+    // [campaignRaw, leadSourceRaw, detailRaw, categoryRaw, expected]
+
+    // 신규: override 대상 UTM을 재사용하지만 detail에 실제 신규 Program명이
+    // 있으면 detail이 이겨야 함
+    [
+      "KR_core_2021-04-01_search-kr_tier1-college-specific_contact",
+      "Paid Search",
+      "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy",
+      "",
+      "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy"
+    ],
+
+    // 회귀: detail이 비어있는 기존 케이스는 여전히 override로 fallback
+    [
+      "KR_core_2021-04-01_search-kr_tier1-college-specific_contact",
+      "Paid Search",
+      "",
+      "Naver Search Ads",
+      "2025-12-KOR-Naver SA & Google Ivy League"
+    ]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = resolveSearchEngineKey_(c[0], c[1], c[2], c[3]);
+    const ok = result === c[4];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[2] +
+      " -> " + result + " (expected " + c[4] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

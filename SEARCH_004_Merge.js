@@ -12,9 +12,22 @@
  * 않고 53_Events_Merge.js 정의를 재사용.
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-08-26)
+ * - **GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE 신규(사용자
+ *   확정)** — raw UTM `kr_core_2021-04-01_search-kr_tier1-college-specific_
+ *   contact`가 `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(SEARCH_002_Engine.js)로
+ *   옛날 리드는 "2025-12-KOR-Naver SA & Google Ivy League" 키에, 신규
+ *   Marketo Program 리드는 `resolveSearchEngineKey_()` 우선순위 조정
+ *   (SEARCH_002_Engine.js v1.16.0) 이후 "WF-2026-08-KOR-BOFU-Core Google SA
+ *   College Specific-Ivy" 키에 각각 잡히면서 Search_OPS에 두 행이 생겼는데,
+ *   GoogleSearch_Raw 지출은 기간 컬럼 없는 all-time 누적 합계 1개뿐이라
+ *   자동으로 나눠 반영할 방법이 없음 — 사용자 확정: 지출 전부를 신규
+ *   프로그램 키로 매칭. `buildGoogleSearchCampaignStatsLowerKeyMap_()`가
+ *   이제 이 override 테이블을 사용(기존엔 override 없이 직접 매칭만 시도).
+ *   신규 테스트 `testBuildGoogleSearchCampaignStatsLowerKeyMapOverride()`.
  * v1.10.0 (2026-08-25)
  * - **Google Search stats 병합 추가(4번째 플랫폼, 사용자 확정 — Search_OPS
  *   범위로만 한정)**. `buildNaverCampaignStatsLowerKeyMap_()`의 원래 본문을
@@ -407,6 +420,30 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
 
 /**
  * ==========================================================
+ * Google Search Campaign Name → Search_OPS Key Override (2026-08-26)
+ *
+ * WHY
+ * raw UTM `kr_core_2021-04-01_search-kr_tier1-college-specific_contact`는
+ * `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(SEARCH_002_Engine.js)에 의해 옛날
+ * 리드는 "2025-12-KOR-Naver SA & Google Ivy League" 키로, 신규 Marketo
+ * Program("WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy",
+ * `getBusinessSegment()` BOFU 퍼널 태그 vs Search 채널 신호 충돌 수정 —
+ * docs/BusinessSegmentClassification.md 2026-08-26 항목 — 이후 신규
+ * `resolveSearchEngineKey_()` 우선순위 조정으로 detail이 그대로 키가 됨)
+ * 리드는 별도 키로 Search_OPS에 두 행이 생기게 됨. 그런데 GoogleSearch_Raw
+ * 지출은 기간 컬럼이 없는 all-time 누적 합계 1개뿐이라(AD_007_
+ * GoogleSearch.js 참고) 두 행에 자동으로 나눠 반영할 방법이 없음 — 사용자
+ * 확정: 이 캠페인은 현재 신규 프로그램으로 운영 중이므로 지출 전부를
+ * 신규 프로그램 키에 매칭.
+ * ==========================================================
+ */
+const GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE = {
+  "kr_core_2021-04-01_search-kr_tier1-college-specific_contact": "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy"
+};
+
+
+/**
+ * ==========================================================
  * Build Google Search Campaign Stats Lower-Key Map (순수 함수, 2026-08-25)
  *
  * WHY
@@ -418,11 +455,44 @@ function buildNaverCampaignStatsLowerKeyMap_(naverStatsMap) {
  * 되는 캠페인은 buildCampaignStatsLowerKeyMap_()의 기존 안전망(override
  * 없으면 원본 캠페인명 그대로 키로 사용)에 따라 그냥 매칭 실패로 남고,
  * applySearchNaverCampaignStats_()가 기존 값을 그대로 보존한다(정상 동작).
+ *
+ * **2026-08-26 추가**: 위 GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_
+ * OVERRIDE 하나만 예외 — raw UTM이 Search_OPS 키와 우연히 같지 않고 Lead
+ * Source Detail 기반 신규 Program명으로 번역돼야 하는 경우.
  * ==========================================================
  */
 function buildGoogleSearchCampaignStatsLowerKeyMap_(googleStatsMap) {
 
-  return buildCampaignStatsLowerKeyMap_(googleStatsMap, {});
+  return buildCampaignStatsLowerKeyMap_(googleStatsMap, GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildGoogleSearchCampaignStatsLowerKeyMap_() Tier1-College-Specific
+ * override (2026-08-26)
+ * ==========================================================
+ */
+function testBuildGoogleSearchCampaignStatsLowerKeyMapOverride(){
+
+  const googleStatsMap = {
+    "KR_core_2021-04-01_search-kr_tier1-college-specific_contact": { impressions: 1000, clicks: 40, spent: 250, results: 5 }
+  };
+
+  const lower = buildGoogleSearchCampaignStatsLowerKeyMap_(googleStatsMap);
+
+  const key = "wf-2026-08-kor-bofu-core google sa college specific-ivy";
+
+  const pass =
+    !!lower[key] &&
+    lower[key].name === "KR_core_2021-04-01_search-kr_tier1-college-specific_contact" &&
+    lower[key].impressions === 1000 &&
+    lower[key].spent === 250 &&
+    !lower["kr_core_2021-04-01_search-kr_tier1-college-specific_contact"];
+
+  Logger.log("Lower map: " + JSON.stringify(lower));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

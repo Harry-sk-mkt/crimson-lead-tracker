@@ -166,15 +166,27 @@
     2026-08-08 "UTM Campaign ↔ Marketo Program 딕셔너리 신규 구축" 섹션.
     **기존 21번 항목의 `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(71_Search_Engine.js)/
     `NAVER_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE`(73_Search_Merge.js)는 이번에 안 건드림**
-    (기존 출력 변경 금지 원칙) — 이 신규 딕셔너리로 그 하드코딩들을 대체할지는 별도 논의 필요,
-    임의로 처리하지 말 것.
+    (기존 출력 변경 금지 원칙) — Search_OPS 키(ad-spend 매칭용) 문제라 Business Segment
+    분류와는 별개 관심사, 여전히 안 건드림.
     **알려진 한계(구조적, 코드로 해결 불가 — 사용자 확인 완료)**: Consolidated/Pmax류 복합
     캠페인은 UTM 하나가 실제로 여러 Marketo Program과 진짜 1:N으로 매칭됨(예: 한 UTM이 실제
     리드 데이터상 8개 서로 다른 eBook Program과 매칭 확인됨, `runDebugMtaMasterTouchesForUtm()`
     진단 결과) — 이런 UTM은 자동 채움에서 의도적으로 제외되고 계속 빈 값으로 남음
-    (`readUtmProgramDictionaryMap_()`이 Distinct Program Count > 1 항목 제외). 딕셔너리는
-    수동 실행(`runRefreshUtmProgramDictionary()`) 전용 — 자동 파이프라인엔 얹지 않음(MTA_Master
-    전체 스캔 8만 행+ 무거움).
+    (`readUtmProgramDictionaryMap_()`이 Distinct Program Count > 1 항목 제외).
+    **2026-08-26 후속 — "이 신규 딕셔너리로 Business Segment 분류를 대체할지" 논의 완료 및
+    구현**: `WF-2026-08-KOR-BOFU-Core Google SA ...` 캠페인이 이름 속 "BOFU" 퍼널 태그 때문에
+    `getBusinessSegment()` 키워드 규칙으로 오분류되는 버그를 계기로, 사용자가 "Lead 유입 →
+    Dictionary 조회 → Business Segment 분류" 플로우 도입을 확정. `UTIL_002_UtmProgramDictionary.js`
+    에 Program↔Business Segment 딕셔너리(`Program_Segment_Dictionary`, 동일한 자동 채굴+다수결
+    패턴)를 신규 추가하고, `resolveBusinessSegment_()`(딕셔너리 히트 시 우선 사용, 미스 시
+    기존 `getBusinessSegment()` fallback)를 `MASTER_006_LeadTransformer.js`/
+    `MASTER_007_MTATransformer.js`가 호출하도록 전환 — `getBusinessSegment()` 자체는 시그니처/
+    로직 변경 없음(Article 7 유지). 딕셔너리 갱신도 `runInstallDictionaryPeriodicRefreshTrigger()`
+    로 주기적 시간 트리거(기본 12시간) 자동화 추가 — 단, 리드 유입 파이프라인(매 append)에는
+    여전히 얹지 않고 별도 스케줄로 분리. 상세: `docs/BusinessSegmentClassification.md`
+    2026-08-26 항목. **미완료**: 기존 Leads_Master/MTA_Master 행에 소급 적용하려면
+    `TEMPQA_034_BusinessSegmentDictionaryDiff.js`로 영향 범위(diff) 먼저 검토 후
+    Full Rebuild 여부 사용자가 결정 — 아직 실행 전, 임의로 Full Rebuild 진행하지 말 것.
 23. ~~QA 에이전트 설계~~ — **설계 및 구현 완료(2026-08-09)**. 사용자 확인 결과 스코프는
     데이터 정합성+리포트 값 검증+코드/엔지니어링 품질 3개 전부, 형태는 Claude Code 서브에이전트/
     스킬. `.claude/skills/qa-review/SKILL.md` 신규(Apps Script 코드 변경 없음, 스킬/문서만).
@@ -460,3 +472,18 @@
     **미해결**: 이게 "IC 단계를 정상적으로 건너뛰는 케이스"(예: 재신청/기존 고객 등)인지
     "원래 있어야 하는데 기록 누락"인지 판단 불가 — Salesforce 프로세스/데이터 지식이 필요한
     질문이라 다음 세션으로 보류(사용자 결정, 2026-08-26). 임의로 처리하지 말 것.
+34. **Business Segment 딕셔너리("Lead 유입 → Dictionary 조회 → Business Segment 분류")의
+    "특이 분류" 모니터링 프로세스 구축 필요 — 미착수(2026-08-26 사용자 요청)** —
+    `Program_Segment_Dictionary`는 자동 채굴(다수결)이라, 오늘처럼 딕셔너리가 이미 검증된
+    확정 신호를 근거 없이 덮어쓰는 사고가 또 발생할 수 있음(`resolveDefiniteBusinessSegment_()`
+    로 확정 신호는 우선권을 갖도록 막아뒀지만, 그 확정 신호 밖에 있는 fallback 영역에서는
+    여전히 다수결이 소수 오분류를 그대로 학습해 전파할 위험이 구조적으로 남아있음 —
+    `docs/BusinessSegmentClassification.md` 2026-08-26 항목 참고). 매 딕셔너리 갱신
+    (`periodicRefreshDictionaries_()`, 12시간 주기)마다 "이번에 새로 추가/변경된 Program→
+    Segment 매핑 중 확신도가 낮거나(matchCount/totalCount 비율 낮음) 이전 갱신과 값이
+    달라진 항목"을 사람이 주기적으로 육안 검토할 수 있는 리포트/알림 체계가 필요 —
+    구체적 설계(별도 진단 시트로 뽑을지, 이메일/Slack 알림을 붙일지, 얼마나 자주 볼지 등)는
+    미정, 다음 세션에 설계 착수. 참고: `TEMPQA_034_BusinessSegmentDictionaryDiff.js`가
+    지금은 1회성 수동 diff 진단이라 이 목적에 가장 가까운 기존 코드 — 이걸 정기 모니터링
+    체계로 발전시키는 방향이 유력해 보이나 확정 아님, 임의로 설계하지 말고 사용자와 먼저
+    논의할 것.

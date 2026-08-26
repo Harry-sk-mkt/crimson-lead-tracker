@@ -8,9 +8,41 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.17.0
+ * v1.19.0
  *
  * Change Log
+ * v1.19.0 (2026-08-26)
+ * - **getBusinessSegment()를 `resolveDefiniteBusinessSegment_()`(신규, Exceptions
+ *   ~Search 확정 신호까지)와 나머지(Content 이후)로 분리(사용자 확정)** —
+ *   `UTIL_002_UtmProgramDictionary.js`의 "Lead 유입 → Dictionary 조회 →
+ *   Business Segment 분류" 플로우 도입 후, 딕셔너리가 이미 검증된 확정 신호
+ *   (예: campaign에 "sitelink" — 2026-07-28에 49개 캠페인 직접 검증)까지
+ *   Program 단위 다수결로 근거 없이 뒤집는 사고가 발견됨(TEMPQA_034 diff,
+ *   "Search → Webinar" 4건) — 확정 신호 구간을 딕셔너리보다 먼저 체크할 수
+ *   있도록 분리. `getBusinessSegment()` 자체의 시그니처/최종 출력은 무변경
+ *   (내부적으로 `resolveDefiniteBusinessSegment_()`를 먼저 호출하고 매치
+ *   안 되면 원래와 동일한 나머지 로직으로 이어짐 — 리팩터 전후 회귀 테스트
+ *   전부 동일 결과로 확인, 기존 7건의 알려진 "Paid Social" 실패(OpenItems.md
+ *   #29, 이번 작업과 무관)도 그대로 재현돼 회귀 없음 검증). 신규 순수 함수
+ *   `resolveDefiniteBusinessSegment_()`는 `UTIL_002_UtmProgramDictionary.js`의
+ *   `resolveBusinessSegmentPure_()`가 딕셔너리 조회 전에 우선 호출.
+ * v1.18.0 (2026-08-26)
+ * - **getBusinessSegment() — Google SA/Naver SA 채널 신호를 BOFU 퍼널 태그보다
+ *   우선 체크하도록 추가(사용자 확정)**. 원인: Marketo 캠페인명의 "BOFU"는
+ *   Bottom-of-Funnel 퍼널 단계 태그일 뿐인데(TOFU/MOFU와 동일 계열), 기존
+ *   BOFU 규칙(detail/campaign에 "bofu" 리터럴 포함)이 이를 곧바로 Business
+ *   Segment=BOFU로 판정해버려서, 실제 채널은 Google Search Ads인
+ *   "WF-2026-08-KOR-BOFU-Core Google SA Transfer-US" 등 4개 캠페인이 BOFU로
+ *   오분류됨(사용자 보고 — GoogleSearch_Raw 지출 데이터가 Search_OPS에도
+ *   BOFU_OPS에도 안 걸리는 문제로 발견). BOFU 체크 직전에
+ *   `/(?:^|[^a-z0-9])(google|naver)[\s_-]+sa(?![a-z0-9])/` 신규 체크 추가 —
+ *   "Google SA"/"Naver SA" 채널 표기가 있으면 BOFU 태그 여부와 무관하게
+ *   Search로 확정. "sa" 뒤에 영숫자가 이어지지 않게 해 "Google SAT"(SAT
+ *   시험 캠페인) 오탐은 배제하고, "google"/"naver" 앞 경계는 `\b` 대신
+ *   `[^a-z0-9]`를 써서 언더스코어 구분자(예: "kr_core_naver-sa-brand_bofu",
+ *   `\b`는 `_`를 단어 문자로 취급해 실측 검증 중 미매칭 발견·수정)도 정상
+ *   매칭되도록 함. 신규 테스트
+ *   `testGetBusinessSegmentSearchPlatformChannelSignal()`.
  * v1.17.0 (2026-08-25)
  * - **getBusinessSegment() — campaign 키 BUSINESS_SEGMENT_EXCEPTIONS에
  *   "detail이 구체적 프로그램 신호를 주면 양보" 가드 추가**(사용자 확정).
@@ -1025,17 +1057,36 @@ function testDetailIndicatesSpecificProgram(){
 }
 
 
-function getBusinessSegment(
-  campaign,
-  detail,
-  leadSource,
-  category
-) {
+/**
+ * ==========================================================
+ * Resolve Definite Business Segment (순수 함수, 2026-08-26 신규)
+ *
+ * WHY (딕셔너리 도입에 따른 우선순위 분리 — 사용자 확정)
+ * `resolveBusinessSegment_()`(UTIL_002_UtmProgramDictionary.js)가 "Lead 유입
+ * → Dictionary 조회 → Business Segment 분류" 플로우를 도입하면서, 이 아래에
+ * 있던 정의 그대로 딕셔너리를 getBusinessSegment() 전체보다 우선시켰더니,
+ * 이미 사용자가 실측/육안 검증으로 확정한 신호(예: campaign에 "sitelink"가
+ * 있으면 무조건 Search — 2026-07-28에 49개 캠페인 직접 검증)까지 Program
+ * 단위 다수결이 근거 없이 뒤집는 사고가 발견됨(TEMPQA_034 diff, 2026-08-26
+ * — "Search → Webinar" 4건, canonicalProgram="2021-07-KOR-Book a consult
+ * page"). Exceptions/Referral/Seminar/Webinar/Google·Naver SA 채널/BOFU/
+ * Search 확정 신호까지("Content" 판정 전까지)는 이미 검증된 확정 규칙이라
+ * 딕셔너리보다 우선해야 하고, 그 뒤(Content 이후 — 범용 fallback류)만
+ * 딕셔너리가 끼어들 여지가 있어야 함(사용자 확정) — 이 경계선에서
+ * `getBusinessSegment()`를 두 조각으로 나눔. **`getBusinessSegment()` 자체의
+ * 시그니처/최종 출력은 이 리팩터로 전혀 바뀌지 않음** — 이 함수가 매치되면
+ * 그 값을 그대로 반환하고, 매치 안 되면 원래와 동일한 나머지 로직(Content
+ * 이후)으로 그대로 이어짐.
+ *
+ * INPUT/OUTPUT: getBusinessSegment()와 동일한 인자, 매치되면 Segment 문자열,
+ * 안 되면 빈 문자열("").
+ * ==========================================================
+ */
+function resolveDefiniteBusinessSegment_(campaign, detail, leadSource, category) {
 
   campaign = String(campaign || "").toLowerCase();
   detail = String(detail || "").toLowerCase();
   leadSource = String(leadSource || "").toLowerCase();
-  category = String(category || "").toLowerCase();
 
   //----------------------------------------------------------
   // Hardcoded Exceptions — campaign 키 (detail이 더 구체적인 프로그램
@@ -1121,6 +1172,33 @@ function getBusinessSegment(
   }
 
   //----------------------------------------------------------
+  // Search — 광고 플랫폼 채널 확정 신호 (Google SA / Naver SA), BOFU보다 우선
+  //
+  // WHY (2026-08-26, 사용자 확정)
+  // Marketo 캠페인 명명 규칙상 "WF-YYYY-MM-COUNTRY-BOFU-Core ..."의 "BOFU"는
+  // 퍼널 단계(Bottom of Funnel) 태그일 뿐인데(TOFU/MOFU와 같은 계열,
+  // docs/BusinessSegmentClassification.md의 "Marketo 네이밍 정정 필요 목록"
+  // 참고), 아래 BOFU 규칙(detail/campaign에 "bofu" 리터럴 포함)이 이를 그대로
+  // Business Segment=BOFU로 판정해버림. 지금까지는 BOFU 세그먼트 캠페인이
+  // 전부 Meta 리타게팅 채널이라 우연히 문제가 없었으나(BOFU_001_Config.js
+  // CHANNEL_DEFAULT: "Meta"), 처음으로 같은 퍼널 태그("BOFU")를 쓰면서 실제
+  // 채널은 Google Search Ads인 캠페인(예: "WF-2026-08-KOR-BOFU-Core Google
+  // SA Transfer-US")이 나오면서 충돌 발견 — 사용자 확정: 채널 표기(Google
+  // SA/Naver SA)가 퍼널 태그보다 우선이므로 Search로 분류. "sa" 뒤에 영숫자가
+  // 이어지지 않게 해 "Google SAT"(SAT 시험 캠페인) 오탐은 배제하고,
+  // "google"/"naver" 앞 경계는 `\b` 대신 `[^a-z0-9]`를 써서 언더스코어
+  // 구분자(예: "kr_core_naver-sa-brand_bofu")도 정상 매칭되도록 함(`\b`는
+  // `_`를 단어 문자로 취급해 실측 검증 중 미매칭 발견 후 수정).
+  //----------------------------------------------------------
+
+  if (
+    /(?:^|[^a-z0-9])(google|naver)[\s_-]+sa(?![a-z0-9])/.test(campaign) ||
+    /(?:^|[^a-z0-9])(google|naver)[\s_-]+sa(?![a-z0-9])/.test(detail)
+  ) {
+    return "Search";
+  }
+
+  //----------------------------------------------------------
   // BOFU
   //----------------------------------------------------------
 
@@ -1169,6 +1247,27 @@ function getBusinessSegment(
   ) {
     return "Search";
   }
+
+  return "";
+
+}
+
+
+function getBusinessSegment(
+  campaign,
+  detail,
+  leadSource,
+  category
+) {
+
+  const definite = resolveDefiniteBusinessSegment_(campaign, detail, leadSource, category);
+
+  if (definite) return definite;
+
+  campaign = String(campaign || "").toLowerCase();
+  detail = String(detail || "").toLowerCase();
+  leadSource = String(leadSource || "").toLowerCase();
+  category = String(category || "").toLowerCase();
 
   //----------------------------------------------------------
   // Content
@@ -1304,6 +1403,52 @@ function getBusinessSegment(
   //----------------------------------------------------------
 
   return "Other";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — getBusinessSegment() Google SA/Naver SA 채널 신호 vs BOFU 퍼널 태그 (2026-08-26)
+ *
+ * WHY
+ * "WF-2026-08-KOR-BOFU-Core Google SA Transfer-US"처럼 캠페인명에 퍼널
+ * 단계 태그 "BOFU"와 채널 표기 "Google SA"가 동시에 있는 경우 Search로
+ * 분류돼야 함(사용자 확정) — BOFU 리터럴 매칭이 우선되던 기존 버그의
+ * 회귀 테스트. 순수 "bofu" 태그만 있고 채널 표기가 없는 기존 BOFU
+ * 캠페인은 그대로 BOFU 유지되는지, "Google SAT"처럼 "sa" 뒤에 다른
+ * 글자가 붙는 경우 오탐하지 않는지도 함께 검증.
+ * ==========================================================
+ */
+function testGetBusinessSegmentSearchPlatformChannelSignal(){
+
+  const cases = [
+    // [campaign, detail, leadSource, expected]
+    ["", "WF-2026-08-KOR-BOFU-Core Google SA Transfer-US", "", "Search"],
+    ["", "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy", "", "Search"],
+    ["kr_core_naver-sa-brand_bofu", "", "", "Search"],
+    ["", "WF-2025-07-KOR-BOFU-Core B", "", "BOFU"],
+    ["", "WF-2023-05-KOR-MOFU-Core Mini Digital SAT Practice Test 2023", "", "Content"],
+    ["", "WF-2024-01-KOR-BOFU-Core Google SAT Bootcamp", "", "BOFU"]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+
+    const result = getBusinessSegment(c[0], c[1], c[2]);
+    const ok = result === c[3];
+
+    if(!ok) pass = false;
+
+    Logger.log(
+      "campaign=" + c[0] + " detail=" + c[1] + " leadSource=" + c[2] +
+      " -> " + result + " (expected " + c[3] + ") " + (ok ? "✅" : "❌")
+    );
+
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

@@ -10,9 +10,17 @@
  * 10 Master Build
  *
  * Version
- * v3.1.1
+ * v3.2.0
  *
  * Change Log
+ * v3.2.0 (2026-08-26)
+ * - `getBusinessSegment(...)` 직접 호출 → `resolveBusinessSegment_(...)`
+ *   (`UTIL_002_UtmProgramDictionary.js` 신규, 동일 인자 시그니처) 호출로 교체
+ *   — "Lead 유입 → Dictionary 조회 → Business Segment 분류" 플로우 도입(사용자
+ *   요청, docs/BusinessSegmentClassification.md 참고). Program_Segment_Dictionary
+ *   에 캐시된 값이 있으면 그걸 우선 쓰고, 없으면 내부적으로 기존
+ *   `getBusinessSegment()` 키워드 규칙 그대로 fallback — 딕셔너리가 비어있는
+ *   상태(최초 배포 시점)에서는 출력 100% 동일(회귀 없음).
  * v3.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `12_LeadTransformer.js` → 신규 `MASTER_006_LeadTransformer.js`, 코드 내용 변경 없음.
  * v3.1.0 (2026-07-25)
@@ -252,7 +260,7 @@ function transformLeadRecord(rawRecord){
     //------------------------------------------------------
 
     "Business Segment":
-      getBusinessSegment(
+      resolveBusinessSegment_(
         rawRecord["First MKT UTM Campaign"],
         rawRecord["First Touch Detail"],
         rawRecord["First Lead Source"],

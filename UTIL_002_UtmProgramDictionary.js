@@ -10,6 +10,17 @@
  * 갖고 있는 채널(예: Kakao Moments 메시지광고)이 Events_OPS 매칭용 실제
  * Marketo Program명을 자동으로 찾을 때 이 캐시를 소비한다.
  *
+ * **2026-08-26 확장**: Marketo Program명 ↔ Business Segment 매핑
+ * (`CONFIG.PROGRAM_SEGMENT_DICT.SHEET`)도 동일한 자동 채굴 패턴으로 추가하고,
+ * 두 딕셔너리를 조합해 "Lead 유입 → Dictionary 조회 → Business Segment 분류"
+ * 플로우를 구현하는 `resolveBusinessSegment_()`를 제공한다(사용자 요청,
+ * docs/BusinessSegmentClassification.md 참고) — MASTER_006_LeadTransformer.js/
+ * MASTER_007_MTATransformer.js가 기존 `getBusinessSegment()` 직접 호출 대신
+ * 이 함수를 호출하도록 전환. `getBusinessSegment()`(UTIL_001_TransformHelper.js)
+ * 자체는 시그니처/로직 변경 없음 — 여전히 유일한 키워드 기반 분류 로직
+ * 소유자이며, 딕셔너리는 그 앞에 놓이는 조회 우선순위 레이어일 뿐이다.
+ * 딕셔너리가 비어있으면(최초 배포 시점) 100% 기존과 동일하게 동작한다.
+ *
  * WHY (2026-08-08, 사용자 요청)
  * Kakao Moments 메시지 이름("KR_core_2026-08-08_ec-each-year-kakao-online-event")과
  * Events_OPS 매칭용 실제 Marketo Program명("WB-2026-07-KOR-MOFU-Core...")은
@@ -29,17 +40,61 @@
  * 않고 캐시 시트에서 육안 검토 가능하게 남긴다.
  *
  * Must NOT
- * - 자동 파이프라인(08_PipelineAsync.js)에 얹지 않음 — MTA_Master 전체
- *   스캔(8만 행+)은 QA성 무거운 작업이라 수동/가끔 실행 전용(사용자 확정,
- *   docs/OpenItems.md #19 때와 동일 신중 원칙). 필요해지면 별도 요청 시 검토.
+ * - **appendNewLeads()/appendNewMTA() 같은 리드 유입 파이프라인(매 append마다
+ *   도는 경로)에 갱신(refresh) 자체를 얹지 않음** — MTA_Master/Leads_Master
+ *   전체 스캔(12만 행+)은 무거운 작업이라 레코드 단위 호출과는 별개 스케줄로
+ *   분리해야 함(사용자 확정, docs/OpenItems.md #19 때와 동일 신중 원칙).
+ *   **2026-08-26부터 갱신은 별도의 주기적 시간 트리거**(`periodicRefreshDictionaries_()`,
+ *   `runInstallDictionaryPeriodicRefreshTrigger()` 참고)로 자동화하되, 리드
+ *   유입 파이프라인과는 완전히 독립된 스케줄 — 리드 유입 시엔 캐시를
+ *   "조회"만 하고(`resolveBusinessSegment_()`) 절대 재채굴하지 않는다.
  * - 71_Search_Engine.js의 SEARCH_UTM_TO_PROGRAM_OVERRIDE/
  *   resolveSearchEngineKey_()는 건드리지 않음(기존 출력 변경 금지 원칙) —
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.4.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-08-26)
+ * - **`resolveBusinessSegmentPure_()` 우선순위 재조정(사용자 확정, 배포 직후
+ *   TEMPQA_034 diff로 발견) — 딕셔너리 조회보다 `resolveDefiniteBusinessSegment_()`
+ *   (신규, UTIL_001_TransformHelper.js v1.19.0)를 먼저 체크**. 원인: 딕셔너리를
+ *   무조건 최우선으로 뒀더니 이미 사용자가 검증한 확정 신호(campaign의
+ *   "sitelink" 등)까지 Program 다수결이 근거 없이 뒤집는 사고 발생("Search →
+ *   Webinar" 4건). 이제 확정 신호에 안 걸릴 때만(Content 이후 범용 fallback류)
+ *   딕셔너리가 개입 — 딕셔너리가 원래 의도대로 돕던 케이스(blank detail 등
+ *   확정 신호 자체가 없는 리드)는 그대로 유지. `testResolveBusinessSegmentPure()`
+ *   갱신(확정 신호가 딕셔너리를 이기는 회귀 케이스 추가) PASS.
+
+ * v1.5.0 (2026-08-26)
+ * - **"Lead 유입 → Dictionary 조회 → Business Segment 분류" 플로우 도입(사용자
+ *   요청)**. 신규: `readLeadsMasterProgramSegmentPairs_()`/
+ *   `readMtaMasterProgramSegmentPairs_()`(IO, Program↔Business Segment 쌍
+ *   읽기) → `aggregateProgramSegmentCounts_()`/`resolveProgramSegmentDictionaryEntries_()`
+ *   (순수, 기존 UTM↔Program 채굴과 동일한 다수결+확신도 패턴) →
+ *   `refreshProgramSegmentDictionary_()`(IO, `CONFIG.PROGRAM_SEGMENT_DICT.SHEET`
+ *   에 캐시) → `readProgramSegmentDictionaryMap_()`(캐시 읽기, 애매한 항목
+ *   제외). `resolveCanonicalProgram_()`(순수, detail 있으면 그대로·없으면 UTM
+ *   딕셔너리로 역매핑) + `resolveBusinessSegmentPure_()`(순수, Program↔Segment
+ *   딕셔너리 히트 시 그 값, 미스 시 기존 `getBusinessSegment()` 그대로 fallback)
+ *   + `resolveBusinessSegment_()`(IO 래퍼, 두 캐시 map을 읽어 위임 —
+ *   MASTER_006_LeadTransformer.js/MASTER_007_MTATransformer.js의 신규 호출
+ *   대상). `readUtmProgramDictionaryMap_()`/`readProgramSegmentDictionaryMap_()`
+ *   둘 다 **모듈 스코프 메모이제이션** 추가 — 리드 유입 시 행마다 호출돼도
+ *   스크립트 실행 1회당 시트를 1번만 읽음(기존 Kakao Moments 동기화당 1회
+ *   호출 전제가 깨지므로 필수, 성능 회귀 방지). 신규
+ *   `periodicRefreshDictionaries_()`(트리거 핸들러, UTM→Program 다음
+ *   Program→Segment 순으로 재채굴)/`runInstallDictionaryPeriodicRefreshTrigger()`
+ *   (수동 1회 실행, `AD_004_SpendCache.js`의 `runInstallAdSpendPeriodicRefreshTrigger()`
+ *   패턴 그대로 미러링 — `deleteTriggersByHandlerName_()` 재사용으로 중복
+ *   설치 방지 + `CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS` 시간마다
+ *   자동 재채굴). `getBusinessSegment()`(UTIL_001_TransformHelper.js)는
+ *   시그니처/로직 변경 없음 — 딕셔너리가 비어있으면(최초 배포 시점)
+ *   `resolveBusinessSegment_()`는 100% 기존과 동일하게 동작(회귀 없음).
+ *   신규 테스트: `testAggregateProgramSegmentCounts()`,
+ *   `testResolveProgramSegmentDictionaryEntries()`, `testResolveCanonicalProgram()`,
+ *   `testResolveBusinessSegmentPure()`.
  * v1.4.0 (2026-08-19)
  * - `readLeadsMasterUtmProgramPairs_()` 신규(Leads_Master `First MKT UTM
  *   Campaign`↔`First Touch Detail`, 리드 단위) — 사용자 요청으로 v1.0.0에서
@@ -374,8 +429,9 @@ function testResolveUtmProgramDictionaryEntries(){
  * MTA_Master 전체를 훑어 딕셔너리를 다시 채굴하고 캐시 시트를 통째로
  * 재작성한다(refreshAdSpendCache_()/refreshSearchEngine_()과 동일한 전체
  * 재빌드 관행 — clearContents→재작성→hideSheet→flush). MTA_Master 전체
- * 스캔(8만 행+)이라 무거움, 자동 파이프라인엔 얹지 않고 사용자가 필요할
- * 때(신규 캠페인/프로그램이 늘었을 때 등) 직접 Run.
+ * 스캔(8만 행+)이라 무거움 — 리드 유입 파이프라인(매 append)에는 얹지 않고,
+ * 수동(`runRefreshUtmProgramDictionary()`) 또는 별도의 주기적 시간 트리거
+ * (`periodicRefreshDictionaries_()`, 2026-08-26 추가)로만 호출.
  * ==========================================================
  */
 function refreshUtmProgramDictionary_(){
@@ -409,6 +465,8 @@ function refreshUtmProgramDictionary_(){
   sheet.hideSheet();
 
   SpreadsheetApp.flush();
+
+  _utmProgramDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
 
   const ambiguousCount = entries.filter(function(e){ return e.distinctProgramCount > 1; }).length;
 
@@ -453,16 +511,29 @@ function runRefreshUtmProgramDictionary(){
  * OUTPUT
  * Object  { utmKeyLower: Marketo Program명 }  Distinct Program Count === 1인
  *   항목만
+ * **메모이제이션(2026-08-26 추가)**: 원래 Kakao Moments 동기화당 1회 호출
+ * 전제였으나, `resolveBusinessSegment_()`가 리드/터치 행마다 이 함수를
+ * 호출하게 되면서(Full Rebuild 시 12만 행+) 매번 시트를 다시 읽으면 성능
+ * 회귀가 발생함 — 스크립트 실행 1회당 1번만 읽고 이후는 모듈 스코프 변수
+ * (`_utmProgramDictCache`)에서 반환. 다음 별도 실행에서는 초기화됨(정상
+ * GAS 패턴, 캐시가 stale해질 위험 없음).
  * ==========================================================
  */
+let _utmProgramDictCache = null;
+
 function readUtmProgramDictionaryMap_(){
+
+  if(_utmProgramDictCache) return _utmProgramDictCache;
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.UTM_PROGRAM_DICT.SHEET);
 
   const map = {};
 
-  if(!sheet) return map;
+  if(!sheet){
+    _utmProgramDictCache = map;
+    return map;
+  }
 
   const values = sheet.getDataRange().getValues();
 
@@ -475,6 +546,8 @@ function readUtmProgramDictionaryMap_(){
     map[String(values[i][0] || "").trim().toLowerCase()] = values[i][1];
 
   }
+
+  _utmProgramDictCache = map;
 
   return map;
 
@@ -771,5 +844,676 @@ function runDebugMtaMasterTouchesForUtm(){
       maxLeadsToLog + "명만 출력)"
     );
   }
+
+}
+
+
+/**
+ * ==========================================================
+ * Program Segment Dictionary Headers (같은 스프레드시트 안 숨김 캐시 시트,
+ * 2026-08-26 신규)
+ * ==========================================================
+ */
+const PROGRAM_SEGMENT_DICT_HEADERS = [
+  "Marketo Program", "Business Segment", "Match Count", "Total Count", "Distinct Segment Count"
+];
+
+
+/**
+ * ==========================================================
+ * Read Leads Master Program/Segment Pairs (IO 래퍼, 2026-08-26 신규)
+ *
+ * WHY
+ * Leads_Master는 리드 단위 첫 터치 스냅샷이라 `First Touch Detail`(실제
+ * Marketo Program명)과 `Business Segment`(그 리드의 확정 분류값, 과거
+ * getBusinessSegment() 호출 결과가 이미 기록돼있음)가 한 행에 같이 있다 —
+ * readLeadsMasterUtmProgramPairs_()와 동일한 원리로 Program→Segment
+ * 다수결 채굴의 소스가 된다.
+ *
+ * OUTPUT
+ * Array<{program:string, segment:string}>  둘 다 비어있지 않은 행만
+ * ==========================================================
+ */
+function readLeadsMasterProgramSegmentPairs_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < 2 || lastCol === 0) return [];
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function(h){ return String(h).trim(); });
+
+  const programCol = headers.indexOf("First Touch Detail");
+  const segmentCol = headers.indexOf("Business Segment");
+
+  if(programCol === -1 || segmentCol === -1){
+    throw new Error(
+      "Leads_Master에서 'First Touch Detail'/'Business Segment' 컬럼을 못 찾음 — " +
+      "실제 헤더: " + JSON.stringify(headers)
+    );
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  return values
+    .map(function(row){
+      return {
+        program: String(row[programCol] || "").trim(),
+        segment: String(row[segmentCol] || "").trim()
+      };
+    })
+    .filter(function(pair){ return !!pair.program && !!pair.segment; });
+
+}
+
+
+/**
+ * ==========================================================
+ * Read MTA Master Program/Segment Pairs (IO 래퍼, 2026-08-26 신규)
+ *
+ * WHY
+ * MTA_Master는 터치 단위라 `Lead Source Detail`(실제 Marketo Program명)과
+ * `Business Segment`가 한 행에 같이 있다 — Leads_Master보다 표본이 훨씬
+ * 많아(터치마다 N개) 다수결 신뢰도가 높음. readMtaMasterUtmProgramPairs_()
+ * 와 동일한 원리의 2차 소스(additive, Leads_Master를 대체하지 않음).
+ *
+ * OUTPUT
+ * Array<{program:string, segment:string}>  둘 다 비어있지 않은 행만
+ * ==========================================================
+ */
+function readMtaMasterProgramSegmentPairs_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < 2 || lastCol === 0) return [];
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function(h){ return String(h).trim(); });
+
+  const programCol = headers.indexOf("Lead Source Detail");
+  const segmentCol = headers.indexOf("Business Segment");
+
+  if(programCol === -1 || segmentCol === -1){
+    throw new Error(
+      "MTA_Master에서 'Lead Source Detail'/'Business Segment' 컬럼을 못 찾음 — " +
+      "실제 헤더: " + JSON.stringify(headers)
+    );
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  return values
+    .map(function(row){
+      return {
+        program: String(row[programCol] || "").trim(),
+        segment: String(row[segmentCol] || "").trim()
+      };
+    })
+    .filter(function(pair){ return !!pair.program && !!pair.segment; });
+
+}
+
+
+/**
+ * ==========================================================
+ * Aggregate Program/Segment Counts (순수 함수, 2026-08-26 신규)
+ *
+ * WHY
+ * program(trim 키, 대소문자 구분 유지 — 조회 시 lower 비교는 별도 단계에서)
+ * 별로 같이 등장한 Business Segment 각각의 횟수를 센다 — 다음 단계
+ * (resolveProgramSegmentDictionaryEntries_())가 다수결 채택 + 확신도 계산에
+ * 쓴다. aggregateUtmProgramCounts_()와 동일 구조.
+ *
+ * INPUT
+ * pairs : Array<{program, segment}>
+ *
+ * OUTPUT
+ * Object  { programKeyLower: { "Segment명": count, ... }, ... }
+ *
+ * TEST
+ * testAggregateProgramSegmentCounts() 참고
+ * ==========================================================
+ */
+function aggregateProgramSegmentCounts_(pairs){
+
+  const counts = {};
+
+  (pairs || []).forEach(function(pair){
+
+    const programKey = String(pair.program || "").trim().toLowerCase();
+    const segment = String(pair.segment || "").trim();
+
+    if(!programKey || !segment) return;
+
+    if(!counts[programKey]) counts[programKey] = {};
+
+    counts[programKey][segment] = (counts[programKey][segment] || 0) + 1;
+
+  });
+
+  return counts;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateProgramSegmentCounts_()
+ * ==========================================================
+ */
+function testAggregateProgramSegmentCounts(){
+
+  const pairs = [
+    { program: "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy", segment: "Search" },
+    { program: "wf-2026-08-kor-bofu-core google sa college specific-ivy", segment: "Search" }, // 대소문자만 다름 — 같은 키
+    { program: "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy", segment: "Search" },
+    { program: "WF-2026-08-KOR-BOFU-Core Google SA College Specific-Ivy", segment: "BOFU" }, // 소수 예외 — 별도 항목
+    { program: "2025-07-KOR-BOFU-Core B", segment: "BOFU" }
+  ];
+
+  const result = aggregateProgramSegmentCounts_(pairs);
+
+  const pass =
+    result["wf-2026-08-kor-bofu-core google sa college specific-ivy"]["Search"] === 3 &&
+    result["wf-2026-08-kor-bofu-core google sa college specific-ivy"]["BOFU"] === 1 &&
+    result["2025-07-kor-bofu-core b"]["BOFU"] === 1 &&
+    Object.keys(result).length === 2;
+
+  Logger.log("Result: " + JSON.stringify(result, null, 2));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Program Segment Dictionary Entries (순수 함수, 2026-08-26 신규)
+ *
+ * WHY
+ * program별로 최다 등장 Business Segment(다수결)를 채택하고, 채택 확신도를
+ * 같이 계산한다 — resolveUtmProgramDictionaryEntries_()와 동일 규칙. 동점
+ * (최다 등장 Segment가 여러 개)이면 알파벳순으로 먼저 오는 쪽을 채택
+ * (결정적 결과 보장 목적, 우선순위 의미 없음).
+ *
+ * INPUT
+ * counts : Object  aggregateProgramSegmentCounts_() 반환값
+ *
+ * OUTPUT
+ * Array<{program, segment, matchCount, totalCount, distinctSegmentCount}>
+ *   program 알파벳순 정렬
+ *
+ * TEST
+ * testResolveProgramSegmentDictionaryEntries() 참고
+ * ==========================================================
+ */
+function resolveProgramSegmentDictionaryEntries_(counts){
+
+  const programKeys = Object.keys(counts || {}).sort();
+
+  return programKeys.map(function(programKey){
+
+    const segmentCounts = counts[programKey];
+    const segmentNames = Object.keys(segmentCounts).sort();
+
+    let winner = segmentNames[0];
+    let totalCount = 0;
+
+    segmentNames.forEach(function(name){
+      totalCount += segmentCounts[name];
+      if(segmentCounts[name] > segmentCounts[winner]) winner = name;
+    });
+
+    return {
+      program: programKey,
+      segment: winner,
+      matchCount: segmentCounts[winner],
+      totalCount: totalCount,
+      distinctSegmentCount: segmentNames.length
+    };
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveProgramSegmentDictionaryEntries_()
+ * ==========================================================
+ */
+function testResolveProgramSegmentDictionaryEntries(){
+
+  const counts = {
+    "wf-2026-08-kor-bofu-core google sa college specific-ivy": { "Search": 8 },
+    "2025-12-kor-naver sa & google ivy league": { "Search": 42, "Other": 1 },
+    "kr_core_tie-program": { "Segment A": 2, "Segment B": 2 } // 동점 — 알파벳순 "Segment A" 채택
+  };
+
+  const result = resolveProgramSegmentDictionaryEntries_(counts);
+
+  const first = result.filter(function(e){ return e.program === "2025-12-kor-naver sa & google ivy league"; })[0];
+  const ivy = result.filter(function(e){ return e.program === "wf-2026-08-kor-bofu-core google sa college specific-ivy"; })[0];
+  const tie = result.filter(function(e){ return e.program === "kr_core_tie-program"; })[0];
+
+  const pass =
+    result.length === 3 &&
+    first.segment === "Search" &&
+    first.matchCount === 42 &&
+    first.totalCount === 43 &&
+    first.distinctSegmentCount === 2 &&
+    ivy.segment === "Search" &&
+    ivy.matchCount === 8 &&
+    ivy.distinctSegmentCount === 1 &&
+    tie.segment === "Segment A" &&
+    tie.matchCount === 2;
+
+  Logger.log("Result: " + JSON.stringify(result, null, 2));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh Program Segment Dictionary (IO 래퍼 — 수동/주기 트리거 전용,
+ * 2026-08-26 신규)
+ *
+ * WHY
+ * Leads_Master + MTA_Master 전체를 훑어 Program→Business Segment 딕셔너리를
+ * 다시 채굴하고 캐시 시트를 통째로 재작성한다. refreshUtmProgramDictionary_()
+ * 와 완전히 동일한 패턴(clearContents→재작성→hideSheet→flush) — 무거운
+ * 전체 스캔이라 리드 유입 파이프라인에는 얹지 않고, 수동
+ * (`runRefreshProgramSegmentDictionary()`) 또는 주기적 시간 트리거
+ * (`periodicRefreshDictionaries_()`)로만 호출.
+ * ==========================================================
+ */
+function refreshProgramSegmentDictionary_(){
+
+  const pairs = readMtaMasterProgramSegmentPairs_().concat(readLeadsMasterProgramSegmentPairs_());
+  const counts = aggregateProgramSegmentCounts_(pairs);
+  const entries = resolveProgramSegmentDictionaryEntries_(counts);
+
+  const rows = entries.map(function(e){
+    return [e.program, e.segment, e.matchCount, e.totalCount, e.distinctSegmentCount];
+  });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(CONFIG.PROGRAM_SEGMENT_DICT.SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(CONFIG.PROGRAM_SEGMENT_DICT.SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, PROGRAM_SEGMENT_DICT_HEADERS.length)
+    .setValues([PROGRAM_SEGMENT_DICT_HEADERS]);
+
+  if(rows.length > 0){
+    sheet.getRange(2, 1, rows.length, PROGRAM_SEGMENT_DICT_HEADERS.length)
+      .setValues(rows);
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+  _programSegmentDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
+
+  const ambiguousCount = entries.filter(function(e){ return e.distinctSegmentCount > 1; }).length;
+
+  Logger.log(
+    "Program_Segment_Dictionary 갱신 완료: " + rows.length + "개 Program 키(모호한 키 " +
+    ambiguousCount + "개 — Distinct Segment Count > 1)."
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — refreshProgramSegmentDictionary_() 수동 실행용 공개 진입점
+ * ==========================================================
+ */
+function runRefreshProgramSegmentDictionary(){
+
+  refreshProgramSegmentDictionary_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Program Segment Dictionary Map (같은 스프레드시트 안 캐시 읽기 —
+ * Simple Trigger 안전, 2026-08-26 신규)
+ *
+ * WHY
+ * readUtmProgramDictionaryMap_()과 동일한 모양 — 외부 열기/API 호출 없이
+ * 캐시 시트만 읽는다. **Distinct Segment Count > 1(애매한 Program, 예: 정책
+ * 변경 중간에 같은 이름이 재사용된 경우)은 제외한다** — 다수결로 하나를
+ * 찍어도 틀린 Segment가 자동으로 채워질 위험이 있어, 이런 Program은 이
+ * 맵에서 아예 빠지고 소비처(`resolveBusinessSegmentPure_()`)가 기존
+ * `getBusinessSegment()` 키워드 규칙으로 fallback한다. Program이 실제로
+ * Segment 1개와만 짝지어진(distinctSegmentCount === 1) 확실한 경우만 반환.
+ *
+ * **메모이제이션**: readUtmProgramDictionaryMap_()과 동일 이유 — 리드
+ * 유입 시 행마다 호출돼도 스크립트 실행 1회당 1번만 읽음.
+ *
+ * OUTPUT
+ * Object  { programKeyLower: Business Segment명 }  Distinct Segment Count === 1인
+ *   항목만
+ * ==========================================================
+ */
+let _programSegmentDictCache = null;
+
+function readProgramSegmentDictionaryMap_(){
+
+  if(_programSegmentDictCache) return _programSegmentDictCache;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.PROGRAM_SEGMENT_DICT.SHEET);
+
+  const map = {};
+
+  if(!sheet){
+    _programSegmentDictCache = map;
+    return map;
+  }
+
+  const values = sheet.getDataRange().getValues();
+
+  for(let i = 1; i < values.length; i++){
+
+    const distinctSegmentCount = Number(values[i][4]);
+
+    if(distinctSegmentCount !== 1) continue; // 애매한 Program 제외
+
+    map[String(values[i][0] || "").trim().toLowerCase()] = values[i][1];
+
+  }
+
+  _programSegmentDictCache = map;
+
+  return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Canonical Program (순수 함수, 2026-08-26 신규)
+ *
+ * WHY
+ * detail(Lead Source Detail / First Touch Detail)이 이미 실제 Marketo
+ * Program명인 경우가 대다수라 그대로 신뢰 — detail이 비어있는 소수 터치만
+ * UTM_Program_Dictionary로 raw UTM(campaign)을 역매핑해 보완한다
+ * (SEARCH_UTM_TO_PROGRAM_OVERRIDE가 원래 하려던 것과 같은 목적을 자동
+ * 채굴로 일반화).
+ *
+ * INPUT
+ * campaignRaw   : string  raw UTM Campaign
+ * detailRaw     : string  Lead Source Detail / First Touch Detail
+ * utmProgramMap : Object  readUtmProgramDictionaryMap_() 반환값
+ *
+ * OUTPUT
+ * string  canonical Program명(못 찾으면 빈 문자열)
+ *
+ * TEST
+ * testResolveCanonicalProgram() 참고
+ * ==========================================================
+ */
+function resolveCanonicalProgram_(campaignRaw, detailRaw, utmProgramMap){
+
+  const detail = String(detailRaw || "").trim();
+
+  if(detail) return detail;
+
+  const utmKey = String(campaignRaw || "").trim().toLowerCase();
+
+  return (utmProgramMap && utmProgramMap[utmKey]) || "";
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveCanonicalProgram_()
+ * ==========================================================
+ */
+function testResolveCanonicalProgram(){
+
+  const utmProgramMap = {
+    "kr_core_transfer-gap-year-kr": "2025-11-KOR-Naver SA Transfer and Gap Year"
+  };
+
+  const pass =
+    resolveCanonicalProgram_("kr_core_transfer-gap-year-kr", "WF-2026-08-KOR-BOFU-Core Google SA Transfer-US", utmProgramMap)
+      === "WF-2026-08-KOR-BOFU-Core Google SA Transfer-US" && // detail 있으면 그대로(우선)
+    resolveCanonicalProgram_("kr_core_transfer-gap-year-kr", "", utmProgramMap)
+      === "2025-11-KOR-Naver SA Transfer and Gap Year" && // detail 없으면 UTM 딕셔너리로 역매핑
+    resolveCanonicalProgram_("kr_core_unknown-utm", "", utmProgramMap) === "" && // 둘 다 없음
+    resolveCanonicalProgram_("", "", utmProgramMap) === "";
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Business Segment Pure (순수 함수, 2026-08-26 신규)
+ *
+ * WHY (사용자 요청 — "Lead 유입 → Dictionary 조회 → Business Segment 분류")
+ * canonicalProgram을 먼저 확정한 뒤 Program_Segment_Dictionary에서 그
+ * Program의 자동 채굴된(다수결) Business Segment를 조회 — 있으면 즉시
+ * 반환(딕셔너리 우선, 사용자 확정). 딕셔너리에 없는 경우(완전히 신규인
+ * Program, 또는 애매해서 제외된 Program)만 기존
+ * `getBusinessSegment()`(UTIL_001_TransformHelper.js) 키워드 규칙으로
+ * fallback — 그 함수의 시그니처/로직은 전혀 건드리지 않는다(Article 7,
+ * 유일한 Business Logic 소유자 유지).
+ *
+ * **우선순위 재조정(2026-08-26, 사용자 확정 — 배포 직후 TEMPQA_034 diff로
+ * 발견)**: 최초 버전은 딕셔너리를 무조건 최우선으로 뒀는데, 그러면 이미
+ * 사용자가 실측/육안 검증으로 확정한 신호(Referral의 leadSource, campaign의
+ * "search"/"sitelink" — 2026-07-28에 49개 캠페인 직접 검증, 오늘 만든 Google
+ * SA/Naver SA 채널 신호 등, `resolveDefiniteBusinessSegment_()` 참고)까지
+ * Program 단위 다수결이 근거 없이 뒤집는 사고가 실제로 발견됨("Search →
+ * Webinar" 4건, canonicalProgram="2021-07-KOR-Book a consult page" — 검증된
+ * "sitelink" 신호가 있는데도 Program 다수결이 Webinar로 덮어씀). 이제
+ * `getBusinessSegment()`의 확정 신호 구간(`resolveDefiniteBusinessSegment_()`,
+ * Exceptions~Search 확정 신호까지)을 **딕셔너리보다 먼저** 체크하고, 거기서
+ * 안 걸릴 때만(Content 이후에 해당하는 범용 fallback류) 딕셔너리를 참조한다.
+ *
+ * 왜 순환 의존이 아닌가: programSegmentMap은 Leads_Master/MTA_Master에
+ * **이미 기록된**(과거 getBusinessSegment() 호출로 확정된) Business Segment
+ * 값을 다수결 집계한 것 — 이 함수 호출 시점에 재귀적으로 재계산하는 게
+ * 아니라 별도 스케줄(주기적 트리거)로 미리 채굴해둔 캐시를 읽을 뿐이다.
+ * "과거의 합의가 미래 리드를 안내"하는 시간적으로 분리된 패턴.
+ *
+ * INPUT
+ * campaign, detail, leadSource, category : string  getBusinessSegment()와 동일
+ * programSegmentMap : Object  readProgramSegmentDictionaryMap_() 반환값
+ * utmProgramMap     : Object  readUtmProgramDictionaryMap_() 반환값
+ *
+ * OUTPUT
+ * string  Business Segment
+ *
+ * TEST
+ * testResolveBusinessSegmentPure() 참고
+ * ==========================================================
+ */
+function resolveBusinessSegmentPure_(campaign, detail, leadSource, category, programSegmentMap, utmProgramMap){
+
+  const definite = resolveDefiniteBusinessSegment_(campaign, detail, leadSource, category);
+
+  if(definite) return definite;
+
+  const canonicalProgram = resolveCanonicalProgram_(campaign, detail, utmProgramMap);
+
+  if(canonicalProgram){
+
+    const segment = (programSegmentMap || {})[canonicalProgram.trim().toLowerCase()];
+
+    if(segment) return segment;
+
+  }
+
+  return getBusinessSegment(campaign, detail, leadSource, category);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveBusinessSegmentPure_()
+ * ==========================================================
+ */
+function testResolveBusinessSegmentPure(){
+
+  const programSegmentMap = {
+    "some custom nurture drip program": "Content",
+    "2025-12-kor-naver sa & google ivy league": "Webinar" // 실제로는 사용자 검증된 "Book a consult page"와 유사한 오염 시나리오 재현용
+  };
+  const utmProgramMap = {
+    "kr_core_2021-04-01_search-kr_tier1-college-specific_contact": "2025-12-KOR-Naver SA & Google Ivy League",
+    "kr_core_2025-01-01_random-slug-xyz": "2025-12-KOR-Naver SA & Google Ivy League"
+  };
+
+  // 딕셔너리 히트 — 확정 신호(Exceptions/Referral/Seminar/Webinar/Google·Naver SA
+  // 채널/BOFU/Search 확정)에 전혀 안 걸리는 순수 신규 Program명이 딕셔너리에
+  // 있으면 그 값을 바로 반환
+  const hit = resolveBusinessSegmentPure_(
+    "", "Some Custom Nurture Drip Program", "", "",
+    programSegmentMap, utmProgramMap
+  );
+
+  // 딕셔너리 미스(둘 다 빈 map) — 기존 getBusinessSegment()와 완전히 동일해야 함
+  // ("bofu" 리터럴 포함 + Google SA 채널 신호 없음 → BOFU, 오늘 세션 회귀 케이스)
+  const missFallback = resolveBusinessSegmentPure_(
+    "", "WF-2025-07-KOR-BOFU-Core B", "", "", {}, {}
+  );
+  const directFallback = getBusinessSegment("", "WF-2025-07-KOR-BOFU-Core B", "", "");
+
+  // ⚠️ 회귀 케이스(2026-08-26, TEMPQA_034 diff로 발견) — campaign에 "sitelink"가
+  // 있어 resolveDefiniteBusinessSegment_()가 이미 "Search"로 확정하는데, 같은
+  // raw UTM이 UTM 딕셔너리를 거쳐 canonicalProgram으로 번역되고 그 Program이
+  // programSegmentMap에서 "Webinar"로 매핑돼 있어도(오염된/다수결로 다른 값이
+  // 채굴된 시나리오) **확정 신호가 이겨야 함** — 딕셔너리가 검증된 규칙을
+  // 덮어쓰면 안 됨.
+  const definiteBeatsDict = resolveBusinessSegmentPure_(
+    "KR_core_2025_01_01_sitelink-ext-bookconsultv2_lead", "", "", "",
+    programSegmentMap, utmProgramMap
+  );
+
+  // detail 비어있고 campaign(raw UTM, 확정 신호 없는 순수 슬러그)만 있는 경우 —
+  // UTM 딕셔너리로 canonicalProgram 역매핑 후 Program_Segment_Dictionary
+  // 조회 — programSegmentMap에 그 Program이 있으므로("Webinar") 딕셔너리 값 채택
+  const utmDictHit = resolveBusinessSegmentPure_(
+    "KR_core_2025-01-01_random-slug-xyz", "", "", "",
+    programSegmentMap, utmProgramMap
+  );
+
+  const pass =
+    hit === "Content" &&
+    missFallback === directFallback &&
+    missFallback === "BOFU" &&
+    definiteBeatsDict === "Search" &&
+    utmDictHit === "Webinar";
+
+  Logger.log(
+    "hit=" + hit + " missFallback=" + missFallback + " directFallback=" + directFallback +
+    " definiteBeatsDict=" + definiteBeatsDict + " utmDictHit=" + utmDictHit
+  );
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Business Segment (IO 래퍼, 2026-08-26 신규)
+ *
+ * WHY
+ * MASTER_006_LeadTransformer.js/MASTER_007_MTATransformer.js가 기존
+ * `getBusinessSegment(...)` 직접 호출 대신 이 함수를 호출하도록 전환하는
+ * 것이 이번 작업의 핵심 진입점 — 두 캐시 map을 읽어(메모이제이션 적용,
+ * 스크립트 실행 1회당 1번만 시트 읽음) `resolveBusinessSegmentPure_()`에
+ * 위임한다. 두 캐시 시트가 모두 비어있으면(최초 배포 시점) 100% 기존
+ * `getBusinessSegment()`와 동일하게 동작 — 배포 자체는 무위험.
+ *
+ * INPUT/OUTPUT: getBusinessSegment()와 완전히 동일한 시그니처.
+ * ==========================================================
+ */
+function resolveBusinessSegment_(campaign, detail, leadSource, category){
+
+  const programSegmentMap = readProgramSegmentDictionaryMap_();
+  const utmProgramMap = readUtmProgramDictionaryMap_();
+
+  return resolveBusinessSegmentPure_(campaign, detail, leadSource, category, programSegmentMap, utmProgramMap);
+
+}
+
+
+/**
+ * ==========================================================
+ * Periodic Refresh Dictionaries (트리거 핸들러, 2026-08-26 신규)
+ *
+ * WHY
+ * UTM_Program_Dictionary → Program_Segment_Dictionary 순서로 재채굴한다
+ * (Program_Segment_Dictionary는 Program명을 직접 Master에서 읽으므로 순서
+ * 자체가 결과에 영향을 주진 않지만, "리드 분류 딕셔너리 2단계" 개념 순서를
+ * 코드에도 반영). `AD_004_SpendCache.js`의 `periodicRefreshAdSpendCache_()`
+ * 와 동일한 "트리거가 직접 호출하는 핸들러" 역할 — 리드 유입 파이프라인과는
+ * 완전히 독립된 스케줄로 동작.
+ * ==========================================================
+ */
+function periodicRefreshDictionaries_(){
+
+  refreshUtmProgramDictionary_();
+  refreshProgramSegmentDictionary_();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — periodicRefreshDictionaries_() 시간 트리거 설치(최초 1회 수동
+ * 실행 전용, 2026-08-26 신규)
+ *
+ * WHY
+ * `ScriptApp.newTrigger()`로 트리거를 설치하려면 Full Authorization이
+ * 필요해 사람이 Apps Script 편집기에서 직접 한 번 Run 해야 한다
+ * (AD_004_SpendCache.js의 runInstallAdSpendPeriodicRefreshTrigger()와 동일
+ * 패턴). 재실행해도 안전하도록 설치 전 같은 핸들러의 기존 트리거를 먼저
+ * 지운다(deleteTriggersByHandlerName_(), MASTER_002_PipelineAsync.js 재사용)
+ * — 중복 설치 방지.
+ * ==========================================================
+ */
+function runInstallDictionaryPeriodicRefreshTrigger(){
+
+  deleteTriggersByHandlerName_("periodicRefreshDictionaries_");
+
+  ScriptApp.newTrigger("periodicRefreshDictionaries_")
+    .timeBased()
+    .everyHours(CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS)
+    .create();
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " Dictionary(UTM_Program_Dictionary + Program_Segment_Dictionary) " +
+    "주기적 갱신 트리거 등록 완료 (매 " + CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS + "시간)."
+  );
 
 }

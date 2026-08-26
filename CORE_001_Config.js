@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.45.0
+ * v1.46.0
  *
  * Change Log
+ * v1.46.0 (2026-08-26)
+ * - `CONFIG.PROGRAM_SEGMENT_DICT.SHEET`("Program_Segment_Dictionary")/
+ *   `CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS`(12) 신규 — "Lead 유입 →
+ *   Dictionary 조회 → Business Segment 분류" 플로우 도입(사용자 요청,
+ *   docs/BusinessSegmentClassification.md 참고). `UTIL_002_UtmProgramDictionary.js`
+ *   가 소비.
  * v1.45.0 (2026-08-26)
  * - `CONFIG.PROPERTIES.PIPELINE_STATUS_ICFUNNEL` 신규 — README Pipeline
  *   Status 표에 IC Funnel을 3번째 행으로 추가(`MASTER_002_PipelineAsync.js`
@@ -341,6 +347,32 @@ const CONFIG = {
      */
   UTM_PROGRAM_DICT: {
     SHEET: "UTM_Program_Dictionary"
+  },
+
+  /**
+     * PROGRAM_SEGMENT_DICT — Marketo Program명 ↔ Business Segment 딕셔너리
+     * (2026-08-26 신규, docs/BusinessSegmentClassification.md 해당 항목 참고).
+     * Leads_Master/MTA_Master(First Touch Detail·Lead Source Detail ↔ Business
+     * Segment)에서 자동으로 채굴해 같은 스프레드시트 안 숨김 시트에 캐시
+     * (UTIL_002_UtmProgramDictionary.js `refreshProgramSegmentDictionary_()`).
+     * `resolveBusinessSegment_()`가 getBusinessSegment() 키워드 규칙보다
+     * 먼저 참조 — "Lead 유입 → Dictionary 조회 → Business Segment 분류" 플로우의
+     * 2단계(1단계는 기존 UTM_PROGRAM_DICT).
+     */
+  PROGRAM_SEGMENT_DICT: {
+    SHEET: "Program_Segment_Dictionary"
+  },
+
+  /**
+     * DICTIONARY_REFRESH — UTM_PROGRAM_DICT/PROGRAM_SEGMENT_DICT 주기적 자동
+     * 재채굴 트리거 간격(2026-08-26 신규). `ScriptApp.newTrigger().timeBased()
+     * .everyHours()`가 받는 값 — 허용값은 1/2/4/6/8/12(AD_001_Config.js
+     * AD.SPEND_CACHE.PERIODIC_REFRESH_INTERVAL_HOURS 주석 참고). 두 딕셔너리
+     * 합쳐 Leads_Master(3.7만+)/MTA_Master(8.6만+) 전체를 스캔하는 무거운
+     * 작업이라 Ad Spend Cache(4시간)보다 뜸하게 12시간으로 설정.
+     */
+  DICTIONARY_REFRESH: {
+    PERIODIC_INTERVAL_HOURS: 12
   },
 
   /**

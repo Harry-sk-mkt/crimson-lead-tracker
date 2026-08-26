@@ -142,6 +142,55 @@ Booked 586건/80%, Won Deal 918건 중 Booked 646건/70%) — 파이프라인 �
 정상 동작 확인), 다만 이게 정상 프로세스인지 데이터 누락인지는 Salesforce 도메인 지식이
 필요해 판단 보류. 사용자 결정으로 다음 세션으로 이월.
 
+## BOFU 퍼널 태그 vs Business Segment "BOFU" 충돌 — Google SA 캠페인 4건 오분류 수정
+
+사용자가 "WF-2026-08-KOR-BOFU-Core Google SA ..." 4개 Marketo Program이 BOFU로 필터링돼
+빠지는 것 같다고 보고 — 조사 결과 Marketo 네이밍 컨벤션의 퍼널 단계 태그 "BOFU"(TOFU/MOFU와
+같은 계열)와 Business Segment "BOFU"(Meta 리타게팅 채널을 가리키도록 설계됨) 이름이 겹쳐서,
+`getBusinessSegment()`의 BOFU 규칙(리터럴 "bofu" 포함)이 실제 채널은 Google Search Ads인
+이 4개 캠페인을 그대로 BOFU로 오분류하고 있었음. Campaign/Detail에 `Google SA`/`Naver SA`
+채널 표기가 있으면 BOFU 판정보다 우선해 Search로 확정하는 규칙 추가(`UTIL_001_TransformHelper.js`).
+Full Rebuild로 반영 + `runDeleteDeadBOFUOPSRows()`로 BOFU_OPS 죽은 키 정리.
+
+후속으로 `SEARCH_002_Engine.js`의 `resolveSearchEngineKey_()`에서 옛날 raw UTM→Program
+하드코딩 override(`SEARCH_UTM_TO_PROGRAM_OVERRIDE`)가 detail의 실제 신규 Program명보다
+우선 적용돼 같은 UTM을 재사용하는 신규 프로그램까지 옛날 프로그램으로 잘못 합산되던 버그도
+발견·수정(순서 반전). `SEARCH_004_Merge.js`에 재사용된 UTM의 GoogleSearch_Raw 지출을
+신규 프로그램 키로 매칭하는 override 추가, `AD_007_GoogleSearch.js`의 진단 함수가 실제
+Build 로직과 다르게 동작하던 것도 함께 수정.
+
+## "Lead 유입 → Dictionary 조회 → Business Segment 분류" 플로우 신규 도입 (사용자 요청)
+
+위 두 버그(퍼널 태그 충돌, stale UTM override)가 연달아 나오면서, 사용자가 raw 텍스트 패턴
+매칭에만 의존하는 구조를 근본적으로 보완하기 위해 애초에 의도했던 딕셔너리 기반 분류 도입을
+확정. 기존 `UTIL_002_UtmProgramDictionary.js`(UTM↔Program 자동 채굴 딕셔너리, Kakao Moments
+전용)를 확장해 Program↔Business Segment 자동 채굴 딕셔너리(`Program_Segment_Dictionary`,
+동일한 다수결+확신도 패턴)를 신규 추가. `resolveBusinessSegment_()`(딕셔너리 히트 시 우선
+사용, 미스 시 기존 `getBusinessSegment()` fallback)를 `MASTER_006_LeadTransformer.js`/
+`MASTER_007_MTATransformer.js`가 호출하도록 전환 — `getBusinessSegment()` 자체는 시그니처/
+로직 무변경. 두 딕셔너리 캐시 읽기 함수에 모듈 스코프 메모이제이션 추가(리드 유입 시 행마다
+호출돼도 스크립트 실행 1회당 1번만 시트 읽음, 성능 회귀 방지). `runInstallDictionaryPeriodicRefreshTrigger()`
+로 12시간마다 자동 재채굴하는 시간 트리거 설치(리드 유입 파이프라인과는 독립된 스케줄).
+
+**배포 직후 발견·수정한 우선순위 버그**: `TEMPQA_034_BusinessSegmentDictionaryDiff.js`(신규,
+Full Rebuild 영향 범위 진단용)로 실측한 결과, 딕셔너리를 무조건 최우선으로 뒀더니 이미
+사용자가 검증한 확정 신호(campaign의 "sitelink" — 2026-07-28에 49개 캠페인 직접 검증)까지
+Program 다수결이 근거 없이 뒤집는 사고 발견("Search → Webinar" 4건). `getBusinessSegment()`
+를 `resolveDefiniteBusinessSegment_()`(Exceptions~Search 확정 신호까지)와 나머지(Content
+이후 fallback류)로 분리해, 확정 신호 구간이 딕셔너리보다 먼저 체크되도록 재설계 — 재검증
+결과 확정 신호 역전 케이스 소멸, 나머지 변경분(Leads_Master 14건/MTA_Master 294건)은 전부
+blank detail 리드를 UTM 이력으로 정확히 분류해주는 정상 개선으로 확인.
+
+diff 진단 중 "Referral → Other" 662건이 별도 드리프트처럼 보였으나, 원인은 실제 데이터가
+아니라 진단 스크립트 자체의 필드명 버그(MTA_Master 실제 컬럼명 "First Lead Source"를
+"Lead Source"로 잘못 읽어 leadSource가 전부 undefined)였음(`TEMPQA_035_ReferralDriftTrace.js`
+로 확인) — 수정 후 재실행하니 키워드 규칙 드리프트 0건 확인, 실제 문제 없었음.
+
+이후 사용자 확인 하에 Full Rebuild(Leads/MTA Master + 전 도메인 OPS) 진행, BOFU_OPS/
+Search_OPS/Content_OPS 죽은 키 정리 완료. `docs/OpenItems.md` #34로 "딕셔너리 특이 분류
+모니터링 프로세스 구축"(다수결이 소수 오분류를 학습해 전파할 구조적 위험에 대한 정기 검토
+체계) 후속 TODO 기록 — 다음 세션 설계 착수 예정.
+
 # Changelog — 2026-08-25
 
 ## Import 단계 완전 동일 Raw 중복 필터링 신규 도입

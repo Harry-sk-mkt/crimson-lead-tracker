@@ -30,9 +30,18 @@
  * AD
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-08-26)
+ * - `runDebugGoogleSearchCampaignMatches()` 수정 — 기존엔 docstring상으로
+ *   "buildGoogleSearchCampaignStatsLowerKeyMap_()(SEARCH_004_Merge.js)와
+ *   동일 로직"이라고 해놓고 실제로는 override 없이 직접 매칭만 재구현하고
+ *   있어서, GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE 추가
+ *   (SEARCH_004_Merge.js v1.11.0) 이후에도 진단 결과가 실제 Build 동작과
+ *   어긋나는 문제 발견(사용자가 override 추가 후에도 "매칭 안 됨"으로
+ *   남는 캠페인을 보고 발견) — 이제 `buildGoogleSearchCampaignStatsLowerKeyMap_()`
+ *   를 그대로 호출해 진짜 동일한 결과를 보장.
  * v1.1.0 (2026-08-25)
  * - `runDebugGoogleSearchCampaignMatches()` 신규(진단, 수동 실행 진입점) —
  *   `buildSearchOPS()` 실행 후 사용자가 다수의 Search_OPS 키를 "Campaign
@@ -330,12 +339,20 @@ function runDebugGoogleSearchCampaignMatches(){
     if(key) existingKeysLower[key.toLowerCase()] = key;
   });
 
+  // buildGoogleSearchCampaignStatsLowerKeyMap_()(SEARCH_004_Merge.js)를
+  // 그대로 호출 — GOOGLE_SEARCH_CAMPAIGN_NAME_TO_SEARCH_OPS_KEY_OVERRIDE
+  // 번역까지 포함해 Build 때와 완전히 동일한 매칭 결과를 보장(2026-08-26,
+  // 기존엔 override 없이 직접 매칭만 재구현하고 있어서 진단 결과가 실제
+  // Build 동작과 어긋났음 — 사용자가 override 추가 후에도 "매칭 안 됨"으로
+  // 남는 걸 보고 발견).
+  const googleStatsLower = buildGoogleSearchCampaignStatsLowerKeyMap_(googleStatsMap);
+
   const matched = [];
   const unmatched = [];
 
-  Object.keys(googleStatsMap).forEach(function(name){
+  Object.keys(googleStatsLower).forEach(function(lower){
 
-    const lower = name.trim().toLowerCase();
+    const name = googleStatsLower[lower].name;
 
     if(existingKeysLower[lower]){
       matched.push(name + "  →  " + existingKeysLower[lower]);

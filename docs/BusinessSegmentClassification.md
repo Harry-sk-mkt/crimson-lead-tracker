@@ -23,7 +23,7 @@ N/A       (2026-07-25 추가 — 아래 참고)
 | --- | --- |
 | Seminar | Campaign/Detail에 `event-offline`/`offline-seminar`/`expo`/`summit`(2026-07-25 추가) 포함 OR Detail에 `ev-`/`live event`/`seminar`/`세미나`(2026-07-25 추가, `ev-`는 위치 무관 포함 체크로 완화) 포함 |
 | Webinar | Campaign/Detail에 `event-online`/`online-webinar`/`book a consult`(2026-07-25 추가) 포함 OR Detail에 `wb-`(위치 무관 완화)/`webinar`/`open day`(2026-07-25 추가) 포함 |
-| BOFU | Detail에 `BOFU` 포함 OR Campaign/Detail에 `ptc`(Push To Consult, 2026-07-25 추가) 포함 OR Detail에 `consultation request`/`consult page`(2026-07-25 추가) 포함 |
+| BOFU | Detail에 `BOFU` 포함 OR Campaign/Detail에 `ptc`(Push To Consult, 2026-07-25 추가) 포함 OR Detail에 `consultation request`/`consult page`(2026-07-25 추가) 포함 — **단, Campaign/Detail에 `Google SA`/`Naver SA`(채널 표기, 2026-08-26 추가) 포함 시 이 규칙보다 우선해 Search로 분류** |
 | Search | Paid Search, Organic Search, Contact Campaign(`_contact`/`contact`/`consult` — 순수 "consult"는 Webinar/BOFU의 구체적 문구에 해당 안 되는 경우의 fallback), Detail에 `contact`(2026-07-25 추가) 포함, Lead Source에 `search`(2026-07-25 추가) 포함 |
 | Content | Campaign/Detail에 `ebook`/`planner`/`guide`/`prospectus`/`booklet`/`curriculum`/`parent ebook`/`infographic`(2026-07-25 추가) 포함(`_lead`는 campaign 전용), Detail에 `on-demand`/`ondemand`(2026-07-25 추가) 포함 |
 | Referral | Lead Source = Referral |
@@ -246,6 +246,27 @@ N/A       (2026-07-25 추가 — 아래 참고)
   리드에도 반복되는지는 Salesforce/Marketo 관리 쪽에서 별도 확인 필요, 이 저장소에서
   임의로 처리하지 말 것.
 
+### ⚠️ BOFU 퍼널 태그 vs Business Segment "BOFU" 명칭 충돌 — Google SA/Naver SA 채널 신호 우선 처리 (2026-08-26)
+- **문제**: Marketo 캠페인 네이밍 컨벤션의 `WF-YYYY-MM-COUNTRY-BOFU-Core ...`에서
+  "BOFU"는 TOFU/MOFU와 같은 계열의 **퍼널 단계(Bottom of Funnel) 태그**일 뿐인데,
+  Business Segment "BOFU"(Push-to-Consult류 Meta 리타게팅 채널을 가리키는 것으로
+  설계됨, 위 표 참고)와 이름이 같아서 `getBusinessSegment()`의 BOFU 규칙(detail/
+  campaign에 `bofu` 리터럴 포함)이 곧바로 매치돼버림. 지금까지는 BOFU 세그먼트
+  캠페인이 전부 Meta 채널이라 우연히 문제가 없었으나(`BOFU_001_Config.js`
+  `CHANNEL_DEFAULT: "Meta"`), 처음으로 같은 퍼널 태그("BOFU")를 쓰면서 실제
+  채널은 Google Search Ads인 캠페인(`WF-2026-08-KOR-BOFU-Core Google SA
+  Transfer-US` 등 4개)이 나오면서 Business Segment=BOFU로 오분류됨(사용자
+  보고 — GoogleSearch_Raw 지출 데이터가 Search_OPS에도 BOFU_OPS에도 반영이
+  안 되는 문제로 발견).
+- **수정**: BOFU 규칙 직전에 Campaign/Detail의 `Google SA`/`Naver SA`(공백/하이픈/
+  언더스코어 구분자 허용, "sa" 뒤 단어 경계 요구로 "Google SAT" 같은 SAT 시험
+  캠페인 오탐 방지) 채널 표기 체크를 추가해, 있으면 BOFU 태그 여부와 무관하게
+  Search로 확정(사용자 확정 — "채널 기준"). 순수 `bofu` 태그만 있고 채널 표기가
+  없는 기존 BOFU 캠페인은 영향 없음. 구현: `UTIL_001_TransformHelper.js` v1.18.0.
+  테스트: `testGetBusinessSegmentSearchPlatformChannelSignal()`.
+- **소급 적용**: 기존 Leads_Master/MTA_Master 행에 반영하려면 `rebuildLeadsMaster()`/
+  `rebuildMTAMaster()` Full Rebuild 필요.
+
 ## Marketo 네이밍 정정 필요 목록 (2026-07-25)
 아래는 `BUSINESS_SEGMENT_EXCEPTIONS`로 임시 우회 중인 캠페인/폼 이름. Marketo에서 이름 자체를
 정정(예: 프로그램명에 콘텐츠 유형 키워드 포함)하면 코드 하드코딩 없이도 일반 룰로 분류 가능해짐.
@@ -266,7 +287,48 @@ N/A       (2026-07-25 추가 — 아래 참고)
 | WF-2022-11-KOR-MOFU-Core New Digital Mini SAT Practice Test | Content | "SAT"/"practice test"는 공통 키워드로 일반화하기엔 오탐 위험(2026-07-28) |
 
 ## 구현 위치
-`16_TransformHelper.js`의 `getBusinessSegment(campaign, detail, leadSource)` — Leads/MTA 양쪽에서 공용으로 호출됨.
+`UTIL_001_TransformHelper.js`의 `getBusinessSegment(campaign, detail, leadSource, category)` —
+키워드 기반 분류 로직의 유일한 소유자. 아래 "Dictionary 우선 분류" 도입 이후에도 시그니처/
+로직 변경 없음.
+
+### ⚠️ "Lead 유입 → Dictionary 조회 → Business Segment 분류" 플로우 도입 (2026-08-26)
+- **배경**: 위 "BOFU 퍼널 태그 vs Business Segment 'BOFU' 명칭 충돌" 항목과
+  `SEARCH_UTM_TO_PROGRAM_OVERRIDE`(`SEARCH_002_Engine.js`)의 stale 매핑 버그를 연달아
+  발견한 뒤, 사용자가 "raw 텍스트 패턴 매칭에만 의존하는 구조"를 근본적으로 보완하기 위해
+  애초에 의도했던 딕셔너리 기반 분류 플로우 도입을 확정.
+- **구조**: `MASTER_006_LeadTransformer.js`/`MASTER_007_MTATransformer.js`가 이제
+  `getBusinessSegment(...)`를 직접 호출하지 않고, `UTIL_002_UtmProgramDictionary.js`의
+  `resolveBusinessSegment_(campaign, detail, leadSource, category)`를 호출한다:
+  1. `detail`(Lead Source Detail/First Touch Detail)이 있으면 그대로, 없으면 기존
+     UTM_Program_Dictionary로 raw UTM(`campaign`)을 Marketo Program명으로 역매핑
+     (`resolveCanonicalProgram_()`).
+  2. 그 canonical Program명으로 신규 **Program_Segment_Dictionary**(Leads_Master/
+     MTA_Master의 Program↔Business Segment를 자동 채굴·다수결 채택, UTM_Program_Dictionary와
+     동일 패턴)를 조회 — 있으면 그 값을 즉시 반환(딕셔너리 우선, 사용자 확정).
+  3. 딕셔너리에 없는 경우(완전히 신규 Program, 또는 애매해서 제외된 Program)만 기존
+     `getBusinessSegment()` 키워드 규칙으로 fallback.
+- **하위 호환**: `getBusinessSegment()` 자체는 시그니처/로직 무변경 — 다른 소비처
+  (`AD_006_KakaoMoments.js`의 이벤트 타입 판정 등)는 영향 없음. 두 딕셔너리 캐시 시트가
+  비어있으면(최초 배포 시점) `resolveBusinessSegment_()`는 100% 기존과 동일하게 동작.
+- **딕셔너리 갱신**: 무거운 전체 스캔(Leads_Master 3.7만+/MTA_Master 8.6만+)이라 리드 유입
+  파이프라인(매 append)에는 얹지 않고, `runInstallDictionaryPeriodicRefreshTrigger()`로
+  설치하는 별도 주기적 시간 트리거(`CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS`,
+  기본 12시간)로 자동 재채굴.
+- **기존 행 소급 적용 미완료**: 코드 배포 시점부터 신규 유입 리드에는 즉시 적용되지만,
+  이미 Master에 기록된 기존 행에 소급 적용하려면 Full Rebuild가 필요 — 그 전에
+  `TEMPQA_034_BusinessSegmentDictionaryDiff.js`의 `runDiffBusinessSegmentDictionaryImpact()`
+  로 영향 범위를 먼저 사람이 검토해야 함(아직 실행 전, 임의로 Full Rebuild 진행하지 말 것).
+  상세: `docs/OpenItems.md` #22.
+- **⚠️ 우선순위 재조정 — 확정 신호가 딕셔너리보다 우선(2026-08-26, 배포 직후 발견)**:
+  최초 버전은 딕셔너리를 무조건 최우선으로 뒀는데, `runDiffBusinessSegmentDictionaryImpact()`
+  로 실측한 결과 이미 사용자가 검증한 확정 신호(campaign의 "sitelink" — 2026-07-28에
+  49개 캠페인 직접 검증)까지 Program 단위 다수결이 근거 없이 뒤집는 사고가 발견됨
+  ("Search → Webinar" 4건, canonicalProgram="2021-07-KOR-Book a consult page"). 수정:
+  `getBusinessSegment()`를 `resolveDefiniteBusinessSegment_()`(Exceptions~Search 확정
+  신호까지, `UTIL_001_TransformHelper.js` v1.19.0)와 나머지(Content 이후)로 분리해,
+  확정 신호 구간을 딕셔너리보다 먼저 체크하도록 `resolveBusinessSegmentPure_()`
+  (`UTIL_002_UtmProgramDictionary.js` v1.6.0) 재설계. `getBusinessSegment()` 자체의
+  시그니처/최종 출력은 무변경(리팩터 전후 회귀 테스트 동일 결과 확인).
 
 ## Design Principle
 - **Leads_Master**: 1 Lead = 1 Row, First Touch Attribution, Lead 원천(origin) 표현
