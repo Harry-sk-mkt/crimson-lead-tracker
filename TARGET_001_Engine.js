@@ -22,9 +22,38 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.27.0
+ * v1.29.0
  *
  * Change Log
+ * v1.29.0 (2026-08-27)
+ * - **사용자 결정 — 세그먼트별 상대 비중은 유지, 총합만 확정 타겟에 맞춤**:
+ *   Pipeline Share Override(v1.28.0) 적용 후에도 Target_Engine의 세그먼트별
+ *   Deal Share×P1당가치 상향식 합산(5509) 이 세일즈/재무의 FY26 전사 단일
+ *   $/New P1 비율 이월 방식(확정 3627)과 52% 차이가 남을 실측 확인 — 두
+ *   방법론이 근본적으로 다름(세그먼트 믹스 반영 vs 전사 블렌디드 비율)을
+ *   사용자에게 설명 후, 세그먼트별 상대 비중(Target_Engine 계산)은 그대로 두고
+ *   총합만 확정치로 스케일 조정하기로 확정. 신규 `applyFYNewP1TargetOverride_()`
+ *   (순수 함수) — Block 0 34행(`CONFIG.TARGET.INPUT.ROWS.NEW_P1_TARGET_OVERRIDE`,
+ *   `CORE_001_Config.js` v1.48.0 신규)에 값이 있으면 `computeDealShareBlockRows_()`
+ *   결과의 newP1Target을 그룹별 비례로 스케일링(totalP1Target도 함께 재계산),
+ *   공란이면 원본 그대로 반환. `readTargetEngineInputs_()`에 `newP1TargetOverride`
+ *   필드 추가, `refreshTargetEngine_()`가 `computeDealShareBlockRows_()` 결과를
+ *   이 함수로 감싸도록 배선. `setupTargetEngineInputDefaults_()`에 34행
+ *   라벨/공란 기본값 추가. `testApplyFYNewP1TargetOverride()` 신규.
+ * v1.28.0 (2026-08-27)
+ * - **사용자 결정 — 이번 FY만 Pipeline 트랙 기여 무시, 신규 100%로 방어**:
+ *   New P1 최종 확정 타겟(3627)이 `computeNewPipelineRevenueSplit_()`의
+ *   자동 New/Pipeline 분리(FY26 딜 비중 기반) 없이 "Revenue 타겟 전액을
+ *   신규 리드로 커버"하는 가정으로 산출됐음을 확인(사용자 확정 대화 참고) —
+ *   신규 `resolveNewPipelineSplit_()`(순수 함수)가 Block 0 33행
+ *   (`CONFIG.TARGET.INPUT.ROWS.PIPELINE_SHARE_OVERRIDE`, `CORE_001_Config.js`
+ *   v1.47.0 신규)에 값이 있으면 자동계산 대신 그 값을 pipelineShare로
+ *   강제(공란이면 기존 자동계산 그대로 — 하위호환, 이 결정은 FY별로 시트에서
+ *   바꿀 수 있어 하드코딩 안 함). `readTargetEngineInputs_()`가
+ *   `pipelineShareOverride` 필드 추가 반환, `refreshTargetEngine_()`가
+ *   `computeNewPipelineRevenueSplit_()` 결과를 이 함수로 감싸도록 배선.
+ *   `setupTargetEngineInputDefaults_()`에 33행 라벨/공란 기본값 추가.
+ *   `testResolveNewPipelineSplit()` 신규.
  * v1.27.0 (2026-08-24)
  * - `MONTHLY_COMPANY_INPUTS`에 24행 "Total Revenue Target"(NZD, VAT/Referral/Upsell
  *   포함) 신규 — FY_REP이 회사 전체 Target으로 쓰던 22행 "Marketing Revenue Target"이
@@ -2648,6 +2677,78 @@ function testComputeNewPipelineRevenueSplit(){
 
 /**
  * ==========================================================
+ * Resolve New/Pipeline Split (순수 함수 — Block 0 오버라이드 적용)
+ *
+ * WHY (2026-08-27, 사용자 결정)
+ * `computeNewPipelineRevenueSplit_()`의 FY26 딜 비중 기반 자동 분리는 "과거
+ * 실적으로 봤을 때 이번 FY 매출 중 신규/백로그가 각각 얼마나 기여할지"를
+ * 추정한 값이다. 그런데 New P1 최종 확정 타겟(3627)은 이 추정을 쓰지 않고
+ * "Revenue 타겟 전액을 신규 리드만으로 방어한다"(Pipeline/백로그 기여를
+ * 보수적으로 0으로 본다)는 별도 의사결정으로 산출됨을 확인 — Target_Engine의
+ * New P1 목표도 같은 가정을 쓰도록 Block 0에 오버라이드 셀(33행)을 추가해
+ * 자동계산을 필요할 때만 덮어쓸 수 있게 한다(FY마다 다시 판단할 수 있는
+ * 문제라 코드에 하드코딩하지 않음 — CLAUDE.md "No Assumptions").
+ *
+ * INPUT
+ * computedSplit : {newShare, pipelineShare}  computeNewPipelineRevenueSplit_() 결과
+ * overrideRaw   : *  Block 0 33행 원본 값(공란 "" 또는 0~1 사이 숫자만 유효,
+ *                    그 외 값은 안전하게 무시하고 자동계산 그대로 사용)
+ *
+ * OUTPUT
+ * {newShare, pipelineShare} — 오버라이드 무효 시 입력 computedSplit을 참조
+ * 그대로 반환(변경 없음 표시용), 유효 시 {newShare: 1-p, pipelineShare: p}
+ *
+ * TEST
+ * testResolveNewPipelineSplit() 참고
+ * ==========================================================
+ */
+function resolveNewPipelineSplit_(computedSplit, overrideRaw){
+
+  if(overrideRaw === "" || overrideRaw === null || overrideRaw === undefined){
+    return computedSplit;
+  }
+
+  const pipelineShare = Number(overrideRaw);
+
+  if(isNaN(pipelineShare) || pipelineShare < 0 || pipelineShare > 1){
+    return computedSplit;
+  }
+
+  return { newShare: 1 - pipelineShare, pipelineShare: pipelineShare };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveNewPipelineSplit_()
+ * ==========================================================
+ */
+function testResolveNewPipelineSplit(){
+
+  const computed = { newShare: 0.7, pipelineShare: 0.3 };
+
+  const blankOk = resolveNewPipelineSplit_(computed, "") === computed;
+  const nullOk = resolveNewPipelineSplit_(computed, null) === computed;
+
+  const zeroOverride = resolveNewPipelineSplit_(computed, 0);
+  const zeroOk = zeroOverride.newShare === 1 && zeroOverride.pipelineShare === 0;
+
+  const partialOverride = resolveNewPipelineSplit_(computed, 0.4);
+  const partialOk = partialOverride.newShare === 0.6 && partialOverride.pipelineShare === 0.4;
+
+  const invalidOk = resolveNewPipelineSplit_(computed, 1.5) === computed &&
+    resolveNewPipelineSplit_(computed, "abc") === computed;
+
+  const pass = blankOk && nullOk && zeroOk && partialOk && invalidOk;
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Deal Cohorts From Deal Rows (Block B 원천 — 코호트1/2 Revenue 분리)
  *
  * WHY
@@ -2845,6 +2946,111 @@ function testComputeDealShareBlockRows(){
   Logger.log("Seminar newP1Target: " + seminarRow.newP1Target + " (expected " + expectedNewP1Target + ")");
   Logger.log("Seminar pipelineP1Target: " + seminarRow.pipelineP1Target + " (expected " + expectedPipelineP1Target + ")");
   Logger.log("Seminar totalP1Target: " + seminarRow.totalP1Target);
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply FY New P1 Target Override (순수 함수 — Block 0 총합 오버라이드)
+ *
+ * WHY (2026-08-27, 사용자 결정)
+ * Target_Engine의 세그먼트별 Deal Share×P1당가치 상향식 합산과, 세일즈/재무가
+ * 쓰는 "FY26 전사 단일 $/New P1 비율을 그대로 이월"하는 방식이 서로 다른
+ * 방법론이라 실측으로 52% 차이(5509 vs 확정 3627)가 남을 확인 — 세그먼트별
+ * 상대 비중(어느 세그먼트가 New P1을 더/덜 만들어야 하는지의 배분 구조)은
+ * Target_Engine 계산이 유효하다고 보되, 회사 전체 합계는 리더십이 확정한
+ * 숫자를 그대로 따르기로 사용자 확정 — 그래서 각 그룹의 newP1Target을 현재
+ * 합계 대비 비례로 스케일링해 합이 정확히 오버라이드 값과 같아지게 만든다.
+ * totalP1Target(New+Pipeline)도 스케일된 newP1Target 기준으로 재계산 —
+ * pipelineP1Target 자체는 안 건드림(이 오버라이드는 New 트랙 총량에 대한
+ * 결정이지 Pipeline 트랙과는 무관, `resolveNewPipelineSplit_()`와 별개 결정).
+ *
+ * INPUT
+ * dealShareRows : Array<Object>  computeDealShareBlockRows_() 결과
+ * overrideRaw   : *  Block 0 34행 원본 값(공란 "" 또는 유효 양수만 적용,
+ *                    그 외 값·현재 합계가 0 이하인 경우는 안전하게 원본 반환)
+ *
+ * OUTPUT
+ * Array<Object> — 오버라이드 무효 시 입력 dealShareRows를 참조 그대로 반환
+ * (변경 없음 표시용), 유효 시 newP1Target/totalP1Target이 스케일된 새 배열
+ *
+ * TEST
+ * testApplyFYNewP1TargetOverride() 참고
+ * ==========================================================
+ */
+function applyFYNewP1TargetOverride_(dealShareRows, overrideRaw){
+
+  if(overrideRaw === "" || overrideRaw === null || overrideRaw === undefined){
+    return dealShareRows;
+  }
+
+  const overrideTotal = Number(overrideRaw);
+
+  if(isNaN(overrideTotal) || overrideTotal <= 0){
+    return dealShareRows;
+  }
+
+  const currentTotal = dealShareRows.reduce(function(sum, row){
+    return sum + row.newP1Target;
+  }, 0);
+
+  if(currentTotal <= 0){
+    return dealShareRows;
+  }
+
+  const scaleFactor = overrideTotal / currentTotal;
+
+  return dealShareRows.map(function(row){
+
+    const scaledNewP1Target = row.newP1Target * scaleFactor;
+
+    return Object.assign({}, row, {
+      newP1Target: scaledNewP1Target,
+      totalP1Target: scaledNewP1Target + row.pipelineP1Target
+    });
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyFYNewP1TargetOverride_()
+ * ==========================================================
+ */
+function testApplyFYNewP1TargetOverride(){
+
+  const rows = [
+    { group: "Seminar", newP1Target: 637, pipelineP1Target: 0, totalP1Target: 637 },
+    { group: "Webinar", newP1Target: 805, pipelineP1Target: 0, totalP1Target: 805 },
+    { group: "BOFU", newP1Target: 152, pipelineP1Target: 10, totalP1Target: 162 },
+    { group: "Search", newP1Target: 187, pipelineP1Target: 0, totalP1Target: 187 },
+    { group: "Content", newP1Target: 804, pipelineP1Target: 0, totalP1Target: 804 }
+  ];
+
+  const blankOk = applyFYNewP1TargetOverride_(rows, "") === rows;
+  const nullOk = applyFYNewP1TargetOverride_(rows, null) === rows;
+  const invalidOk = applyFYNewP1TargetOverride_(rows, 0) === rows &&
+    applyFYNewP1TargetOverride_(rows, -5) === rows &&
+    applyFYNewP1TargetOverride_(rows, "abc") === rows;
+
+  const scaled = applyFYNewP1TargetOverride_(rows, 3627);
+  const scaledTotal = scaled.reduce(function(sum, r){ return sum + r.newP1Target; }, 0);
+  const bofuRow = scaled.filter(function(r){ return r.group === "BOFU"; })[0];
+
+  const scaleFactor = 3627 / 2585;
+
+  const scaledOk =
+    Math.abs(scaledTotal - 3627) < 1e-6 &&
+    Math.abs(bofuRow.newP1Target - 152 * scaleFactor) < 1e-6 &&
+    Math.abs(bofuRow.totalP1Target - (152 * scaleFactor + 10)) < 1e-6; // pipelineP1Target 불변 확인
+
+  const pass = blankOk && nullOk && invalidOk && scaledOk;
+
+  Logger.log("scaledTotal: " + scaledTotal + " (expected 3627)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
@@ -3151,6 +3357,9 @@ function readTargetEngineInputs_(sheet){
     dealShareByGroup[group] = Number(get(rows.DEAL_SHARE_START + i)) || 0;
   });
 
+  const pipelineShareOverride = get(rows.PIPELINE_SHARE_OVERRIDE);
+  const newP1TargetOverride = get(rows.NEW_P1_TARGET_OVERRIDE);
+
   // 섹션 3(월별 회사 전체 Revenue Target/Budget)+섹션 4(세그먼트별 월별 Spent)+섹션 5
   // (Seminar Active Campaign Months 체크박스)는 전부 MONTH_START_COL부터 12개월 폭이고
   // 연속된 행 범위(헤더 행 포함, 섹션 사이 공백 행 1개)라 한 번의 getRange로 같이 읽는다.
@@ -3210,6 +3419,8 @@ function readTargetEngineInputs_(sheet){
     cutoverDate: get(rows.CUTOVER_DATE),
     improvementFactorByGroup: improvementFactorByGroup,
     dealShareByGroup: dealShareByGroup,
+    pipelineShareOverride: pipelineShareOverride,
+    newP1TargetOverride: newP1TargetOverride,
     revenueTarget: revenueTarget,
     monthlyRevenueTarget: monthlyRevenueTarget,
     monthlyTotalRevenueTarget: monthlyTotalRevenueTarget,
@@ -3266,6 +3477,20 @@ function setupTargetEngineInputDefaults_(sheet){
       defaults.DEAL_SHARE
     ]);
   });
+
+  entries.push([
+    rows.PIPELINE_SHARE_OVERRIDE,
+    "Pipeline Share Override (공란 = FY26 자동계산 사용, 0~1 값 입력 시 그 값을 " +
+      "Pipeline 비중으로 강제 — 예: 0 = 이번 FY Pipeline/백로그 기여 무시하고 신규 100%로 방어)",
+    ""
+  ]);
+
+  entries.push([
+    rows.NEW_P1_TARGET_OVERRIDE,
+    "FY New P1 Target Override (Total, 공란 = 세그먼트별 자동계산 합계 그대로 사용, " +
+      "값 입력 시 세그먼트별 상대 비중은 유지한 채 합계만 이 값으로 비례 조정)",
+    ""
+  ]);
 
   // 값 자체는 이 entries의 default(0)가 아니라 refreshTargetEngine_()가
   // computeCPNP1BenchmarkByGroup_() 결과로 매번 덮어씀 — 여기선 라벨과 최초 실행 전
@@ -3647,10 +3872,15 @@ function refreshTargetEngine_(){
 
   const dealShareRatios = dealRows.length > 0 ? computeDealShareRatiosFromDealRows_(dealRows) : null;
   const pipelineShareRatios = dealRows.length > 0 ? computeDealShareRatiosCohort2FromDealRows_(dealRows) : null;
-  const newPipelineSplit = computeNewPipelineRevenueSplit_(dealRows);
+  const newPipelineSplit = resolveNewPipelineSplit_(
+    computeNewPipelineRevenueSplit_(dealRows), inputs.pipelineShareOverride
+  );
 
-  const dealShareRows = computeDealShareBlockRows_(
-    inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit
+  const dealShareRows = applyFYNewP1TargetOverride_(
+    computeDealShareBlockRows_(
+      inputs, dealShareRatios, pipelineShareRatios, p1ValueByGroup, newPipelineSplit
+    ),
+    inputs.newP1TargetOverride
   );
 
   const derivationRows = computeTargetDerivationRows_(

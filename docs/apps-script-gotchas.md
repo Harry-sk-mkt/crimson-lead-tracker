@@ -145,3 +145,24 @@ Redirect URI 하드코딩(v1.1.0)·`resource_ids` 파라미터 수정(v1.2.0) �
 `npx clasp deploy -i <deploymentId>`로 그 배포를 최신 버전으로 갱신할 것.** 배포 ID를 그대로
 쓰면 URL(외부 서비스에 등록해둔 Redirect URI 등)은 바뀌지 않는다 — 새 배포를 만들 때만 URL이
 바뀐다(10번 항목 참고).
+
+## 12. `"Error code INTERNAL"`은 스택트레이스 없는 일반 에러와 다르다 — 코드 버그보다 일시적 인프라 결함부터 의심 (2026-08-27 실측)
+
+Time-Driven 트리거 실행 로그에 `"We're sorry, the JavaScript engine reported an unexpected error.
+Error code INTERNAL."`만 찍히고 `ReferenceError`/`TypeError` 같은 구체적 메시지나 스택트레이스가
+전혀 없는 경우가 있다. 이는 스크립트 로직이 던진 일반 JS 에러가 아니라 **Google 인프라 쪽에서
+V8 엔진 자체가 죽었을 때** 나오는 메시지 — 코드에 실제 버그가 있었다면 보통 구체적인 에러 메시지가
+붙어서 나온다.
+
+**실측 사례**: `runICFunnelPipelineTail`(Time-Driven, 06:04~08:03 실행)이 IC Funnel Sync/ACQ
+Summary/NewP1 Engine/Events Engine(80s)까지 전부 정상 완료한 뒤, `BOFU Engine Refresh Started`
+로그 직후(전체 실행 85초 시점, 6분 제한에는 한참 못 미침) 위 에러로 실패. 새로 추가된
+`computeBOFUMetaCampaignDataAggregates_()`(`BOFU_002_Engine.js` v1.6.0)와 그게 재사용하는
+`aggregateMetaCampaignDataByProgram_()`/`resolveMetaCampaignProgramKey_()`(`EVENTS_002_Engine.js`)
+코드를 review했으나 무한루프/재귀/순환참조 등 V8 크래시를 유발할 만한 패턴은 없었음. 이후
+Apps Script 편집기에서 `runRefreshBOFUEngine()`을 단독으로 재실행하자 60.63초 만에 134 rows로
+에러 없이 정상 완료 — 코드 문제가 아니라 일시적 결함이었음이 확인됨.
+
+→ 트리거 실행 로그에 스택트레이스 없는 `"Error code INTERNAL"`만 찍혀 있으면, 코드부터 뒤지기
+전에 **해당 단계의 함수를 단독으로 재실행**해서 재현되는지부터 확인할 것. 재현 안 되면 일시적
+인프라 결함으로 보고 넘어가면 된다(코드 수정 불필요). 재현되면 그때부터 진짜 로직 조사 시작.

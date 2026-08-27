@@ -208,6 +208,19 @@
 - 구현: `90_TargetEngine.js`의 `computeDealShareBlockRows_()`(Block C — New/Pipeline 각 트랙
   계산 + 합산)와 `computeTargetDerivationRows_()`(Block D — 합산된 FY 총 P1 목표를 월/주로
   전개, New/Pipeline을 주 단위로 각각 쪼개는 것은 아직 미구현 — 필요시 후속 논의).
+- **New/Pipeline 분리 오버라이드(2026-08-27 신규)**: Block 0 33행(`PIPELINE_SHARE_OVERRIDE`) —
+  공란(기본)이면 위 자동계산(FY26 딜 비중) 그대로 사용, 0~1 값을 넣으면 그 값을 pipelineShare로
+  강제 고정한다(`resolveNewPipelineSplit_()`, `TARGET_001_Engine.js`). FY27 New P1 최종 확정
+  타겟(3627)이 "Revenue 타겟 전액을 신규 리드로만 방어"(Pipeline/백로그 기여 보수적으로 0)
+  가정으로 산출되어, FY27은 이 셀에 0을 입력해 Target_Engine의 산출 방식을 그 가정과 맞춘다 —
+  FY마다 다시 판단 가능하도록 코드 하드코딩 대신 시트 입력값으로 관리.
+- **FY New P1 Target 총합 오버라이드(2026-08-27 신규)**: 위 오버라이드까지 적용해도, 세그먼트별
+  Deal Share×P1당가치 상향식 합산 방식과 세일즈/재무의 "FY26 전사 단일 $/New P1 비율 이월"
+  방식이 근본적으로 달라 실측 52% 차이(5509 vs 확정 3627)가 남음을 확인 — 두 방법론을 통일하지
+  않고, 세그먼트별 상대 비중(Target_Engine 산출)은 유지한 채 총합만 확정치로 비례 조정하기로
+  사용자 확정. Block 0 34행(`NEW_P1_TARGET_OVERRIDE`) — 공란(기본)이면 자동계산 합계 그대로,
+  값을 넣으면 그 값이 되도록 5개 그룹의 newP1Target을 비례 스케일링한다
+  (`applyFYNewP1TargetOverride_()`, `TARGET_001_Engine.js`).
 
 ### 시즌성 비중 (②의 가중치)
 - 그룹별: 과거 FY들의 월별 New P1 **가중평균**(아래 §7)이 연간 합에서 차지하는 % (12개 월 합 = 100%)

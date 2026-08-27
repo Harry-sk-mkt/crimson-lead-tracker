@@ -12,9 +12,17 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.8.2
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-08-27)
+ * - 세그먼트당 6컬럼 중 "Pipeline P1"/"P1(Target 합계)" 2컬럼 숨김(사용자 요청) —
+ *   FY27부터 Pipeline Share Override=0(TARGET_001_Engine.js v1.28.0, 이번 FY는
+ *   신규만으로 방어하기로 결정)이라 Pipeline P1이 항상 0, 그 결과 Target
+ *   합계=New P1과 동일해져 두 컬럼 모두 상시 중복/무의미해짐 — 데이터 자체는
+ *   안 지우고(값은 그대로 계산·저장됨, 필요시 언제든 다시 보이면 복구 가능)
+ *   시각적으로만 숨김. `applyTargetReportStyles_()` 끝에서 매 generate마다
+ *   재적용(다른 서식들과 동일하게 방어적으로 매번 정상화).
  * v1.8.2 (2026-08-24)
  * - `applyTargetEngineInputStyles_()`에 신규 24행(`MONTHLY_COMPANY_INPUTS.
  *   TOTAL_REVENUE_TARGET_ROW`) 통화 서식($#,##0.00) 추가 — 22/23행과 동일 처리
@@ -239,6 +247,38 @@ function applyTargetReportStyles_(sheet, rowCount){
   });
 
   applyTargetReportAchievementHighlights_(sheet, rowCount);
+
+  applyTargetReportColumnVisibility_(sheet);
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply Target Report Column Visibility (Pipeline P1 / Target P1(합계) 숨김)
+ *
+ * WHY (2026-08-27, 사용자 요청)
+ * FY27부터 Pipeline Share Override=0(이번 FY는 Pipeline/백로그 기여 없이 신규
+ * 리드만으로 방어 — TARGET_001_Engine.js v1.28.0)이라, 세그먼트당 6컬럼 중
+ * "Pipeline P1"은 항상 0이고 "P1"(Target New+Pipeline 합계)은 "New P1"과 값이
+ * 완전히 같아져 두 컬럼 다 화면에서 상시 무의미해짐 — 값 자체는 안 건드리고
+ * (다음 FY에 Pipeline을 다시 쓰면 언제든 시트에서 다시 보이면 그만) 열만 숨긴다.
+ * 매 generate마다 재적용(다른 방어적 서식 정상화와 동일 원칙 — 사용자가 실수로
+ * 다시 보이게 했어도 다음 Generate에서 원상 복구됨).
+ * ==========================================================
+ */
+function applyTargetReportColumnVisibility_(sheet){
+
+  const fixedColCount = CONFIG.TARGET.REPORT.FIXED_HEADERS.length;
+  const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
+
+  CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
+
+    const baseCol = fixedColCount + i * groupColCount + 1; // 1-indexed, New P1 컬럼
+
+    sheet.hideColumns(baseCol + 1, 2); // Pipeline P1, P1(합계)
+
+  });
 
 }
 

@@ -9,9 +9,23 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.46.0
+ * v1.48.0
  *
  * Change Log
+ * v1.48.0 (2026-08-27)
+ * - `CONFIG.TARGET.INPUT.ROWS.NEW_P1_TARGET_OVERRIDE`(34행) 신규, `LAST_ROW`
+ *   33→34 — Target_Engine의 세그먼트별 상향식 합산(5509)과 세일즈/재무의 FY26
+ *   전사 단일 비율 이월 방식(확정 3627)이 서로 다른 결과를 냄을 실측 확인,
+ *   세그먼트별 상대 비중은 유지하고 총합만 확정치에 맞춰 비례 조정하기로
+ *   사용자 확정(`TARGET_001_Engine.js` `applyFYNewP1TargetOverride_()` 참고).
+ * v1.47.0 (2026-08-27)
+ * - `CONFIG.TARGET.INPUT.ROWS.PIPELINE_SHARE_OVERRIDE`(33행) 신규, `LAST_ROW`
+ *   32→33 — New/Pipeline 2트랙 자동분리(FY26 딜 데이터 기반)를 이번 FY만
+ *   건너뛰고 "Pipeline 기여 0, 신규 100%로 방어"하기로 한 사용자 결정
+ *   (`TARGET_001_Engine.js` `resolveNewPipelineSplit_()` 참고) — 기존 32행
+ *   블록 뒤에 이어붙이는 방식이라 기존 행 배치는 안 건드림. 공란(기본값)이면
+ *   기존 자동계산 그대로 사용, 0~1 사이 값을 넣으면 그 값을 pipelineShare로
+ *   강제 고정.
  * v1.46.0 (2026-08-26)
  * - `CONFIG.PROGRAM_SEGMENT_DICT.SHEET`("Program_Segment_Dictionary")/
  *   `CONFIG.DICTIONARY_REFRESH.PERIODIC_INTERVAL_HOURS`(12) 신규 — "Lead 유입 →
@@ -894,7 +908,21 @@ const CONFIG = {
         TARGET_FY: 1,
         CUTOVER_DATE: 2,
         IMPROVEMENT_FACTOR_START: 3,  // 3~7 (GROUP_ORDER 순서, 5행)
-        DEAL_SHARE_START: 8           // 8~12 (GROUP_ORDER 순서, 5행)
+        DEAL_SHARE_START: 8,          // 8~12 (GROUP_ORDER 순서, 5행)
+        // 33행 — New/Pipeline 자동분리 오버라이드(2026-08-27 신규). 기존 32행
+        // 블록 뒤에 이어붙임(중간 삽입 아님 — 아래 섹션들의 행 번호는 안 바뀜).
+        // 공란(기본) = computeNewPipelineRevenueSplit_() 자동계산 그대로 사용,
+        // 0~1 값 입력 시 그 값을 pipelineShare로 강제(resolveNewPipelineSplit_()
+        // 참고, TARGET_001_Engine.js).
+        PIPELINE_SHARE_OVERRIDE: 33,
+        // 34행 — FY New P1 Target 총합 오버라이드(2026-08-27 신규). Target_Engine의
+        // 세그먼트별 Deal Share×P1당가치 상향식 합산과, 세일즈/재무가 쓰는 "FY26
+        // 전사 단일 $/New P1 비율 이월" 방식이 서로 다른 답을 낼 수 있음을 확인
+        // (실측: 5509 vs 확정 3627) — 두 방법론을 억지로 통일하지 않고, 세그먼트별
+        // 상대 비중(Target_Engine 산출)은 그대로 둔 채 총합만 이 값에 맞춰 비례
+        // 축소/확대한다(사용자 확정). 공란(기본) = 자동계산 총합 그대로 사용.
+        // applyFYNewP1TargetOverride_() 참고, TARGET_001_Engine.js.
+        NEW_P1_TARGET_OVERRIDE: 34
       },
 
       SCALAR_LAST_ROW: 12,
@@ -941,7 +969,7 @@ const CONFIG = {
         MONTH_START_COL: 2   // B열부터 12개월 (CONFIG.ACQ.FISCAL_MONTH_ORDER 순서)
       },
 
-      LAST_ROW: 32,
+      LAST_ROW: 34,
 
       // 최초 setupTargetReport() 실행 시 채워지는 기본값 (사용자가 이후 직접 편집).
       DEFAULTS: {

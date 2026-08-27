@@ -1,3 +1,65 @@
+# Changelog — 2026-08-27
+
+## BOFU Engine "Error code INTERNAL" 트리거 실패 — 일시적 인프라 결함으로 확인
+
+`runICFunnelPipelineTail`(Time-Driven) 실행이 IC Funnel Sync/ACQ Summary/NewP1 Engine/
+Events Engine까지 전부 정상 완료한 뒤 `BOFU Engine Refresh Started` 직후(전체 실행 85초
+시점, 6분 제한과 무관) `Error code INTERNAL`로 실패. 스택트레이스 없는 이 메시지의 성격상
+코드 버그보다 Google 인프라 쪽 결함일 가능성이 높다고 보고, 관련 신규 코드
+(`BOFU_002_Engine.js` v1.6.0 `computeBOFUMetaCampaignDataAggregates_()` 등)를 review했으나
+무한루프/재귀/순환참조 등 크래시 유발 패턴은 없음을 확인. Apps Script 편집기에서
+`runRefreshBOFUEngine()` 단독 재실행 결과 60.63초/134 rows로 에러 없이 정상 완료 —
+일시적 결함으로 최종 확인, 코드 수정 없음. `docs/apps-script-gotchas.md` #12로 기록
+(향후 스택트레이스 없는 `Error code INTERNAL`은 코드 조사 전에 먼저 단독 재실행으로
+재현 여부부터 확인하도록 안내).
+
+## IC Funnel 재업로드 후 README가 계속 FAILED로 보이던 현상 — 죽은 PIPELINE_LOCK self-heal로 해소
+
+위 크래시가 플랫폼 강제종료급 오류라 `releasePipelineLock_()`가 호출 안 돼 `PIPELINE_LOCK`이
+풀리지 않은 채 남아있었음(기존에 이미 알려진 실패 모드, v1.7.0/v1.15.0 참고) — README의
+FAILED 표시는 "RUNNING이 30분 넘게 지속되면 자동 FAILED 처리"하는 self-heal이 찍어둔
+스냅샷이라, IC Funnel 재업로드 직후엔 락이 아직 살아있어(30분 미경과) 바로 안 바뀜.
+락 나이가 30분을 넘기며 재업로드가 락을 정상 재획득 → 백그라운드 트리거 예약 → 실행
+시작 → README RUNNING으로 갱신, 이후 정상 완료까지 확인. 코드 수정 없음(기존 self-heal
+설계가 의도대로 동작).
+
+## Target_REP FY27 New P1 목표 재산정 — Revenue 베이스 갱신 + Pipeline 트랙 오버라이드 + 확정 총합 오버라이드 신규
+
+사용자가 FY27 New P1 최종 확정 타겟(3627)을 전달, Target_Engine이 계산 중이던 값(2585)과
+비교하는 과정에서 두 가지 실제 차이를 확인:
+
+1. **Revenue 베이스 차이**: Target_Engine 22행(Marketing Revenue Target) $10,577,193 vs
+   확정 계산에 쓰인 $12,792,304.48(FY27 Revenue 타겟 − Referral − Upsell). 22행을 기존
+   월별 비중을 유지한 채 총액만 $12,792,304.48로 비례 확대(사용자가 시트에 직접 입력).
+2. **방법론 차이**: 확정 3627은 "FY26 전사 단일 $/New P1 비율($3,527.16)을 FY27 Revenue에
+   그대로 적용"(세그먼트 구분·New/Pipeline 트랙 구분 없음)한 반면, Target_Engine은
+   세그먼트별(Seminar/Webinar/BOFU/Search/Content) Deal Share×P1당가치를 딜트래커에서
+   따로 계산해 합산하는 상향식 구조 — 실측 결과 두 방식이 52% 차이(5509 vs 3627)를 보임.
+   근본 아키텍처가 다른 문제라 통일하지 않고, 사용자 확정에 따라 (a) 이번 FY는 Pipeline/
+   백로그 기여를 0으로 보고 신규 리드만으로 방어, (b) 세그먼트별 상대 비중은 Target_Engine
+   계산을 유지한 채 총합만 확정치(3627)에 맞춰 비례 조정하는 것으로 정리.
+
+**구현**:
+- `CORE_001_Config.js` v1.47.0 — `CONFIG.TARGET.INPUT.ROWS.PIPELINE_SHARE_OVERRIDE`(Block 0
+  33행) 신규.
+- `TARGET_001_Engine.js` v1.28.0 — `resolveNewPipelineSplit_()`(순수 함수) 신규, 33행에
+  0~1 값이 있으면 `computeNewPipelineRevenueSplit_()`의 FY26 딜 비중 자동계산 대신 그
+  값을 pipelineShare로 강제. `readTargetEngineInputs_()`/`refreshTargetEngine_()` 배선,
+  `testResolveNewPipelineSplit()` 추가.
+- `CORE_001_Config.js` v1.48.0 — `CONFIG.TARGET.INPUT.ROWS.NEW_P1_TARGET_OVERRIDE`(Block 0
+  34행) 신규.
+- `TARGET_001_Engine.js` v1.29.0 — `applyFYNewP1TargetOverride_()`(순수 함수) 신규, 34행에
+  값이 있으면 `computeDealShareBlockRows_()`가 계산한 5개 세그먼트 newP1Target을 비례
+  스케일링해 합계가 정확히 그 값이 되도록 조정(totalP1Target도 함께 재계산, pipelineP1Target은
+  안 건드림). `testApplyFYNewP1TargetOverride()` 추가.
+- `TARGET_003_Styles.js` v1.9.0 — `applyTargetReportColumnVisibility_()` 신규. Pipeline
+  Share Override=0으로 "Pipeline P1"이 항상 0, "P1"(Target 합계)이 "New P1"과 동일해져
+  두 컬럼이 상시 무의미해짐에 따라 세그먼트당 해당 2컬럼을 화면에서 숨김(값은 유지, 매
+  generate마다 재적용).
+- 33행=0, 34행=3627, 22행 월별 값 갱신 후 `runGenerateTargetReport()` 재실행 — 사용자가
+  Block C "FY New P1 Target" 합계 3627 정확히 일치 확인.
+- `docs/TargetReportDesign.md` §6에 두 오버라이드 메커니즘 설명 추가.
+
 # Changelog — 2026-08-26
 
 ## Sync Pipeline 아키텍처 다이어그램(Artifact) 전면 갱신
