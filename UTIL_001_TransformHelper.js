@@ -8,9 +8,19 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.19.0
+ * v1.20.0
  *
  * Change Log
+ * v1.20.0 (2026-08-28)
+ * - parsePriorityRank_()/resolveMonotonicPriority_() 신규(`docs/OpenItems.md`
+ *   New P1 8월 갭 조사 후속) — "Lead Priority"가 Lead 레벨 스냅샷이라
+ *   IC Booked/Completed/Won Date와 같은 클래스의 지연 문제(Salesforce에서
+ *   승급됐는데 우리 쪽 마지막 export엔 예전 값)를 겪는 게 확인됨(279건 중
+ *   10건 실측). MTA_Master(MASTER_003)와 ICFunnel_Raw(MASTER_009) 두
+ *   파이프라인이 각자 Leads_OPS의 "Lead Priority"를 역동기화하게 되므로,
+ *   어느 쪽이 나중에 도는지에 따라 최신값이 예전 값으로 덮어써지는 위험을
+ *   막기 위해 "더 높은(숫자가 더 작은) Priority만 채택, 다운그레이드 금지"
+ *   규칙을 두 파이프라인이 공용으로 재사용(사용자 확정).
  * v1.19.0 (2026-08-26)
  * - **getBusinessSegment()를 `resolveDefiniteBusinessSegment_()`(신규, Exceptions
  *   ~Search 확정 신호까지)와 나머지(Content 이후)로 분리(사용자 확정)** —
@@ -2543,5 +2553,240 @@ function testGetCalendarDateForFiscalMonth(){
 
   Logger.log("Case1 (FY26 AUG) : " + case1 + " (expected 2025-08-01) " + (pass1 ? "✅" : "❌"));
   Logger.log("Case2 (FY26 JUL) : " + case2 + " (expected 2026-07-01) " + (pass2 ? "✅" : "❌"));
+
+}
+
+
+/**
+ * ==========================================================
+ * Parse Priority Rank
+ *
+ * WHY
+ * "Lead Priority"는 "Priority 1"/"Priority 2"/"Priority 3" 형식의
+ * 문자열이고, 숫자가 작을수록 더 중요하다(Priority 1이 최상위 —
+ * isEffectiveP1_() 참고). resolveMonotonicPriority_()가 두 값 중
+ * "더 중요한" 쪽을 고르려면 이 숫자를 뽑아내야 한다. "Priority 10"류
+ * substring 오탐 버그(ACQREP_001_Report.js에서 이미 한 차례 발견됨)를
+ * 반복하지 않도록 정확히 "Priority " + 숫자 형식만 파싱한다.
+ *
+ * @param {string} priorityText
+ * @return {number}  파싱 성공 시 숫자(작을수록 중요), 실패/공란이면
+ *   Infinity(가장 안 중요한 값 취급 — 비교 시 항상 짐)
+ *
+ * TEST
+ * parsePriorityRank_("Priority 1") === 1
+ * parsePriorityRank_("Priority 10") === 10
+ * parsePriorityRank_("") === Infinity
+ * parsePriorityRank_("Nurturing") === Infinity
+ * ==========================================================
+ */
+function parsePriorityRank_(priorityText){
+
+  const match = String(priorityText || "").trim().match(/^Priority (\d+)$/);
+
+  return match ? Number(match[1]) : Infinity;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — parsePriorityRank_()
+ * ==========================================================
+ */
+function testParsePriorityRank(){
+
+  const cases = [
+    ["Priority 1", 1],
+    ["Priority 2", 2],
+    ["Priority 10", 10],
+    ["", Infinity],
+    ["Nurturing", Infinity],
+    [null, Infinity]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+    const result = parsePriorityRank_(c[0]);
+    const ok = result === c[1];
+    if(!ok) pass = false;
+    Logger.log("parsePriorityRank_(\"" + c[0] + "\") => " + result + " (expected " + c[1] + ") " + (ok ? "✅" : "❌"));
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Monotonic Priority (다운그레이드 방지 병합)
+ *
+ * WHY
+ * MTA_Master 기반 sync(MASTER_003_MTAFunnelSync.js)와 ICFunnel_Raw 기반
+ * sync(MASTER_009_ICFunnelSync.js)가 둘 다 Leads_OPS의 "Lead Priority"를
+ * 역동기화하게 되면서, 어느 파이프라인이 나중에 도는지에 따라 최신
+ * (더 중요한) Priority가 예전 값으로 덮어써질 위험이 생김 — IC Booked/
+ * Completed/Won Date가 "두 파이프라인이 같은 필드를 다른 순서로 덮어쓰는"
+ * 문제로 필드 소유권을 완전히 분리했던 전례(`docs/OpenItems.md` #32)와
+ * 동일 클래스 위험. Priority는 실무상 한 번 올라가면(예: 3→1) 내려갈 일이
+ * 드물고, 의도적 하향은 이미 "Priority Override"라는 별도 수동 채널이
+ * 있으므로, 자동 sync끼리는 "더 중요한(숫자가 작은) 값만 채택, 다운그레이드
+ * 없음" 규칙으로 순서 무관하게 안전하게 만든다(사용자 확정, 2026-08-28).
+ *
+ * @param {string} currentValue    Leads_OPS에 현재 있는 값
+ * @param {string} candidateValue  MTA_Master/ICFunnel_Raw가 새로 제시하는 값
+ * @return {string}  최종 채택할 값(currentValue 또는 candidateValue)
+ *
+ * TEST
+ * resolveMonotonicPriority_("Priority 3", "Priority 1") === "Priority 1" (승급 채택)
+ * resolveMonotonicPriority_("Priority 1", "Priority 3") === "Priority 1" (다운그레이드 거부)
+ * resolveMonotonicPriority_("", "Priority 1") === "Priority 1" (빈 값 채움)
+ * resolveMonotonicPriority_("Priority 1", "") === "Priority 1" (후보 없으면 유지)
+ * ==========================================================
+ */
+function resolveMonotonicPriority_(currentValue, candidateValue){
+
+  const currentRank = parsePriorityRank_(currentValue);
+  const candidateRank = parsePriorityRank_(candidateValue);
+
+  return candidateRank < currentRank ? candidateValue : currentValue;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveMonotonicPriority_()
+ * ==========================================================
+ */
+function testResolveMonotonicPriority(){
+
+  const cases = [
+    // [currentValue, candidateValue, expected]
+    ["Priority 3", "Priority 1", "Priority 1"],
+    ["Priority 1", "Priority 3", "Priority 1"],
+    ["", "Priority 1", "Priority 1"],
+    ["Priority 1", "", "Priority 1"],
+    ["Priority 2", "Priority 2", "Priority 2"],
+    ["", "", ""]
+  ];
+
+  let pass = true;
+
+  cases.forEach(function(c){
+    const result = resolveMonotonicPriority_(c[0], c[1]);
+    const ok = result === c[2];
+    if(!ok) pass = false;
+    Logger.log(
+      "resolveMonotonicPriority_(\"" + c[0] + "\", \"" + c[1] + "\") => \"" +
+      result + "\" (expected \"" + c[2] + "\") " + (ok ? "✅" : "❌")
+    );
+  });
+
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Apply Priority Downgrade Guard
+ *
+ * WHY
+ * MASTER_003_MTAFunnelSync.js/MASTER_009_ICFunnelSync.js가 각자
+ * computeMTASyncColumnUpdates_()를 부르기 전에 funnelByLeadId의
+ * leadPriority 후보값을 resolveMonotonicPriority_()로 미리 걸러주는
+ * 공용 전처리 — 두 파일에 동일 로직을 중복 구현하지 않기 위함.
+ * computeMTASyncColumnUpdates_() 자체는 "값이 있으면 무조건 덮어쓰기"
+ * 하는 범용 함수(Revenue/날짜 필드엔 이 동작이 맞음)라 건드리지 않고,
+ * Lead Priority 후보값 자체를 이미 다운그레이드 없는 값으로 바꿔서
+ * 넘기는 방식으로 재사용한다.
+ *
+ * INPUT
+ * leadIds               : string[]
+ * funnelByLeadId         : Object  (각 값에 leadPriority 키가 있을 수 있음)
+ * leadIdToRow            : Object  ({ [leadId]: 1-indexed sheet row })
+ * dataStartRow           : number
+ * existingPriorityValues : Array<Array<string>>  (Leads_OPS "Lead Priority"
+ *                          컬럼 getValues() 결과, dataStartRow부터 시작)
+ *
+ * OUTPUT
+ * Object  (funnelByLeadId와 같은 키 구조, leadPriority만 다운그레이드
+ *   가드 적용된 새 객체 — 입력은 변경하지 않음)
+ *
+ * TEST
+ * testApplyPriorityDowngradeGuard() 참고.
+ * ==========================================================
+ */
+function applyPriorityDowngradeGuard_(
+  leadIds, funnelByLeadId, leadIdToRow, dataStartRow, existingPriorityValues
+){
+
+  const guarded = {};
+
+  leadIds.forEach(function(leadId){
+
+    const funnel = funnelByLeadId[leadId];
+
+    if(!funnel || !("leadPriority" in funnel)){
+      guarded[leadId] = funnel;
+      return;
+    }
+
+    const sheetRow = leadIdToRow[leadId];
+
+    const currentValue = sheetRow
+      ? existingPriorityValues[sheetRow - dataStartRow][0]
+      : "";
+
+    guarded[leadId] = Object.assign({}, funnel, {
+      leadPriority: resolveMonotonicPriority_(currentValue, funnel.leadPriority)
+    });
+
+  });
+
+  return guarded;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — applyPriorityDowngradeGuard_()
+ * ==========================================================
+ */
+function testApplyPriorityDowngradeGuard(){
+
+  const leadIds = ["L1", "L2", "L3"];
+
+  const funnelByLeadId = {
+    L1: { leadPriority: "Priority 3" },              // 다운그레이드 시도 — 거부돼야 함(기존 Priority 1 유지)
+    L2: { leadPriority: "Priority 1" },              // 승급 — 채택돼야 함(기존 Priority 3 → 1)
+    L3: { revenue: 500 }                             // leadPriority 키 자체가 없음 — 그대로 통과
+  };
+
+  const leadIdToRow = { L1: 2, L2: 3, L3: 4 };
+  const dataStartRow = 2;
+
+  const existingPriorityValues = [
+    ["Priority 1"],  // L1 (row 2)
+    ["Priority 3"],  // L2 (row 3)
+    ["Priority 2"]   // L3 (row 4)
+  ];
+
+  const result = applyPriorityDowngradeGuard_(
+    leadIds, funnelByLeadId, leadIdToRow, dataStartRow, existingPriorityValues
+  );
+
+  const pass =
+    result.L1.leadPriority === "Priority 1" &&
+    result.L2.leadPriority === "Priority 1" &&
+    !("leadPriority" in result.L3) &&
+    result.L3.revenue === 500 &&
+    funnelByLeadId.L1.leadPriority === "Priority 3"; // 입력 불변(순수 함수 확인)
+
+  Logger.log("testApplyPriorityDowngradeGuard: " + (pass ? "PASS" : "FAIL") + " result=" + JSON.stringify(result));
 
 }

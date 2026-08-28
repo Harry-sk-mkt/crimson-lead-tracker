@@ -23,15 +23,35 @@
  * 2개만 계속 관리(둘 다 이미 별개 메커니즘으로 해결된 필드라 이 구조적
  * 문제와 무관, `docs/OpenItems.md` #32 참고).
  *
+ * WHY (2026-08-28 — Lead Priority 추가)
+ * `Lead Priority`도 같은 Lead 레벨 스냅샷 문제를 겪음이 확인됨(New P1 8월
+ * 갭 조사). ICFunnel_Raw(`MASTER_009_ICFunnelSync.js`)도 동시에 이 필드를
+ * 동기화하므로, `applyPriorityDowngradeGuard_()`로 "더 높은 Priority만
+ * 채택"해 두 파이프라인이 순서 무관하게 안전하도록 함.
+ *
  * Must NOT
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
  * - IC Booked Date / IC Completed Date / Opportunity Won Date를 쓰지 않음
  *   (2026-08-26부터 `MASTER_009_ICFunnelSync.js`의 전담 필드)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-28)
+ * - **"Lead Priority" sync 대상 추가** — `docs/OpenItems.md` New P1 8월
+ *   갭(279 vs 267) 조사 결과, 갭의 대부분(10/13건)이 Leads_Master의
+ *   `Lead Priority`가 Lead 레벨 스냅샷이라 Salesforce에서 승급됐는데도
+ *   우리 쪽엔 예전 값이 남아있는 문제로 확인됨(IC Booked/Completed/Won
+ *   Date와 동일 클래스). 그중 6건은 MTA_Master에 이미 승급된 값을 담은
+ *   더 최근 터치가 존재해 별도 리포트 없이 이 파일만으로 즉시 해결
+ *   가능함을 실측 확인. `computeMTAFunnelByLeadId_()` 반환값에 leadPriority
+ *   추가, syncFieldMap에 "Lead Priority": "leadPriority" 추가.
+ *   ICFunnel_Raw(`MASTER_009_ICFunnelSync.js`)도 동시에 Lead Priority를
+ *   동기화하게 되어(같은 세션), 두 파이프라인이 순서에 따라 서로 덮어쓰는
+ *   위험을 막기 위해 `applyPriorityDowngradeGuard_()`(`UTIL_001_TransformHelper.js`
+ *   신규, "더 높은 Priority만 채택, 다운그레이드 금지" — 사용자 확정)를
+ *   computeMTASyncColumnUpdates_() 호출 전에 적용.
  * v1.7.0 (2026-08-26)
  * - **IC Booked Date / IC Completed Date / Opportunity Won Date를
  *   syncFieldMap에서 제거** — ICFunnel_Raw 재도입(`MASTER_009_ICFunnelSync.js`,
@@ -194,7 +214,8 @@ function computeMTAFunnelByLeadId_(mtaRecords){
       icCompletedDate: latestRow["IC Completed Date"],
       wonDate: latestRow["Opportunity Won Date"],
       revenue: latestRow["Revenue"],
-      salesAcceptedDate: latestRow["Sales Accepted Date"]
+      salesAcceptedDate: latestRow["Sales Accepted Date"],
+      leadPriority: latestRow["Lead Priority"]
     };
 
   });
@@ -220,7 +241,8 @@ function testComputeMTAFunnelByLeadId(){
       "IC Booked Date": new Date(2026, 5, 1),
       "IC Completed Date": null,
       "Opportunity Won Date": null,
-      "Revenue": 0
+      "Revenue": 0,
+      "Lead Priority": "Priority 3"
     },
 
     {
@@ -232,7 +254,8 @@ function testComputeMTAFunnelByLeadId(){
       "IC Completed Date": new Date(2026, 6, 5),
       "Opportunity Won Date": null,
       "Revenue": 0,
-      "Sales Accepted Date": new Date(2026, 4, 20)
+      "Sales Accepted Date": new Date(2026, 4, 20),
+      "Lead Priority": "Priority 1"
     },
 
     {
@@ -252,6 +275,7 @@ function testComputeMTAFunnelByLeadId(){
     Object.keys(result).length === 2 &&
     result["L1"].salesAcceptedDate.getTime() === new Date(2026, 4, 20).getTime() &&
     result["L1"].icCompletedDate.getTime() === new Date(2026, 6, 5).getTime() &&
+    result["L1"].leadPriority === "Priority 1" &&
     result["L2"].icBookedDate === null;
 
   Logger.log("Keys: " + Object.keys(result).length + " (expected 2)");
@@ -519,7 +543,8 @@ function syncMTAFunnelToOPS_(){
 
   const syncFieldMap = {
     "Revenue": "revenue",
-    "Sales Accepted Date": "salesAcceptedDate"
+    "Sales Accepted Date": "salesAcceptedDate",
+    "Lead Priority": "leadPriority"
   };
 
   const syncColumns = Object.keys(syncFieldMap)
@@ -542,8 +567,20 @@ function syncMTAFunnelToOPS_(){
       .getValues();
   });
 
+  //----------------------------------------------------------
+  // Lead Priority — ICFunnel_Raw sync와 순서 무관하게 다운그레이드
+  // 방지(UTIL_001_TransformHelper.js applyPriorityDowngradeGuard_(),
+  // docs/OpenItems.md New P1 8월 갭 조사 참고)
+  //----------------------------------------------------------
+
+  const guardedFunnelByLeadId = existingColumnValues["Lead Priority"]
+    ? applyPriorityDowngradeGuard_(
+        leadIds, funnelByLeadId, leadIdToRow, OPS.ROWS.DATA_START, existingColumnValues["Lead Priority"]
+      )
+    : funnelByLeadId;
+
   const syncResult = computeMTASyncColumnUpdates_(
-    leadIds, funnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+    leadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
   );
 
   syncColumns.forEach(function(col){

@@ -6,7 +6,8 @@
  * Responsibility
  * ICFunnel_Raw(Append 전용, Master 빌드 없음)에서 Lead ID별 최신
  * 레코드를 뽑아 Leads_OPS의 IC Booked Date / IC Completed Date /
- * Opportunity Won Date만 역동기화.
+ * Opportunity Won Date / Lead Priority(2026-08-28 추가, optional)로
+ * 역동기화.
  *
  * WHY (재도입 배경, 2026-08-26)
  * 이 3개 필드는 Lead 레벨 스냅샷이라, `MASTER_003_MTAFunnelSync.js`의
@@ -45,9 +46,23 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-08-28)
+ * - **"Lead Priority" sync 대상 추가(optional)** — `docs/OpenItems.md`
+ *   New P1 8월 갭(279 vs 267) 조사 결과, Lead Priority도 IC Booked/
+ *   Completed/Won Date와 같은 Lead 레벨 스냅샷 지연 문제를 겪음이 확인됨.
+ *   `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`(`CORE_001_Config.js` v1.49.0)
+ *   신규, `computeICFunnelByLeadId_()`에 leadPriority 추가(날짜 아님,
+ *   parseDate 안 씀). MTA_Master sync(`MASTER_003_MTAFunnelSync.js`
+ *   v1.8.0)도 동시에 이 필드를 동기화하게 되므로,
+ *   `applyPriorityDowngradeGuard_()`(`UTIL_001_TransformHelper.js` 신규,
+ *   "더 높은 Priority만 채택, 다운그레이드 금지" — 사용자 확정)를
+ *   computeMTASyncColumnUpdates_() 호출 전에 적용해 두 파이프라인이
+ *   순서 무관하게 안전하도록 함. Required Fields엔 미포함 — 사용자가
+ *   아직 Salesforce IC Funnel 리포트에 이 컬럼을 추가하지 않은 상태로
+ *   재import해도 깨지지 않음(빈 값이면 sync 단계에서 자동 skip).
  * v1.1.0 (2026-08-26)
  * - **버그 수정 — Import 시 실사용 중 실제 발생**: `syncICFunnelToOPS_()`
  *   끝의 7개 Engine refresh(refreshACQSummary_ 등)는 Leads_OPS(3만5천+행)/
@@ -171,9 +186,10 @@ function testPickLatestICFunnelRecords(){
  * latestByLeadId : Object  (pickLatestICFunnelRecords_() 출력)
  *
  * OUTPUT
- * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate } }
+ * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate, leadPriority } }
  *         (computeMTASyncColumnUpdates_()가 기대하는 funnelByLeadId 형태와
- *         동일 — syncColumns의 funnelKey로 조회됨)
+ *         동일 — syncColumns의 funnelKey로 조회됨. leadPriority는 날짜가
+ *         아니라 문자열 그대로 통과 — 2026-08-28 추가)
  *
  * TEST
  * testComputeICFunnelByLeadId() 참고 — day-first 파싱이 실제로
@@ -193,7 +209,8 @@ function computeICFunnelByLeadId_(latestByLeadId){
     result[leadId] = {
       icBookedDate: parseDate(record[cols.IC_BOOKED_DATE], "DMY"),
       icCompletedDate: parseDate(record[cols.IC_COMPLETED_DATE], "DMY"),
-      wonDate: parseDate(record[cols.OPPORTUNITY_WON_DATE], "DMY")
+      wonDate: parseDate(record[cols.OPPORTUNITY_WON_DATE], "DMY"),
+      leadPriority: record[cols.LEAD_PRIORITY] || ""
     };
 
   });
@@ -219,6 +236,7 @@ function testComputeICFunnelByLeadId(){
     r[cols.IC_BOOKED_DATE] = "6/8/2026, 3:05 pm";        // 8월 6일 (day-first)
     r[cols.IC_COMPLETED_DATE] = "";                       // 아직 없음
     r[cols.OPPORTUNITY_WON_DATE] = "10/9/2026";           // 9월 10일 (day-first)
+    r[cols.LEAD_PRIORITY] = "Priority 1";
     return r;
   })();
 
@@ -231,7 +249,8 @@ function testComputeICFunnelByLeadId(){
     result["L1"].icCompletedDate === null &&
     result["L1"].wonDate instanceof Date &&
     result["L1"].wonDate.getMonth() === 8 &&         // September = index 8
-    result["L1"].wonDate.getDate() === 10;
+    result["L1"].wonDate.getDate() === 10 &&
+    result["L1"].leadPriority === "Priority 1";
 
   Logger.log(
     "testComputeICFunnelByLeadId: " + (pass ? "PASS" : "FAIL") +
@@ -329,7 +348,8 @@ function syncICFunnelToOPS_(){
   const syncFieldMap = {
     "IC Booked Date": "icBookedDate",
     "IC Completed Date": "icCompletedDate",
-    "Opportunity Won Date": "wonDate"
+    "Opportunity Won Date": "wonDate",
+    "Lead Priority": "leadPriority"
   };
 
   const syncColumns = Object.keys(syncFieldMap)
@@ -352,8 +372,20 @@ function syncICFunnelToOPS_(){
       .getValues();
   });
 
+  //----------------------------------------------------------
+  // Lead Priority — MTA_Master sync(MASTER_003)와 순서 무관하게
+  // 다운그레이드 방지(UTIL_001_TransformHelper.js
+  // applyPriorityDowngradeGuard_(), docs/OpenItems.md New P1 8월 갭 조사 참고)
+  //----------------------------------------------------------
+
+  const guardedFunnelByLeadId = existingColumnValues["Lead Priority"]
+    ? applyPriorityDowngradeGuard_(
+        leadIds, funnelByLeadId, leadIdToRow, OPS.ROWS.DATA_START, existingColumnValues["Lead Priority"]
+      )
+    : funnelByLeadId;
+
   const syncResult = computeMTASyncColumnUpdates_(
-    leadIds, funnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+    leadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
   );
 
   syncColumns.forEach(function(col){

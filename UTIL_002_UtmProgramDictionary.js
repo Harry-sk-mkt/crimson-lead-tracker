@@ -53,9 +53,41 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.6.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-08-28)
+ * - `UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS`에 2건 추가 —
+ *   `TEMPQA_039_TrafficUtmDictionaryAudit.js`로 "tofu"/"traffic" 포함
+ *   딕셔너리 32건 전수 검토 결과, 대부분(예: "Cracking the Common App
+ *   with Martin" 완전 일치, "Essay Comp 2025" 417/417건 일치)은 정상
+ *   매칭이라 "tofu" 자체를 배제 신호로 쓰면 오히려 정상 매칭을 대량
+ *   파괴함이 확인됨(사용자 요청으로 검토, blanket 규칙 도입 안 함) —
+ *   그중 UTM명과 매칭 Program 주제가 실제로 안 맞아 보이는 2건만
+ *   사용자 확인 후 추가.
+ * v1.7.0 (2026-08-28)
+ * - **`UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS` 신규 — 오래된 범용 트래픽
+ *   캠페인이 다수결로 무관한 Program에 잘못 채굴되는 사례 발견·수정.**
+ *   사용자가 Events_OPS의 "WB-2026-07-KOR-MOFU-Core Game Changing Common
+ *   Application Tips & Case Studies"(2026-07 웨비나) CVR 71.3%/Spent
+ *   $10,706처럼 비정상적으로 큰 것을 발견 — `TEMPQA_038_
+ *   EventsGameChangingWebinarMetaAudit.js`로 조사한 결과, 매칭된 유일한
+ *   Meta 캠페인이 `KR_core_2024-07-19_landing-page-tofu_traffic`(2024년
+ *   7월부터 지금까지 도는 무관한 범용 TOFU 트래픽 캠페인, CampaignRun이
+ *   2026-08-31까지)이었음(사용자 확인 — 이 웨비나와 무관). 원인: 이
+ *   캠페인은 목적이 "트래픽"이라 대부분의 클릭이 리드로 전환/귀속되지
+ *   않고, 어쩌다 귀속된 소수 터치가 우연히 전부 이 웨비나 Program으로
+ *   찍혀 있어 `Distinct Program Count===1`(모호하지 않음)로 딕셔너리를
+ *   통과함 — 그런데 이 UTM에 매칭되는 Meta 캠페인의 지출/클릭은 소수
+ *   터치가 아니라 **2년치 누적 전체**라 Program 하나에 부적절하게
+ *   전부 귀속됨. `readUtmProgramDictionaryMap_()`(모든 소비처가 공유하는
+ *   단일 소스 — Events/BOFU/Content/Search Spend 매칭 + Business Segment
+ *   분류 전부)에 이 UTM 키를 필터링하는 신규 `isUtmProgramDictionaryKeyExcluded_()`
+ *   추가. 사람이 직접 확인한 것만 담는 소수 목록(기존
+ *   `META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE` 등과 동일 관행) — 자동
+ *   판별 규칙(예: "_traffic" 접미사 전부 제외)은 아직 검증 안 된 가설이라
+ *   도입하지 않음(임의 확장 금지, 다른 "_traffic" 캠페인이 실제로도
+ *   문제인지는 별도 확인 필요).
  * v1.6.0 (2026-08-26)
  * - **`resolveBusinessSegmentPure_()` 우선순위 재조정(사용자 확정, 배포 직후
  *   TEMPQA_034 diff로 발견) — 딕셔너리 조회보다 `resolveDefiniteBusinessSegment_()`
@@ -521,6 +553,80 @@ function runRefreshUtmProgramDictionary(){
  */
 let _utmProgramDictCache = null;
 
+/**
+ * ==========================================================
+ * UTM Program Dictionary Manual Exclusions
+ *
+ * WHY (2026-08-28)
+ * `readUtmProgramDictionaryMap_()`의 다수결 채굴이 "모호하지 않음"
+ * (Distinct Program Count===1)으로 통과시켰지만 실제로는 틀린 사례가
+ * 발견됨 — 오래된 범용 트래픽 캠페인처럼 대부분의 클릭이 리드로 전혀
+ * 귀속되지 않는 캠페인은, 어쩌다 귀속된 소수 터치가 우연히 한 Program에
+ * 몰리면 통계적으로 "확실"해 보이지만 실제로는 그 UTM의 진짜 성격을
+ * 대표하지 못한다(사람이 직접 확인해야 판별 가능, 자동 규칙화 안 함).
+ * 여기 등록된 UTM Campaign 키(소문자, `MKT UTM Campaign` 원문 기준)는
+ * Distinct Program Count와 무관하게 항상 딕셔너리 매칭에서 제외 —
+ * 이 딕셔너리를 쓰는 모든 소비처(Events/BOFU/Content/Search Spend 매칭,
+ * Business Segment 분류)에 동일하게 적용됨.
+ *
+ * 항목 추가 시 반드시 사람이 직접 확인한 근거를 주석으로 남길 것
+ * (`docs/OpenItems.md` 참고 — 임의로 목록을 넓히지 않는다).
+ * ==========================================================
+ */
+const UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS = [
+  // 2026-08-28 — TEMPQA_038 조사로 발견. 2024-07-19부터 지금까지 도는
+  // 범용 TOFU 트래픽 캠페인인데, 소수 귀속 터치가 우연히 전부
+  // "WB-2026-07-KOR-MOFU-Core Game Changing Common Application Tips &
+  // Case Studies"(2026-07 웨비나)로 찍혀 있어 그 캠페인의 2년치 누적
+  // Spend/Clicks 전체가 이 웨비나 하나에 잘못 귀속되던 문제(사용자 확인,
+  // Events_OPS에서 CVR 71.3%/Spent $10,706처럼 비정상 수치로 발견됨).
+  "kr_core_2024-07-19_landing-page-tofu_traffic",
+  // 2026-08-28 — TEMPQA_039로 "tofu"/"traffic" 포함 딕셔너리 전수 조사
+  // 중 발견(둘 다 Total Count=1, 매칭 Program과 UTM명 주제가 안 맞음 —
+  // "tofu"라는 단어 자체는 이 계정에서 그냥 퍼널단계 네이밍 태그일 뿐
+  // 무관 신호가 아님이 같은 조사로 확인됨, 대부분의 tofu 태그 UTM은
+  // Program명과 정확히 일치해 제외 대상이 아니었음 — 이 2건만 예외):
+  "kr_core_2025-07-19_stanford-analysis-case-study-event-tofu_traffic", // 매칭 Program "WB-2025-06-KOR-MOFU-Core Successful app showcase From SG to HYPS"과 주제 불일치(사용자 확인)
+  "wb-2023-01-usa-tofu-core chinese-webinar-trend-analysis-david" // 매칭 Program이 "wechat"이라는 특정 콘텐츠를 안 가리키는 이름(사용자 확인)
+];
+
+
+/**
+ * ==========================================================
+ * Is UTM Program Dictionary Key Excluded (순수 함수)
+ *
+ * @param {string} utmKeyLower  소문자로 정규화된 UTM Campaign 키
+ * @return {boolean}
+ *
+ * TEST
+ * testIsUtmProgramDictionaryKeyExcluded() 참고
+ * ==========================================================
+ */
+function isUtmProgramDictionaryKeyExcluded_(utmKeyLower){
+
+  return UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS.indexOf(utmKeyLower) !== -1;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isUtmProgramDictionaryKeyExcluded_()
+ * ==========================================================
+ */
+function testIsUtmProgramDictionaryKeyExcluded(){
+
+  const pass =
+    isUtmProgramDictionaryKeyExcluded_("kr_core_2024-07-19_landing-page-tofu_traffic") === true &&
+    isUtmProgramDictionaryKeyExcluded_("kr_core_2025-07-19_stanford-analysis-case-study-event-tofu_traffic") === true &&
+    isUtmProgramDictionaryKeyExcluded_("wb-2023-01-usa-tofu-core chinese-webinar-trend-analysis-david") === true &&
+    isUtmProgramDictionaryKeyExcluded_("kr_core_2026-01-01_some-webinar_lead") === false;
+
+  Logger.log("testIsUtmProgramDictionaryKeyExcluded: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
 function readUtmProgramDictionaryMap_(){
 
   if(_utmProgramDictCache) return _utmProgramDictCache;
@@ -543,7 +649,11 @@ function readUtmProgramDictionaryMap_(){
 
     if(distinctProgramCount !== 1) continue; // 모호한 UTM 제외
 
-    map[String(values[i][0] || "").trim().toLowerCase()] = values[i][1];
+    const utmKeyLower = String(values[i][0] || "").trim().toLowerCase();
+
+    if(isUtmProgramDictionaryKeyExcluded_(utmKeyLower)) continue; // 수동 확인된 오채굴 제외
+
+    map[utmKeyLower] = values[i][1];
 
   }
 

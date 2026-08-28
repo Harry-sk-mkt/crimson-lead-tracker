@@ -397,8 +397,8 @@
     보일 것 — 코드 이슈 아님, (3) 8/17주 수정 후 실측(10,443.03)과의 최종 오차가 얼마인지
     사용자가 직접 재확인한 응답은 못 받음(수정 직전 값 기준 Node 계산상 근접할 것으로 예상만
     확인). 다음 세션에서 위 3가지를 먼저 확인할 것.
-32. **ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계 — 원인 규명 완료(2026-08-25), 해결책
-    구현 완료(2026-08-26), 실사용 검증 대기(TODO)** — 사용자가 Salesforce "leads report"(IC
+32. ~~ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계~~ — **✅ 실사용 검증 완료(2026-08-28)**,
+    아래는 진행 경과 기록(참고용). 사용자가 Salesforce "leads report"(IC
     Booked Date=이번 달, 전체 세그먼트)
     42건 대비 ACQ_REP IC Booked 21건, IC Complete는 Salesforce 21~22건 대비 ACQ_REP 7건으로
     괴리 보고. `TEMPQA_032_ICBookedAugustSalesforceDiff.js`로 Salesforce Email 목록을
@@ -449,10 +449,29 @@
     `refreshReportFYDropdowns_()`/`refreshReportGenerate_()`까지 이어서 실행하도록
     확장(`runICFunnelPipelineTail()` v1.18.0). 상세: `docs/Changelog.md` 2026-08-26,
     `docs/ACQReportDesign.md`/`docs/OperationsLayer.md`/`docs/ImportPipeline.md` 해당 섹션.
-    **남은 것(TODO)**: 사용자가 `ICFunnel_Raw` 시트(빈 탭)를 스프레드시트에 생성한 뒤 실제
-    CSV로 Import → 백그라운드 트리거 완료 후 Leads_OPS IC Booked/Completed/Won Date
-    반영 확인 → ACQ_REP 재계산 후 Salesforce 42건/21~22건과의 최종 오차 확인 — 확인
-    전까지 완료로 간주하지 말 것.
+    **✅ 실사용 검증 완료(2026-08-28)**: 2026-08-27 세션에서 `runICFunnelPipelineTail`(Time-Driven)이
+    IC Funnel Sync~Events Engine까지 정상 완료했고(BOFU 단계의 별개 `Error code INTERNAL`은
+    일시적 인프라 결함, `docs/apps-script-gotchas.md` #12), 재업로드 후 한동안 살아있던
+    `PIPELINE_LOCK`도 30분 self-heal로 정상 해소된 것을 확인 — Leads_OPS에 IC Funnel 데이터가
+    이미 반영된 상태였음. `TEMPQA_032_ICBookedAugustSalesforceDiff.js`의
+    `runCompareICBookedAugustAgainstSalesforce()`/`runCompareICCompleteAugustAgainstSalesforce()`
+    (코드 수정 없이 그대로 재실행, Leads_OPS 값을 직접 비교하는 방식이라 필드 소유권이
+    MTA_Master→ICFunnel_Raw로 바뀐 것과 무관) 재실행 결과: **IC Booked 21/42 → 39/42, IC Complete
+    7/21 → 19/21로 대폭 개선**, `syncBugSuspect`/`mtaMissingValue`/`mtaMissingTouch`/`notInOps`
+    전부 0건 — 남은 갭 전부(IC Booked 3건, IC Complete 2건, 부분집합) **sync 버그가 아니라
+    Leads_Master에 아예 존재하지 않는 순수 Import 공백**(`lyj79bada@gmail.com`/
+    `micyoo@gmail.com`/`ian.han0408@gmail.com` — 다음 Leads Import 때 포함되면 자동 해소,
+    코드 조치 불필요). ICFunnel_Raw 재도입이 의도대로 완전히 동작함을 최종 확인, 이 항목 완결.
+    **✅ 추가 검증(2026-08-28, 사용자가 신선한 Salesforce IC Booked 리포트 52건 제공)**:
+    `TEMPQA_040_ICBookedAugustSalesforceLeadTrace.js`로 재대조 — 42건 정상, 5건 순수 Import
+    공백(그중 3건은 위와 동일한 잔여 3명), **나머지 5건은 `runSyncICFunnelToOPS()` 재실행 후에도
+    안 풀림**. `runTraceICBookedSyncGapLeadIds()`로 Lead ID를 Leads_Master/Leads_OPS/
+    ICFunnel_Raw 3단 직접 대조한 결과 Lead ID는 전부 일치 — **원인은 sync 버그가 아니라
+    ICFunnel_Raw 자체에 이 5건의 IC Booked Date 값이 비어있음**(5건 전부 SF IC Booked
+    Date=8/26 최신일이라, 마지막 IC Funnel export가 이 5건의 예약 확정 이전 시점에 뽑힌
+    리포트였던 것으로 결론 — 코드 문제 아님). **남은 것(TODO)**: 사용자가 평소 IC Funnel
+    import에 쓰는 리포트 템플릿(Lead ID 포함 필수)으로 최신 데이터를 재export → "📥 Update →
+    Import IC Funnel" 재업로드 → 재sync 후 이 5건 해소 확인.
 33. **Won/Lost Deal 중 20~30%가 IC Booked/Completed Date 없이 바로 전환 — 원인 미상, 다음
     세션으로 보류(2026-08-26)** — 32번 항목(ICFunnel_Raw 재도입) 검증 중, 사용자가 전체 기간
     ICFunnel_Raw CSV를 뽑아보니 IC Booked Date가 Salesforce 리포트 화면에 "-"로 보이는 값들이
@@ -487,3 +506,41 @@
     지금은 1회성 수동 diff 진단이라 이 목적에 가장 가까운 기존 코드 — 이걸 정기 모니터링
     체계로 발전시키는 방향이 유력해 보이나 확정 아님, 임의로 설계하지 말고 사용자와 먼저
     논의할 것.
+35. **New P1 8월 갭(279 vs 267) — `Lead Priority` 필드 스냅샷 지연 확인·부분 해결(2026-08-28),
+    나머지는 사용자 액션 대기(TODO)** — 사용자가 제공한 Salesforce 8월 New Leads CSV(739건,
+    Priority 1=279건)를 `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`로 대조한 결과 10건이
+    `Leads_Master`의 `Lead Priority`가 예전 스냅샷(Salesforce에서 이미 승급됐는데 반영 안 됨)인
+    것으로 확인 — IC Booked/Completed/Won Date(#32)와 같은 클래스의 "Lead 레벨 스냅샷이 새
+    export 전까지 안 바뀌는" 구조적 문제. `MASTER_003_MTAFunnelSync.js`/`MASTER_009_
+    ICFunnelSync.js`에 Lead Priority 역동기화 추가(사용자 확정 — MTA+ICFunnel 둘 다), 순서
+    무관 안전을 위해 `applyPriorityDowngradeGuard_()`(`UTIL_001_TransformHelper.js`, "더 높은
+    Priority만 채택")를 공용 적용. **남은 것(TODO)**: (1) 10건 중 6건은 MTA_Master에 이미 최신
+    값이 있어 `runSyncMTAFunnelToOPS()` 실행으로 즉시 해결 가능 — 사용자에게 실행 요청은 했으나
+    세션 종료로 결과 미확인, 다음 세션에 재확인 필요. (2) 나머지 4건은 사용자가 Salesforce IC
+    Funnel 리포트에 "Lead Priority" 컬럼을 추가해 재export/재import해야 해소됨(코드만으론 불가,
+    `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`는 optional로 이미 준비됨) — 아직 안 됨. 다음 세션에
+    `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`의 `runCompareAugustNewP1AgainstSalesforce()`
+    재실행으로 최종 검증할 것.
+36. ~~Events_OPS Meta 캠페인 오매칭(CVR 71.3% 등 비정상 수치)~~ — **✅ 근본 원인 규명 및 수정
+    완료(2026-08-28)**, "Recording" 변형 0 문제만 별도 미해결로 남음. 사용자 보고로 "WB-2026-07-
+    KOR-MOFU-Core Game Changing Common Application Tips & Case Studies" 웨비나의 CVR 71.3%/
+    Spent $10,706.41/Clicks 19,827/Results 14,146이 비정상적으로 큰 것 발견.
+    `TEMPQA_038_EventsGameChangingWebinarMetaAudit.js` 조사 결과 원인은 `KR_core_2024-07-19_
+    landing-page-tofu_traffic`(2024년 7월부터 지금까지 도는 무관한 범용 TOFU 트래픽 캠페인)이
+    소수 귀속 터치의 우연한 쏠림으로 `UTM_Program_Dictionary`에서 이 웨비나 Program 하나로
+    "모호하지 않음" 판정받아, 2년치 누적 Spend/Clicks 전체가 이 웨비나에 잘못 귀속된 것으로
+    확인(사용자 확인). `UTIL_002_UtmProgramDictionary.js`에 `UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS`
+    신규 도입(`readUtmProgramDictionaryMap_()` 모든 소비처 — Events/BOFU/Content/Search Spend
+    매칭 + Business Segment 분류 — 공통 적용) 후 이 UTM 등록. **후속 전수 감사**(사용자 요청
+    "TOFU면 다른 프로그램에도 포함되면 안돼"): `TEMPQA_039_TrafficUtmDictionaryAudit.js`로
+    "traffic"/"tofu" 포함 딕셔너리 32건 전수 검토 — "tofu"라는 단어 자체는 이 계정에서 그냥
+    퍼널단계 네이밍 태그일 뿐 무관 신호가 아님이 확인됨(대부분 정상 매칭, 예: "Essay Comp 2025"
+    417/417건 완전 일치) — blanket 배제 규칙은 도입하지 않음. 이름·매칭 Program 주제가 실제로
+    안 맞아 보이는 2건만 사용자 확인 후 추가 등록(`kr_core_2025-07-19_stanford-analysis-
+    case-study-event-tofu_traffic`/`wb-2023-01-usa-tofu-core chinese-webinar-trend-analysis-
+    david`). **미해결(별도 원인, 남은 범위)**: "Recording" 변형은 매칭되는 Meta 캠페인이 애초에
+    0개 — 유료 광고 자체가 없는 정상 상황인지 UTM이 다르게 잡힌 문제인지 구분 안 됨, Meta Ads
+    Manager에서 직접 확인 필요(사용자 액션 대기). **소급 적용 관련**: `resolveBusinessSegment_()`
+    도 같은 딕셔너리를 쓰므로 이번에 제외한 3개 UTM 키에 걸린 이미 빌드된 Leads_Master/
+    MTA_Master 행의 Business Segment는 소급 반영 안 됨(표본 1~2건씩이라 영향 미미로 판단,
+    #22 기존 방침대로 rebuild는 보류 — 사용자 확인, 필요시 diff 먼저 확인 후 별도 결정).

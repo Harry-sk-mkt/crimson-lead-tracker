@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.48.0
+ * v1.49.0
  *
  * Change Log
+ * v1.49.0 (2026-08-28)
+ * - `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`("Lead Priority") 신규 —
+ *   `docs/OpenItems.md` New P1 8월 갭 조사 결과, Lead Priority도 IC Booked/
+ *   Completed/Won Date와 같은 Lead 레벨 스냅샷 지연 문제를 겪음이 확인돼
+ *   ICFunnel_Raw 동기화 대상에 추가(`MASTER_009_ICFunnelSync.js`). Required
+ *   Fields엔 미포함(optional, 기존 IC Funnel export를 재import해도 안 깨짐).
  * v1.48.0 (2026-08-27)
  * - `CONFIG.TARGET.INPUT.ROWS.NEW_P1_TARGET_OVERRIDE`(34행) 신규, `LAST_ROW`
  *   33→34 — Target_Engine의 세그먼트별 상향식 합산(5509)과 세일즈/재무의 FY26
@@ -408,7 +414,14 @@ const CONFIG = {
       LEAD_ID: "Lead ID",
       IC_BOOKED_DATE: "IC Booked Date",
       IC_COMPLETED_DATE: "IC Completed Date (Pre-Conversion)",
-      OPPORTUNITY_WON_DATE: "Opportunity Won Date"
+      OPPORTUNITY_WON_DATE: "Opportunity Won Date",
+      // 2026-08-28 추가 — Lead Priority도 Lead 레벨 스냅샷이라 같은 지연
+      // 문제를 겪음이 확인됨(docs/OpenItems.md New P1 8월 갭 조사). 기존
+      // 3개 필드와 달리 REQUIRED_FIELDS엔 넣지 않음 — 사용자가 아직
+      // Salesforce IC Funnel 리포트에 이 컬럼을 추가하기 전 예전 export를
+      // 다시 import해도 깨지지 않아야 하므로 optional 취급(값 없으면
+      // computeICFunnelByLeadId_()가 빈 문자열 반환, sync 단계에서 자동 skip).
+      LEAD_PRIORITY: "Lead Priority"
 
     }
 
