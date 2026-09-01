@@ -46,9 +46,14 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-09-01)
+ * - `scheduleICFunnelPipelineTail_()` 락 충돌 시 `enqueuePendingPipelineType_()`
+ *   (MASTER_002_PipelineAsync.js)로 자동 재시도 대기열에 등록하도록 변경
+ *   (사용자 요청 — IC→MTA→New Leads 연달아 import 시 중간 타입이 스킵된 채
+ *   방치되던 문제 해결). 기존엔 그냥 로그만 남기고 끝났음.
  * v1.2.0 (2026-08-28)
  * - **"Lead Priority" sync 대상 추가(optional)** — `docs/OpenItems.md`
  *   New P1 8월 갭(279 vs 267) 조사 결과, Lead Priority도 IC Booked/
@@ -464,8 +469,10 @@ function scheduleICFunnelPipelineTail_(){
 
   if(locked){
 
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.ICFUNNEL);
+
     Logger.log(
-      "[ICFunnelSync] Pipeline lock held by another run — skipping background sync this cycle."
+      "[ICFunnelSync] Pipeline lock held by another run — queued for automatic retry after it finishes."
     );
 
     return { backgroundSkipped: true };

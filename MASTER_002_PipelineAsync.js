@@ -22,9 +22,68 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.18.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-09-01)
+ * - **락 충돌 자동 재시도(사용자 요청)**: 기존엔 PIPELINE_LOCK을 다른
+ *   타입이 쥐고 있으면 이번 사이클은 Master append만 반영하고 "몇 분 후
+ *   사람이 직접 run*PipelineTail() 실행"을 요구했음(2026-08-05 최초 설계
+ *   당시 "단순 락, 자동 대기열 없음"으로 확정했던 부분 — IC→MTA→New Leads처럼
+ *   몇 분 안에 연달아 Import하는 실사용 패턴에서 중간 타입이 조용히 스킵되고
+ *   아무도 자동으로 못 잡는 문제가 드러나 재설계). 신규
+ *   `computeEnqueuedPendingTypes_()`/`computeNextPendingType_()`(순수 함수,
+ *   FIFO 대기열 JSON 직렬화)와 IO 래퍼 `enqueuePendingPipelineType_()`/
+ *   `releasePipelineLockAndProcessQueue_()`/`pipelineTailHandlerNameByType_()`
+ *   추가. `run{Leads|MTA|ICFunnel}PipelineTail()`의 성공/실패 경로 5곳
+ *   전부(finally 포함) 기존 `releasePipelineLock_()` 대신
+ *   `releasePipelineLockAndProcessQueue_()` 호출로 교체 — 락을 반납하는
+ *   시점에 대기열에 있던 다음 타입을 자동으로 이어서 실행(FIFO). Import
+ *   측 호출부(`MASTER_001_IncrementalMasterBuild.js` `appendNewLeads()`/
+ *   `appendNewMTA()`, `MASTER_009_ICFunnelSync.js`
+ *   `scheduleICFunnelPipelineTail_()`)도 락 충돌 시 `enqueuePendingPipelineType_()`
+ *   호출하도록 변경. `CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES`(CORE_001_Config.js)
+ *   신규. 신규 테스트: `testComputeEnqueuedPendingTypes()`,
+ *   `testComputeNextPendingType()`.
+ * v1.21.0 (2026-09-01)
+ * - 신규 `periodicRefreshAllReports_()`/`scheduleNextAllReportsRefresh_()`/
+ *   `computeNextSeoulHourTimestamp_()`/`runInstallAllReportsPeriodicRefreshTrigger()` —
+ *   ACQ_REP/NewP1_REP/Target_REP/S&M_REP/FY_REP 5개 리포트를 Import 여부와
+ *   무관하게 하루 2번(한국시간 오전 10시/오후 10시, `CONFIG.REPORT_REFRESH.
+ *   DAILY_HOURS_KST`) 강제 재계산하는 독립 트리거(사용자 요청). 이 프로젝트의
+ *   Apps Script 프로젝트 타임존(America/New_York)에서 `.timeBased().atHour()`를
+ *   쓰면 미국 서머타임(EST/EDT) 전환마다 한국시간 기준 ±1시간 오차가 생기는
+ *   문제를 사전에 지적받아, Asia/Seoul 고정 UTC+9 오프셋으로 직접 계산한
+ *   절대 시각에 1회성 `.at(date)` 트리거를 거는 방식으로 구현 —
+ *   `periodicRefreshAllReports_()`가 실행될 때마다 스스로 다음 회차를
+ *   재예약하는 self-rescheduling 체인(무한 반복). `refreshReportGenerate_()`는
+ *   재사용하지 않음(Import 타입 전용 README Pipeline Status 갱신까지 겸하는
+ *   함수라 개념이 다름) — 5개 generateXxx_()를 독립 try/catch로 직접 호출.
+ *   신규 테스트: `testComputeNextSeoulHourTimestamp()`. 최초 1회
+ *   `runInstallAllReportsPeriodicRefreshTrigger()`를 Apps Script 편집기에서
+ *   직접 Run 해야 트리거 체인이 시작됨.
+ * v1.20.0 (2026-09-01)
+ * - `refreshReportGenerate_()`에 `generateFYReport_()`(FYREP_002_Report.js) 추가
+ *   (사용자 확정 — "앞으로 모든 reporting layer는 import시 자동업데이트되도록").
+ *   smRep과 동일 패턴, `CONFIG.PIPELINE.STATUS_COLUMNS`의 신규 `fyRep` 컬럼 사용.
+ *   `generateFYReport_()`가 내부적으로 `computeFYRepFlatRows_()`(FYREP_001_Engine.js)를
+ *   통해 외부 스프레드시트(perfTrackerByFY)를 `openById()`로 여는데, 이게 바로
+ *   FY_REP이 지금까지 Simple Trigger(onEdit) 대신 별도 설치형 트리거
+ *   (`onFYReportEdit_()`)로만 Generate 가능했던 이유(권한 제약, docs/OpenItems.md
+ *   #11) — `refreshReportGenerate_()`는 이미 설치형(Full Authorization) 트리거
+ *   안에서 실행되므로(`generateTargetReport_()` v1.9.0과 동일 근거) 동일한
+ *   제약 없이 안전하게 호출 가능. `testBuildPipelineStatusGrid()` grid 길이/
+ *   인덱스 기대값 갱신(STATUS_COLUMNS 12번째 컬럼 FY_REP 추가).
+ * v1.19.0 (2026-09-01)
+ * - `refreshReportGenerate_()`에 `generateSMReport_()`(SMREP_001_Report.js) 추가
+ *   (사용자 요청 — "import 시에도 자동으로 Generate되게 고쳐줘"). 기존
+ *   acqRep/newP1Rep/targetRep와 동일 패턴(독립 try/catch, 실패해도 나머지
+ *   핵심 데이터 refresh는 계속 DONE 유지) — `CONFIG.PIPELINE.STATUS_COLUMNS`의
+ *   신규 `smRep` 컬럼(CORE_001_Config.js) 사용. Leads/MTA/IC Funnel 세 파이프라인
+ *   테일 모두 `refreshReportGenerate_()`를 공유하므로 이 세 트리거 어느 것으로
+ *   갱신되든 S&M_REP도 함께 자동 Generate됨 — 더 이상 Generate 체크박스를
+ *   수동으로 누를 필요 없음. `testBuildPipelineStatusGrid()`도 STATUS_COLUMNS
+ *   11번째 컬럼(S&M_REP) 추가에 맞게 grid 길이/인덱스 기대값 갱신.
  * v1.18.0 (2026-08-26)
  * - **버그 수정 — 실사용 로그로 발견(사용자 지적)**: `runICFunnelPipelineTail()`이
  *   `syncICFunnelToOPS_()`(숨겨진 Engine 캐시만 갱신)만 부르고 끝나서,
@@ -601,6 +660,245 @@ function schedulePipelineTail_(handlerName){
 
 /**
  * ==========================================================
+ * Compute Enqueued Pending Pipeline Types (순수 함수)
+ *
+ * WHY (2026-09-01, 사용자 요청 — 락 충돌 자동 재시도)
+ * 기존엔 PIPELINE_LOCK을 다른 타입이 쥐고 있으면 이번 Import는 Master
+ * append만 반영하고 "몇 분 후 사람이 직접 run*PipelineTail() 실행"을
+ * 요구했음(단순 락, 자동 대기열 없음 — 2026-08-05 최초 설계 당시 사용자
+ * 확정 사항이었으나, IC→MTA→New Leads처럼 몇 분 안에 연달아 Import하는
+ * 실사용 패턴에서 중간 타입이 조용히 스킵되고 아무도 자동으로 못 잡는
+ * 문제가 드러나 재설계). 락을 못 얻은 타입을 여기 대기열에 담아두면,
+ * 현재 파이프라인이 끝나 락을 반납하는 시점에
+ * `releasePipelineLockAndProcessQueue_()`가 자동으로 다음 타입을 이어서
+ * 실행한다. 같은 타입이 대기 중에 또 lock 실패해도 중복 적재하지 않음
+ * (그사이 Raw/Master append는 이미 동기로 반영됐으므로, 재실행 1번이면
+ * 최신 상태까지 전부 커버됨 — 중복 실행은 낭비).
+ *
+ * INPUT
+ * existingRaw : string  (PropertiesService 저장값, JSON 배열 문자열 또는 "")
+ * type        : string  (CONFIG.PIPELINE.TYPES.*)
+ *
+ * OUTPUT
+ * string  (갱신된 JSON 배열 문자열 — 파싱 불가/빈 값은 빈 배열로 간주)
+ *
+ * TEST
+ * testComputeEnqueuedPendingTypes() 참고
+ * ==========================================================
+ */
+function computeEnqueuedPendingTypes_(existingRaw, type){
+
+  let list = [];
+
+  if(existingRaw){
+    try{
+      const parsed = JSON.parse(existingRaw);
+      if(Array.isArray(parsed)) list = parsed;
+    } catch(e){
+      list = [];
+    }
+  }
+
+  if(list.indexOf(type) === -1){
+    list.push(type);
+  }
+
+  return JSON.stringify(list);
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeEnqueuedPendingTypes_()
+ * ==========================================================
+ */
+function testComputeEnqueuedPendingTypes(){
+
+  const fromEmpty = computeEnqueuedPendingTypes_("", "MTA");
+  const fromEmptyOk = fromEmpty === JSON.stringify(["MTA"]);
+
+  const appended = computeEnqueuedPendingTypes_(JSON.stringify(["MTA"]), "LEADS");
+  const appendedOk = appended === JSON.stringify(["MTA", "LEADS"]);
+
+  const noDuplicate = computeEnqueuedPendingTypes_(JSON.stringify(["MTA"]), "MTA");
+  const noDuplicateOk = noDuplicate === JSON.stringify(["MTA"]);
+
+  const fromCorrupt = computeEnqueuedPendingTypes_("not-json", "ICFUNNEL");
+  const fromCorruptOk = fromCorrupt === JSON.stringify(["ICFUNNEL"]);
+
+  const pass = fromEmptyOk && appendedOk && noDuplicateOk && fromCorruptOk;
+
+  Logger.log(
+    "testComputeEnqueuedPendingTypes: " + (pass ? "PASS" : "FAIL") +
+    " fromEmpty=" + fromEmpty + " appended=" + appended +
+    " noDuplicate=" + noDuplicate + " fromCorrupt=" + fromCorrupt
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Next Pending Type (순수 함수, FIFO pop)
+ *
+ * INPUT
+ * existingRaw : string  (PIPELINE_PENDING_TYPES 저장값)
+ *
+ * OUTPUT
+ * { type: string|null, remainingRaw: string }
+ * (대기열이 비어있으면 type:null, remainingRaw는 항상 유효한 JSON 배열 문자열)
+ *
+ * TEST
+ * testComputeNextPendingType() 참고
+ * ==========================================================
+ */
+function computeNextPendingType_(existingRaw){
+
+  let list = [];
+
+  if(existingRaw){
+    try{
+      const parsed = JSON.parse(existingRaw);
+      if(Array.isArray(parsed)) list = parsed;
+    } catch(e){
+      list = [];
+    }
+  }
+
+  if(list.length === 0){
+    return { type: null, remainingRaw: JSON.stringify([]) };
+  }
+
+  return { type: list[0], remainingRaw: JSON.stringify(list.slice(1)) };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNextPendingType_()
+ * ==========================================================
+ */
+function testComputeNextPendingType(){
+
+  const empty = computeNextPendingType_("");
+  const emptyOk = empty.type === null && empty.remainingRaw === JSON.stringify([]);
+
+  const popOne = computeNextPendingType_(JSON.stringify(["MTA"]));
+  const popOneOk = popOne.type === "MTA" && popOne.remainingRaw === JSON.stringify([]);
+
+  const popFirst = computeNextPendingType_(JSON.stringify(["MTA", "LEADS"]));
+  const popFirstOk = popFirst.type === "MTA" && popFirst.remainingRaw === JSON.stringify(["LEADS"]);
+
+  const corrupt = computeNextPendingType_("not-json");
+  const corruptOk = corrupt.type === null && corrupt.remainingRaw === JSON.stringify([]);
+
+  const pass = emptyOk && popOneOk && popFirstOk && corruptOk;
+
+  Logger.log(
+    "testComputeNextPendingType: " + (pass ? "PASS" : "FAIL") +
+    " popFirst=" + JSON.stringify(popFirst)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Pipeline Tail Handler Name By Type
+ *
+ * WHY
+ * 대기열 처리(releasePipelineLockAndProcessQueue_())에서 타입 문자열을
+ * 실제 트리거 핸들러 함수명으로 바꾸는 매핑 한 곳만 관리(pipelineStatusPropertyKey_()
+ * 와 동일 목적의 분리 — 새 타입 추가 시 이 함수만 고치면 됨).
+ * ==========================================================
+ */
+function pipelineTailHandlerNameByType_(type){
+
+  if(type === CONFIG.PIPELINE.TYPES.MTA) return "runMTAPipelineTail";
+  if(type === CONFIG.PIPELINE.TYPES.ICFUNNEL) return "runICFunnelPipelineTail";
+  return "runLeadsPipelineTail";
+
+}
+
+
+/**
+ * ==========================================================
+ * Enqueue Pending Pipeline Type (IO 래퍼)
+ *
+ * WHY
+ * appendNewLeads()/appendNewMTA()(MASTER_001_IncrementalMasterBuild.js)/
+ * IC Funnel import(MASTER_009_ICFunnelSync.js)가 `acquirePipelineLock_()`
+ * 실패 시 호출 — "몇 분 후 사람이 직접 재실행" 대신 대기열에 담아 자동
+ * 재시도되도록 한다.
+ * ==========================================================
+ */
+function enqueuePendingPipelineType_(type){
+
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES);
+
+  props.setProperty(
+    CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES,
+    computeEnqueuedPendingTypes_(raw, type)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Release Pipeline Lock And Process Queue (IO 래퍼)
+ *
+ * WHY
+ * run{Leads|MTA|ICFunnel}PipelineTail() 끝(성공/실패 공통)에서 기존
+ * `releasePipelineLock_()` 대신 이 함수를 호출하도록 교체 — 락을 반납한
+ * 직후, 그사이 락 충돌로 대기열에 쌓여있던 타입이 있으면 곧바로 그 타입의
+ * 락을 재획득하고 해당 run*PipelineTail()을 예약해 자동으로 이어서
+ * 실행한다(FIFO). 대기열이 비어있으면 기존과 동일하게 그냥 락만 반납.
+ *
+ * 락 재획득에 실패하는 경우(이론상 거의 없음 — 방금 반납한 락을 이 실행
+ * 흐름 밖에서 다른 무언가가 그 찰나에 다시 잡는 경쟁 상황)엔 안전하게
+ * 대기열에 도로 넣어 다음 기회에 재시도되게 한다(유실 방지).
+ * ==========================================================
+ */
+function releasePipelineLockAndProcessQueue_(){
+
+  releasePipelineLock_();
+
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES);
+
+  const next = computeNextPendingType_(raw);
+
+  if(!next.type){
+    props.setProperty(CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES, next.remainingRaw);
+    return;
+  }
+
+  props.setProperty(CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES, next.remainingRaw);
+
+  if(!acquirePipelineLock_(next.type)){
+    props.setProperty(
+      CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES,
+      computeEnqueuedPendingTypes_(next.remainingRaw, next.type)
+    );
+    return;
+  }
+
+  schedulePipelineTail_(pipelineTailHandlerNameByType_(next.type));
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " 락 충돌로 대기 중이던 " + next.type +
+    " 파이프라인 자동 재시도 예약."
+  );
+
+}
+
+
+/**
+ * ==========================================================
  * Compute Self-Healed Pipeline Status State
  *
  * WHY (2026-08-19, 실측 계기 — BOFU_OPS Timed Out에 이어 Leads_OPS Build
@@ -1125,6 +1423,216 @@ function refreshReportGenerate_(type, state){
     );
   }
 
+  setPipelineStageStatus_(type, state, "smRep", "RUNNING");
+  try{
+    generateSMReport_();
+    markPipelineStageComplete_(type, state, "smRep");
+  } catch(err){
+    setPipelineStageStatus_(type, state, "smRep", "FAILED");
+    Logger.log(
+      "refreshReportGenerate_: S&M_REP Generate 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+  setPipelineStageStatus_(type, state, "fyRep", "RUNNING");
+  try{
+    generateFYReport_();
+    markPipelineStageComplete_(type, state, "fyRep");
+  } catch(err){
+    setPipelineStageStatus_(type, state, "fyRep", "FAILED");
+    Logger.log(
+      "refreshReportGenerate_: FY_REP Generate 실패(비필수, 파이프라인은 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Next Seoul Hour Timestamp (순수 함수)
+ *
+ * WHY
+ * 이 프로젝트의 Apps Script 프로젝트 타임존은 America/New_York
+ * (appsscript.json)이라 `.timeBased().atHour()`는 미국 동부 시간 기준으로
+ * 동작 — 서머타임(EST/EDT) 전환 주간마다 한국시간(KST) 기준 ±1시간 오차가
+ * 생긴다(과거 Pipeline Status Last Started/Finished가 미국 시간으로 찍혀
+ * 혼동됐던 사고, `nowTimestamp_()` DISPLAY_TIMEZONE 도입 배경과 동일 계열
+ * 문제). Asia/Seoul은 연중 고정 UTC+9(서머타임 없음)이므로, "한국시간
+ * targetHour시"를 직접 UTC 오프셋 계산으로 구하면 미국 타임존/DST와 완전히
+ * 무관하게 정확한 절대 시각을 얻을 수 있다.
+ *
+ * INPUT
+ * targetHour : number  (0~23, Asia/Seoul 기준 시)
+ * fromMs     : number  (Date.now(), 테스트 가능하도록 주입 — 이 시각보다
+ *              "이후"인 가장 이른 targetHour 정각을 반환. fromMs가 이미
+ *              그 시각과 같거나 지났으면 다음 날로 넘어감)
+ *
+ * OUTPUT
+ * number  (그 다음 targetHour:00:00 Asia/Seoul의 UTC epoch ms)
+ *
+ * TEST
+ * testComputeNextSeoulHourTimestamp() 참고
+ * ==========================================================
+ */
+function computeNextSeoulHourTimestamp_(targetHour, fromMs){
+
+  const SEOUL_OFFSET_MS = 9 * 60 * 60 * 1000; // Asia/Seoul = UTC+9, 연중 고정(서머타임 없음)
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const seoulShiftedMs = fromMs + SEOUL_OFFSET_MS;
+  const seoulShiftedMidnightMs = Math.floor(seoulShiftedMs / DAY_MS) * DAY_MS;
+
+  let candidate = seoulShiftedMidnightMs + targetHour * 60 * 60 * 1000 - SEOUL_OFFSET_MS;
+
+  if(candidate <= fromMs){
+    candidate += DAY_MS;
+  }
+
+  return candidate;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeNextSeoulHourTimestamp_()
+ * ==========================================================
+ */
+function testComputeNextSeoulHourTimestamp(){
+
+  // 2026-09-01 09:30 KST = 2026-09-01 00:30 UTC
+  const fromMs = Date.UTC(2026, 8, 1, 0, 30, 0);
+
+  const next10am = computeNextSeoulHourTimestamp_(10, fromMs);
+  const expected10am = Date.UTC(2026, 8, 1, 1, 0, 0);  // 2026-09-01 10:00 KST
+
+  const next10pm = computeNextSeoulHourTimestamp_(22, fromMs);
+  const expected10pm = Date.UTC(2026, 8, 1, 13, 0, 0);  // 2026-09-01 22:00 KST
+
+  // 09:00 KST는 fromMs(09:30 KST)보다 이미 지난 시각 — 다음 날로 넘어가야 함
+  const pastHour = computeNextSeoulHourTimestamp_(9, fromMs);
+  const expectedPastHour = Date.UTC(2026, 8, 2, 0, 0, 0);  // 2026-09-02 09:00 KST
+
+  const pass =
+    next10am === expected10am &&
+    next10pm === expected10pm &&
+    pastHour === expectedPastHour;
+
+  Logger.log(
+    "testComputeNextSeoulHourTimestamp: " + (pass ? "PASS" : "FAIL") +
+    " next10am=" + next10am + " expected=" + expected10am +
+    " next10pm=" + next10pm + " expected=" + expected10pm +
+    " pastHour=" + pastHour + " expected=" + expectedPastHour
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Schedule Next All-Reports Refresh (1회성 트리거 재예약)
+ *
+ * WHY
+ * ACQ_REP/NewP1_REP/Target_REP/S&M_REP/FY_REP 5개 리포트를 Import 여부와
+ * 무관하게 하루 2번(`CONFIG.REPORT_REFRESH.DAILY_HOURS_KST`, 한국시간)
+ * 강제 재계산하기 위한 트리거. `computeNextSeoulHourTimestamp_()`로 계산한
+ * 절대 UTC 시각에 1회성 `.at(date)` 트리거를 걸고, `periodicRefreshAllReports_()`가
+ * 실행될 때마다 스스로 다음 회차를 다시 예약하는 self-rescheduling 체인으로
+ * 구현(`schedulePipelineTail_()`의 "실행 시작 시 자기 트리거부터 삭제" 원칙과
+ * 동일, 단 1회성이 아니라 무한 반복). 재설치(수동 재실행) 시 중복 예약
+ * 방지를 위해 매번 기존 트리거를 먼저 지운다.
+ * ==========================================================
+ */
+function scheduleNextAllReportsRefresh_(){
+
+  deleteTriggersByHandlerName_("periodicRefreshAllReports_");
+
+  const now = Date.now();
+
+  const nextMs = Math.min.apply(
+    null,
+    CONFIG.REPORT_REFRESH.DAILY_HOURS_KST.map(function(hour){
+      return computeNextSeoulHourTimestamp_(hour, now);
+    })
+  );
+
+  ScriptApp.newTrigger("periodicRefreshAllReports_")
+    .timeBased()
+    .at(new Date(nextMs))
+    .create();
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " 전체 리포트 주기적 Refresh 다음 실행 예약: " +
+    Utilities.formatDate(new Date(nextMs), CONFIG.DATE.DISPLAY_TIMEZONE, "yyyy-MM-dd HH:mm") + " KST"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Periodic Refresh All Reports (트리거 핸들러)
+ *
+ * WHY
+ * ACQ_REP/NewP1_REP/Target_REP/S&M_REP/FY_REP은 Import 백그라운드
+ * 파이프라인(`refreshReportGenerate_()`) 끝에서 자동 Generate되지만, Import가
+ * 없는 날에는 그 사이의 수동 데이터 수정(예: Leads_OPS 직접 편집, Deal
+ * Tracker 갱신) 등으로 화면이 stale해질 수 있음 — 사용자 요청으로 Import
+ * 여부와 무관하게 하루 2번 강제 재계산하는 독립 트리거 추가.
+ * `refreshReportGenerate_(type, state)`는 재사용하지 않고 5개 generateXxx_()를
+ * 직접 호출한다 — 그 함수는 Leads/MTA/IC Funnel Import 타입 전용으로 README
+ * Pipeline Status 표(New Leads/MTA Leads/IC Funnel 3행 고정 구조) 갱신까지
+ * 겸하는데, 이 트리거는 Import와 무관한 별도 개념이라 그 표에 억지로 섞으면
+ * 컬럼 의미가 애매해짐(의도적으로 분리). 각 리포트 실패는 서로 격리(기존
+ * `refreshReportGenerate_()`와 동일 원칙) — 하나가 실패해도 나머지는 계속
+ * 진행, Logger에만 기록. 마지막에 다음 회차를 다시 예약.
+ * ==========================================================
+ */
+function periodicRefreshAllReports_(){
+
+  [
+    { name: "ACQ_REP", fn: generateACQReport_ },
+    { name: "NewP1_REP", fn: generateNewP1Report_ },
+    { name: "Target_REP", fn: generateTargetReport_ },
+    { name: "S&M_REP", fn: generateSMReport_ },
+    { name: "FY_REP", fn: generateFYReport_ }
+  ].forEach(function(report){
+
+    try{
+      report.fn();
+    } catch(err){
+      Logger.log(
+        "periodicRefreshAllReports_: " + report.name + " Generate 실패(비필수, 나머지는 계속) — " +
+        (err && err.message ? err.message : err)
+      );
+    }
+
+  });
+
+  scheduleNextAllReportsRefresh_();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — periodicRefreshAllReports_() 트리거 설치(최초 1회 수동 실행 전용)
+ *
+ * WHY
+ * `ScriptApp.newTrigger()`로 트리거를 설치하려면 Full Authorization이
+ * 필요해 사람이 Apps Script 편집기에서 직접 한 번 Run 해야 한다
+ * (`runInstallDictionaryPeriodicRefreshTrigger()`/`runInstallAdSpendPeriodicRefreshTrigger()`와
+ * 동일 패턴). 이후로는 `periodicRefreshAllReports_()`가 매번 실행 끝에
+ * 스스로 다음 회차를 재예약하므로 재설치 불필요.
+ * ==========================================================
+ */
+function runInstallAllReportsPeriodicRefreshTrigger(){
+
+  scheduleNextAllReportsRefresh_();
+
 }
 
 
@@ -1365,7 +1873,7 @@ function runLeadsPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
-    releasePipelineLock_();
+    releasePipelineLockAndProcessQueue_();
 
   } catch(err){
 
@@ -1380,7 +1888,7 @@ function runLeadsPipelineTail(){
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
 
-    releasePipelineLock_();
+    releasePipelineLockAndProcessQueue_();
 
     throw err;
 
@@ -1476,7 +1984,7 @@ function runMTAPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
-    releasePipelineLock_();
+    releasePipelineLockAndProcessQueue_();
 
   } catch(err){
 
@@ -1491,7 +1999,7 @@ function runMTAPipelineTail(){
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
 
-    releasePipelineLock_();
+    releasePipelineLockAndProcessQueue_();
 
     throw err;
 
@@ -1595,7 +2103,7 @@ function runICFunnelPipelineTail(){
 
   } finally {
 
-    releasePipelineLock_();
+    releasePipelineLockAndProcessQueue_();
 
   }
 
@@ -1815,11 +2323,13 @@ function testBuildPipelineStatusGrid(){
 
   const ok =
     grid.length === 4 &&
-    grid[0].length === 12 &&
+    grid[0].length === 14 &&
     grid[0][0] === "Pipeline Status" &&
     grid[0][1] === "Status" &&
     grid[0][2] === "Master Update" &&
     grid[0][11] === "Target_REP" &&
+    grid[0][12] === "S&M_REP" &&
+    grid[0][13] === "FY_REP" &&
     grid[1][0] === "New Leads" &&
     grid[1][1] === "RUNNING · started 2026-08-04 10:00:00 KST" &&
     grid[1][2] === "DONE" && grid[1][3] === "RUNNING" && grid[1][4] === "" &&
@@ -1828,7 +2338,7 @@ function testBuildPipelineStatusGrid(){
     grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED" &&
     grid[3][0] === "IC Funnel" &&
     grid[3][1] === "DONE · 2026-08-26 08:01:00 KST" &&
-    grid[3][2] === "" && grid[3][11] === ""; // 세부 단계 없음 — 전부 빈 문자열
+    grid[3][2] === "" && grid[3][13] === ""; // 세부 단계 없음 — 전부 빈 문자열
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +

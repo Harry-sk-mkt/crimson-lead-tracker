@@ -7,6 +7,7 @@ Google Apps Script 기반 마케팅 리드 ETL 파이프라인 프로젝트입�
 ## 핵심 원칙 (요약)
 
 - **Staged ETL**: `CSV → Import(Raw) → Master Build → Master → Leads_OPS → Reports`
+- **Reporting Layer는 Import 시 자동 Generate (신규 리포트도 예외 없음)**: ACQ_REP/NewP1_REP/Target_REP/S&M_REP/FY_REP처럼 "FY 선택 + Generate 체크박스"로 화면을 재작성하는 모든 리포트는, Generate 체크박스 수동 클릭에만 의존하고 끝내지 않는다 — `MASTER_002_PipelineAsync.js`의 `refreshReportGenerate_(type, state)`(Leads/MTA/IC Funnel Import 백그라운드 파이프라인 마지막 단계, 세 트리거가 공유)에 그 리포트의 `generateXxx_()` 호출을 반드시 편입시켜 Import만으로 자동 갱신되게 한다. 새 리포트를 추가할 때 정의완료(Definition of Done) 체크리스트에 포함: (1) `refreshReportGenerate_()`에 호출 추가, (2) 기존 항목과 동일 패턴으로 독립 try/catch(실패해도 나머지 파이프라인은 DONE 유지, Logger에만 기록), (3) `CONFIG.PIPELINE.STATUS_COLUMNS`(CORE_001_Config.js)에 그 리포트 컬럼 추가해 README Pipeline Status 표에 노출, (4) `testBuildPipelineStatusGrid()` 기대값 갱신(컬럼 수/인덱스가 밀림). 설치형 트리거라 Full Authorization으로 실행되므로 외부 스프레드시트 `openById()`(Deal Tracker, perfTrackerByFY 등)를 쓰는 리포트도 문제없이 편입 가능(Target_REP/FY_REP 선례). (2026-09-01 사용자 확정 — S&M_REP/FY_REP을 이 원칙으로 편입하며 도입)
 - **Single Responsibility**: 파일 하나 = 책임 하나. Business logic은 Master Build 단계에만 존재.
 - **No Assumptions**: Sheet 이름, Column Index, Header, Business Logic, 기존 함수/아키텍처는 절대 추측하지 않는다. 모르면 질문한다.
 - **Configuration Centralized**: 모든 설정값은 `CORE_001_Config.js`의 `CONFIG` 객체에만 존재. 하드코딩 금지.
@@ -46,7 +47,7 @@ Google Apps Script 기반 마케팅 리드 ETL 파이프라인 프로젝트입�
 - `docs/EventsReportDesign.md` — Events_OPS/Events_Engine(Webinar/Seminar 프로그램별 ROI 리포트) 설계
 - `docs/PerformanceBenchmark.md` — 전체 Rebuild(Leads/MTA Master, Leads_OPS 등) 실행 시간 기록, 리팩토링 전후 성능 비교용
 - `docs/TargetReportDesign.md` — Target_REP(주간 세그먼트 그룹별 New P1/CPNP1 목표·달성률) 설계, top-down 목표 역산 로직
-- `docs/FYReportDesign.md` — FY_REP(FY별 Sales Funnel 대시보드, 트렌드+세그먼트별 달성률) 설계, 2026-07-30 설계 착수(미구현)
+- `docs/FYReportDesign.md` — FY_REP(FY별 Sales Funnel 대시보드, 트렌드+세그먼트별 달성률) 설계, 2026-07-30 설계 착수 → 구현 완료(FYREP_001_Engine.js/FYREP_002_Report.js), 2026-09-01부터 Import 시 자동 Generate
 - `docs/OpenItems.md` — 현재 알려진 미해결 항목 전체 목록 (2026-07-29 CLAUDE.md 다이어트로 이관)
 - `docs/QAAgentDesign.md` — QA 에이전트(`qa-review` 스킬: 코드 품질/데이터 정합성/리포트 값 검증) 설계, 2026-08-09 구현
 - `docs/Roadmap.md` — 장기 방향/우선순위 (계속 갱신되는 문서, OpenItems와 별개)

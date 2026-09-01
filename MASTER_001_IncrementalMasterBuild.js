@@ -10,9 +10,19 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.9.1
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-09-01)
+ * - **락 충돌 자동 재시도(사용자 요청)**: `appendNewLeads()`/`appendNewMTA()`가
+ *   `PIPELINE_LOCK` 충돌로 백그라운드를 건너뛸 때, 기존엔 "몇 분 후 사람이
+ *   직접 run*PipelineTail() 실행" 안내만 하고 끝났음(v1.9.0) — 이제
+ *   `enqueuePendingPipelineType_()`(MASTER_002_PipelineAsync.js)로 대기열에
+ *   담아, 현재 실행 중인 파이프라인이 끝나 락을 반납하는 시점에
+ *   `releasePipelineLockAndProcessQueue_()`가 자동으로 이어서 실행하도록 변경.
+ *   IC→MTA→New Leads처럼 몇 분 안에 연달아 Import해도 중간 타입이 스킵된 채
+ *   방치되지 않음. Alert 문구도 "수동 재시도 필요" → "자동으로 이어서 실행"으로
+ *   갱신.
  * v1.9.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `07_IncrementalMasterBuild.js` → 신규 `MASTER_001_IncrementalMasterBuild.js`, 코드 내용 변경 없음.
  * v1.9.0 (2026-08-06)
@@ -161,23 +171,24 @@ function appendNewLeads(silent){
 
   if(locked){
 
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.LEADS);
+
     Logger.log(
-      "Pipeline lock held by another run — skipping background refresh this cycle."
+      "Pipeline lock held by another run — queued for automatic retry after it finishes."
     );
 
     Logger.log("======================================");
-    Logger.log("Append New Leads Completed (background skipped)");
+    Logger.log("Append New Leads Completed (background queued)");
     Logger.log("======================================");
 
     if(!silent){
       SpreadsheetApp.getUi().alert(
-        "⚠️ Leads_Master Append 완료 (백그라운드 처리는 건너뜀 — 수동 재시도 필요)",
+        "✅ Leads_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)",
         "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
-        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
-        "반영했습니다. Leads_OPS/Report 갱신은 자동으로 재시도되지 않습니다 — " +
-        "몇 분 후(다른 작업이 끝난 뒤) 08_PipelineAsync.js의 runLeadsPipelineTail()을 " +
-        "Apps Script 편집기에서 직접 Run 해주세요.",
+        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 먼저 " +
+        "반영했습니다. Leads_OPS/Report 갱신은 그 작업이 끝나는 대로 자동으로 " +
+        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).",
         SpreadsheetApp.getUi().ButtonSet.OK
       );
     }
@@ -299,23 +310,24 @@ function appendNewMTA(silent){
 
   if(locked){
 
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.MTA);
+
     Logger.log(
-      "Pipeline lock held by another run — skipping background refresh this cycle."
+      "Pipeline lock held by another run — queued for automatic retry after it finishes."
     );
 
     Logger.log("======================================");
-    Logger.log("Append New MTA Completed (background skipped)");
+    Logger.log("Append New MTA Completed (background queued)");
     Logger.log("======================================");
 
     if(!silent){
       SpreadsheetApp.getUi().alert(
-        "⚠️ MTA_Master Append 완료 (백그라운드 처리는 건너뜀 — 수동 재시도 필요)",
+        "✅ MTA_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)",
         "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
-        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 " +
-        "반영했습니다. Leads_OPS/Report 갱신은 자동으로 재시도되지 않습니다 — " +
-        "몇 분 후(다른 작업이 끝난 뒤) 08_PipelineAsync.js의 runMTAPipelineTail()을 " +
-        "Apps Script 편집기에서 직접 Run 해주세요.",
+        "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 먼저 " +
+        "반영했습니다. Leads_OPS/Report 갱신은 그 작업이 끝나는 대로 자동으로 " +
+        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).",
         SpreadsheetApp.getUi().ButtonSet.OK
       );
     }

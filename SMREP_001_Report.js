@@ -20,16 +20,16 @@
  *                 LEADS_SEGMENT_BUCKET_MAP) — 2026-08-24부터 New P1 필터 추가
  *                 (사용자 확정: 이 breakdown은 New P1 구성을 보기 위한 것). 매핑에
  *                 없는 Segment(예: Search)는 어느 breakdown 컬럼에도 안 잡힘 —
- *                 의도된 설계(00_Config.js 주석 참고). SAL 블록 breakdown(BOFU/
- *                 Search/Organic/Referral)은 이 필터 대상 아님 — 여전히 All SAL
- *                 전체를 세그먼트로 분해(변경 없음).
+ *                 의도된 설계(00_Config.js 주석 참고).
  * - All SAL     : 그 주(Sales Accepted Date 기준) Leads_OPS 리드 수
  *                 (ACQ_REP의 "SAL"과 동일 정의).
  * - P1(SAL)     : All SAL 중 isEffectiveP1_() true인 리드 수.
- * - BOFU/Search/Organic/Referral(SAL) : All SAL을 Business Segment로 분해
- *                 (CONFIG.SM_REP.SAL_SEGMENT_BUCKET_MAP) — Leads 블록과
- *                 breakdown 세그먼트 구성이 다름(Content/Event 없음, Search
- *                 있음 — 사용자 확정, 의도된 비대칭).
+ * - BOFU/Search/Organic/Referral(SAL) : All SAL 중 P1(SAL)(isEffectiveP1_()
+ *                 true)인 리드만 Business Segment로 분해(CONFIG.SM_REP.
+ *                 SAL_SEGMENT_BUCKET_MAP) — 2026-09-01부터 P1 필터 추가(사용자
+ *                 요청, Leads 블록과 동일하게 P1 구성만 노출). breakdown
+ *                 세그먼트 구성 자체는 Leads 블록과 여전히 다름(Content/Event
+ *                 없음, Search 있음 — 사용자 확정, 의도된 비대칭).
  * - Organic     : 두 블록 공통 — Business Segment가 "Other" 또는 "N/A"
  *                 (유료 캠페인으로 분류 안 된 유입).
  *
@@ -40,9 +40,16 @@
  * 20 Reporting
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-09-01)
+ * - SAL 블록 breakdown(BOFU/Search/Organic/Referral)에도 P1 필터 추가(사용자
+ *   요청 — "SAL의 BOFU/Search/Organic/Referral 세그먼트는 P1 숫자만 보이도록").
+ *   v1.1.0에서 Leads 블록에 적용했던 것과 동일 원칙을 SAL 블록에도 적용
+ *   (`computeSMRepWeeklyAggregates_()`, `if(bucket) ...` → `if(bucket && isP1) ...`).
+ *   컬럼 헤더(BOFU/Search/Organic/Referral)는 변경 없음 — 집계 대상만
+ *   All SAL 전체 → P1(SAL)로 좁힘. 회귀 테스트: `testComputeSMRepWeeklyAggregates()` 갱신.
  * v1.1.0 (2026-08-24)
  * - Leads 블록 breakdown(Event/BOFU/Content/Organic/Referral)에 New P1 필터
  *   추가 — 사용자 확정: 이 breakdown은 "New P1의 세그먼트 구성"을 보기 위한
@@ -79,7 +86,7 @@
  *   allLeads, newLeads, newP1,
  *   leadsBreakdown: { Event, BOFU, Content, Organic, Referral }  (New P1만 집계, 2026-08-24부터),
  *   allSAL, salP1,
- *   salBreakdown: { BOFU, Search, Organic, Referral }  (All SAL 전체, 필터 없음)
+ *   salBreakdown: { BOFU, Search, Organic, Referral }  (P1(SAL)만 집계, 2026-09-01부터)
  * }
  * (해당 주에 매칭되는 데이터가 하나도 없으면 그 키 자체가 없음 —
  * buildSMRepDataRows_()가 기본값으로 채움)
@@ -186,7 +193,7 @@ function computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords, weekStarts){
 
         const bucket = salMap[segment];
 
-        if(bucket) row.salBreakdown[bucket]++;
+        if(bucket && isP1) row.salBreakdown[bucket]++;
 
       }
 
@@ -257,7 +264,7 @@ function testComputeSMRepWeeklyAggregates(){
     row.allSAL === 2 &&
     row.salP1 === 1 &&
     row.salBreakdown.BOFU === 1 &&
-    row.salBreakdown.Referral === 1;  // SAL 블록 breakdown은 P1 필터 없음(변경 없음) — Priority 3이어도 잡힘
+    row.salBreakdown.Referral === 0;  // Referral 리드는 Priority 3(P1 아님) — SAL 블록 breakdown도 New P1 필터 적용(2026-09-01부터)으로 제외
 
   Logger.log(
     "testComputeSMRepWeeklyAggregates: " + (pass ? "PASS" : "FAIL") +

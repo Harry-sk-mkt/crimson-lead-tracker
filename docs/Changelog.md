@@ -1,4 +1,52 @@
-# Changelog — 2026-08-28
+# Changelog — 2026-09-01
+
+## Reporting Layer 전면 자동화 — S&M_REP/FY_REP Import 자동 Generate 편입, 주기적 Refresh 트리거, 락 충돌 자동 재시도
+
+사용자가 S&M_REP이 Import 시 자동 갱신되지 않는다는 걸 발견하면서 시작. 조사 결과 S&M_REP/FY_REP
+둘 다 "FY 선택 + Generate 체크박스" 수동 클릭에만 의존하고 있었고, ACQ_REP/NewP1_REP/Target_REP은
+이미 `refreshReportGenerate_()`(Import 백그라운드 파이프라인 마지막 단계)에 편입돼 자동
+갱신되던 것과 대조적이었음.
+
+**S&M_REP/FY_REP도 동일하게 편입**: `MASTER_002_PipelineAsync.js`의 `refreshReportGenerate_()`에
+`generateSMReport_()`/`generateFYReport_()` 호출 추가(기존 acqRep/newP1Rep/targetRep와 동일
+패턴 — 독립 try/catch, 실패해도 나머지는 DONE 유지). `CONFIG.PIPELINE.STATUS_COLUMNS`에
+`smRep`/`fyRep` 컬럼 추가해 README Pipeline Status 표에도 노출. FY_REP은 내부적으로
+`openById()`(perfTrackerByFY)를 쓰는데, 이 트리거는 이미 설치형(Full Authorization)이라
+Simple Trigger 권한 제약(그동안 FY_REP이 별도 트리거로 분리돼있던 이유) 없이 편입 가능함을
+확인. `CLAUDE.md`에 "Reporting Layer는 Import 시 자동 Generate" 원칙을 명문화 — 앞으로 새
+리포트를 만들 때 이 편입을 Definition of Done에 포함하도록 규정. `docs/FYReportDesign.md`
+문서 목록 설명이 "미구현"으로 남아있던 drift도 함께 정정.
+
+**SAL breakdown P1 필터 추가**(S&M_REP): "SAL의 BOFU/Search/Organic/Referral 세그먼트는 P1
+숫자만 보이도록" 요청 — `computeSMRepWeeklyAggregates_()`의 salBreakdown 집계 조건을
+`if(bucket)` → `if(bucket && isP1)`로 변경(Leads 블록에 이미 적용돼 있던 것과 동일 원칙을
+SAL 블록에도 적용). 컬럼 헤더는 그대로, 집계 대상만 All SAL 전체 → P1(SAL)로 좁힘.
+
+**5개 리포트 하루 2번 주기적 Refresh 트리거**: Import 여부와 무관하게 ACQ_REP/NewP1_REP/
+Target_REP/S&M_REP/FY_REP을 한국시간 오전 10시/오후 10시에 강제 재계산하는 독립 트리거
+요청. 이 프로젝트의 Apps Script 프로젝트 타임존(America/New_York)에서 `.timeBased().atHour()`를
+쓰면 미국 서머타임(EST/EDT) 전환마다 한국시간 기준 ±1시간 오차가 생기는 문제를 발견해,
+Asia/Seoul 고정 UTC+9 오프셋으로 직접 절대시각을 계산(`computeNextSeoulHourTimestamp_()`)해
+1회성 `.at(date)` 트리거를 거는 방식으로 구현 — 미국 DST와 완전히 무관. `periodicRefreshAllReports_()`가
+실행될 때마다 스스로 다음 회차를 재예약하는 self-rescheduling 체인. Import 파이프라인의
+Pipeline Status 표(Leads/MTA/IC Funnel 3행 전용 구조)와는 의도적으로 분리.
+
+**Import 락 충돌 자동 재시도**: "IC → MTA → New Lead 순서로 몇 분 안에 연달아 import하면
+Leads_OPS가 언제 반영되냐"는 질문에서, `PIPELINE_LOCK`(Leads/MTA/IC Funnel 공유)이 겹치면
+두 번째 시도가 "자동 재시도 없이 조용히 스킵"되고 `runRetryPipelineTail()`도 이 케이스(실제
+에러가 아니라 락 충돌)는 못 잡는 구조적 공백을 발견 — 2026-08-05 최초 설계 당시 "단순 락,
+자동 대기열 없음"으로 확정했던 부분이 실사용 패턴과 안 맞았음. `CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES`
+신규 — 락을 못 얻은 타입을 FIFO 대기열에 담아뒀다가, 현재 파이프라인이 끝나 락을 반납하는
+시점(`releasePipelineLockAndProcessQueue_()`)에 자동으로 다음 타입을 이어서 실행하도록 재설계.
+`appendNewLeads()`/`appendNewMTA()`/IC Funnel import 쪽 알림 문구도 "수동 재시도 필요" →
+"자동으로 이어서 실행"으로 갱신.
+
+신규 테스트: `testComputeSMRepWeeklyAggregates()`(갱신), `testBuildPipelineStatusGrid()`(갱신),
+`testComputeNextSeoulHourTimestamp()`, `testComputeEnqueuedPendingTypes()`,
+`testComputeNextPendingType()` — 전부 사용자가 Apps Script 편집기에서 직접 실행해 PASS 확인.
+`runInstallAllReportsPeriodicRefreshTrigger()`도 최초 1회 실행 완료(다음 실행: 2026-09-01
+10:00 KST로 예약됨).
+
 
 ## ACQ_REP IC Booked/Complete 과소집계(`docs/OpenItems.md` #32) — 실사용 검증 완료
 

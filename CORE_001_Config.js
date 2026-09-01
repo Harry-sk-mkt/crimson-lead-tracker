@@ -9,9 +9,34 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.49.0
+ * v1.53.0
  *
  * Change Log
+ * v1.53.0 (2026-09-01)
+ * - `CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES` 신규 — Import 락 충돌로
+ *   스킵됐던 파이프라인을 "다른 백그라운드 작업이 끝나면 자동으로 이어서
+ *   실행"하도록 대기열화(사용자 요청 — 기존엔 락 충돌 시 사용자가 직접
+ *   Apps Script 편집기에서 재실행해야 했음). 상세:
+ *   `MASTER_002_PipelineAsync.js`의 `releasePipelineLockAndProcessQueue_()`.
+ * v1.52.0 (2026-09-01)
+ * - `CONFIG.REPORT_REFRESH.DAILY_HOURS_KST`([10, 22]) 신규 — ACQ_REP/
+ *   NewP1_REP/Target_REP/S&M_REP/FY_REP 5개 리포트를 Import 여부와 무관하게
+ *   하루 2번(한국시간 오전 10시/오후 10시) 강제 재계산하는 독립 트리거용
+ *   (사용자 요청). 프로젝트 타임존(America/New_York)의 서머타임 오차를
+ *   피하기 위해 Asia/Seoul 고정 오프셋으로 직접 계산 — 상세는
+ *   `MASTER_002_PipelineAsync.js`의 `computeNextSeoulHourTimestamp_()`/
+ *   `periodicRefreshAllReports_()` 참고.
+ * v1.51.0 (2026-09-01)
+ * - `CONFIG.PIPELINE.STATUS_COLUMNS`에 `fyRep`("FY_REP") 신규 — FY_REP도
+ *   S&M_REP과 동일하게 Import 백그라운드 파이프라인 끝에서 자동 Generate되도록
+ *   편입(사용자 확정 — "앞으로 모든 reporting layer는 import시 자동업데이트되도록").
+ *   `MASTER_002_PipelineAsync.js` `refreshReportGenerate_()` 참고.
+ * v1.50.0 (2026-09-01)
+ * - `CONFIG.PIPELINE.STATUS_COLUMNS`에 `smRep`("S&M_REP") 신규 — S&M_REP도
+ *   Import 백그라운드 파이프라인 끝에서 자동 Generate되도록 편입(사용자
+ *   요청, `MASTER_002_PipelineAsync.js` `refreshReportGenerate_()` 참고).
+ *   기존 acqRep/newP1Rep/targetRep와 동일 패턴, README Pipeline Status
+ *   표에 새 컬럼으로 표시됨.
  * v1.49.0 (2026-08-28)
  * - `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`("Lead Priority") 신규 —
  *   `docs/OpenItems.md` New P1 8월 갭 조사 결과, Lead Priority도 IC Booked/
@@ -516,6 +541,12 @@ const CONFIG = {
     // Status 표에 3번째 행으로 표시하기 위함(pipelineStatusPropertyKey_() 참고).
     PIPELINE_STATUS_ICFUNNEL: "PIPELINE_STATUS_ICFUNNEL",
 
+    // 2026-09-01 추가 — 락 충돌로 스킵된 타입을 자동 재시도 대기열에 담아두기
+    // 위함(사용자 요청, MASTER_002_PipelineAsync.js releasePipelineLockAndProcessQueue_()
+    // 참고). JSON 배열 문자열(예: '["MTA","LEADS"]') — 락을 못 얻은 순서대로
+    // FIFO, 같은 타입 중복 적재 안 함.
+    PIPELINE_PENDING_TYPES: "PIPELINE_PENDING_TYPES",
+
     // 2026-08-06 추가 — DealTracker_Engine 증분 동기화 체크포인트
     // (appendNewDealTrackerRows_(), 90_TargetEngine.js). LEADS_LAST_ROW/
     // MTA_LAST_ROW와 동일 관례: 이미 처리한 "데이터 행 개수"(헤더 제외, 0-based).
@@ -575,9 +606,28 @@ const CONFIG = {
       { KEY: "campaignSpend", HEADER: "Campaign Spend" },
       { KEY: "acqRep", HEADER: "ACQ_REP" },
       { KEY: "newP1Rep", HEADER: "NewP1_REP" },
-      { KEY: "targetRep", HEADER: "Target_REP" }
+      { KEY: "targetRep", HEADER: "Target_REP" },
+      { KEY: "smRep", HEADER: "S&M_REP" },
+      { KEY: "fyRep", HEADER: "FY_REP" }
     ]
 
+  },
+
+  /**
+   * Report Refresh (Import와 무관한 주기적 전체 리포트 재계산)
+   *
+   * 2026-09-01 추가 — ACQ_REP/NewP1_REP/Target_REP/S&M_REP/FY_REP 5개 리포트를
+   * Import 여부와 무관하게 하루 2번 강제 재계산(사용자 요청). 이 프로젝트의
+   * Apps Script 프로젝트 타임존(appsscript.json)은 America/New_York이라
+   * `.timeBased().atHour()`를 그대로 쓰면 미국 서머타임(EST/EDT) 전환마다
+   * 한국시간 기준 ±1시간 오차가 생김 — Asia/Seoul은 서머타임이 없는 연중
+   * 고정 UTC+9라, DAILY_HOURS_KST(한국시간 기준 0~23시)를
+   * `computeNextSeoulHourTimestamp_()`(MASTER_002_PipelineAsync.js)로 직접 UTC
+   * 절대 시각으로 환산해 1회성 `.at(date)` 트리거를 거는 방식으로 미국 타임존/
+   * DST와 완전히 무관하게 구현.
+   */
+  REPORT_REFRESH: {
+    DAILY_HOURS_KST: [10, 22]  // 오전 10시, 오후 10시(KST)
   },
 
   /**
