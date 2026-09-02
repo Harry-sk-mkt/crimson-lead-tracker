@@ -658,3 +658,163 @@
     설명이나 실측 확인 전 — 78건 중 실제로 이 케이스가 몇 건이고, 진짜 놓친 리드(이메일
     대소문자/공백 불일치 등 버그)가 섞여있는지는 확인 안 됨. 임의로 처리하지 말 것, 다음
     세션에서 78건 이메일 샘플 + Lead Source/Close FY를 덤프하는 임시 조사 스크립트로 확인.
+40. **GAS 백엔드 설계 — GitHub 상위 스타 저장소 분석 대비 격차 검토, 기록만 완료(TODO, 구현
+    착수 전)** — 2026-09-02 사용자가 외부에서 작성해온 분석 문서("GAS 백엔드 설계 — GitHub
+    상위 스타 저장소 분석 & crimson-lead-tracker 적용안")를 실제 코드와 대조 검증. 문서 자체가
+    "`.js` 소스는 안 읽고 `/docs/`만 근거로 했다"고 명시했었어서, 코드 확인 결과 일부는
+    문서 서술과 어긋났음(아래 참고). **사용자 확정(2026-09-02)**: 이 워크북은 **Workspace
+    계정**(트리거 총 실행 시간 6시간/일, 소비자 계정 90분/일보다 여유 큼 — Rebuild 커서
+    체이닝 설계 시 청크 크기 판단에 참고). 실행 시간 실측(현재 5분리 파이프라인 구조 기준
+    재측정)은 **아래 항목들의 설계 변경이 확정된 이후에 다시 진행** — 지금 실측해봐야 설계가
+    바뀌면 무의미하므로 순서상 뒤로 미룸. 이번 세션은 **기록만**, 구현은 착수하지 않음 —
+    임의로 처리하지 말 것.
+    - **✅ 코드 확인 결과 실재하는 격차(구현 검토 가치 있음)**:
+      - **Report Generate 체크박스(onEdit)가 `PIPELINE_LOCK` 확인 없이 실행됨** —
+        `ACQREP_001_Report.js`의 `handleReportGenerateEdit`(설치형 Full Authorization onEdit
+        트리거, 문서가 말한 "권한 제한된 Simple Trigger"라는 서술은 틀렸으나 결론은 유효)가
+        `refreshAndGenerateACQReport_()` 호출 전 `PIPELINE_LOCK` 상태를 전혀 확인하지 않음 —
+        사용자가 수동으로 체크박스를 누르는 시점과 백그라운드 파이프라인(Leads/MTA/IC Funnel/
+        SAL/Revenue tail)이 같은 리포트를 갱신하는 시점이 겹치면 동시 쓰기 충돌 가능.
+        NewP1_REP/FY_REP 등 나머지 리포트의 Generate 핸들러도 같은 패턴인지 전수 확인 필요.
+      - **clasp dev/prod 프로젝트 분리 없음** — `.clasp.json` 1개만 존재. 2026-07-21
+        서버 편집기 직접 수정분이 `clasp push`로 유실된 사고 전례 있음(`docs/Changelog.md`
+        참고). `google/aside` 스타일 dev/prod 분리 + push 전 `clasp pull` diff 확인 정례화가
+        후보.
+      - `LockService`/`CacheService`/Advanced Sheets Service(`Sheets.Spreadsheets.*`)/
+        `UrlFetchApp.fetchAll` 병렬화 — 전부 코드 전체에서 0건 사용 확인(`appsscript.json`
+        `dependencies`도 비어있음). 도입 여부는 아래 항목들과 함께 논의.
+    - **⚠️ 문서 프레이밍이 어긋났거나 이미 한 번 검토된 항목(그대로 반영하면 안 됨)**:
+      - **Rebuild 커서 체이닝(`rebuildLeadsMaster()`/`rebuildMTAMaster()` 단일 실행 → 청크
+        분할)** — 코드 확인 결과 실제로 청크 처리 없는 단일 실행 맞음(`MASTER_004_
+        MasterBuild.js`). 단, 이건 **`docs/OpenItems.md` #9에서 2026-07-28에 이미 "스크립트
+        편집기 수동 실행 전용 희귀 작업이라 비동기화 대상에서 제외"라고 명시적으로 결정한
+        항목** — 새로 발견한 격차가 아니라 재검토 대상. 2026-07-25 실측(구 데이터량 기준
+        5m26s/7m58s)이 6분 한도에 근접했던 전례가 있어 재검토 가치는 있으나, Article 14
+        (패치 금지) 원칙상 "이미 제외하기로 한 결정을 왜 다시 여는지"부터 사용자 확인 필요.
+      - **Jest/영속 테스트 스위트 부재** — 저장된 테스트 파일이 없는 건 사실이나, 프로젝트에
+        세션마다 Node vm으로 순수함수를 즉석 검증하는 관행이 있어(Changelog에 "Node vm 하네스
+        테스트 PASS" 반복 기록) 문서가 말하는 "전적으로 사람 눈 의존"은 아님 — 다만 그 검증이
+        매번 휘발되고 git에 저장 안 되는 건 실재하는 문제.
+    - **❓ 문서의 "확인 필요" 중 이번에 해소된 것**: Workspace 계정 여부(위 참고, 확정됨).
+      **미해결로 남은 것**: 현재 실행 시간 실측(설계 확정 후 진행 예정, 위 참고).
+    - **실측 시 42번 항목과 반드시 같이 확인할 것(2026-09-02 추가)**: 42번에서 발견한
+      Target_REP/FY_REP/S&M_REP의 "과거 기간까지 매번 전체 재계산" 문제 — 이 실측
+      재개 시 전체 소요시간뿐 아니라 **리포트별/구간별 소요시간을 나눠서 재야** 42번의
+      증분 캐싱 제안이 실제로 값어치가 있는지(과거 구간 재계산 비중이 실제로 얼마인지)
+      판단 가능. 전체 합산 시간만 재면 이 부분이 안 보임 — 임의로 처리하지 말 것.
+    - 상세 원문 분석(저장소 비교표, Best Practices 인용 등)은 이 세션 대화 기록 참고 — 별도
+      문서로 저장하지 않음.
+41. **Engine/OPS/Report 조회 의존성 매트릭스 확인 중 발견한 중복 외부 오픈 2건 — 기록만
+    (TODO, 구현 착수 전)** — 2026-09-02 사용자 요청으로 Engine 6종·OPS 5종·Report 5종
+    함수가 각자 무엇을 읽는지 전수 확인(어느 함수가 어떤 시트/외부 워크북을 여는지 매핑).
+    대부분은 "Engine이 원본을 계산 → OPS는 Engine 캐시만 읽음 → Report는 OPS/Engine 캐시만
+    읽음"으로 깔끔하게 연쇄돼 있으나, 예외 2건이 같은 외부 파일을 같은 실행 주기 안에서
+    반복해서 여는 게 확인됨 — 둘 다 "분리"보다는 **"한 번 계산해서 캐시하고 재사용"** 쪽이
+    해법으로 보임(임의로 구현하지 말 것, 설계 검토 후 진행).
+    - **BOFU/Content — Meta_Raw + UTM Dictionary 이중 조회**: `computeBOFUMetaCampaignDataAggregates_()`
+      (`BOFU_002_Engine.js`)가 **동일한 함수 그대로** `refreshBOFUEngine_()`(Engine 단계,
+      Spent 계산용)와 `buildBOFUOPS()`(OPS Build 단계, Campaign/Off-On/Start·End Date/
+      Link clicks/Results 자동채움용, `BOFU_003_Build.js:48`)에서 각각 호출됨 — 매 사이클
+      Meta_Raw 외부 워크북과 UTM_Program_Dictionary를 두 번씩 읽음. 반환값 자체에 이미
+      spend 외에 clicks/results/campaignNames/campaignStart/campaignEnd/hasOngoing이
+      전부 들어있는데(주석 확인, `BOFU_002_Engine.js` 270행대) Engine 단계에서 Spent만
+      뽑아 쓰고 나머지는 버리는 구조라 OPS Build가 어쩔 수 없이 재계산하는 상황. Content도
+      `computeContentMetaCampaignDataAggregates_()`로 완전히 동일한 패턴(`CONTENT_002_
+      Engine.js`/`CONTENT_003_Build.js:49`). **제안(검토 필요, 구현 안 함)**: Engine 단계가
+      계산한 전체 반환값을 캐시 시트에 같이 저장해두고, OPS Build는 그 캐시만 읽도록 변경
+      — Meta_Raw/Dictionary 외부 오픈이 사이클당 1회로 줄어듦. Events_Engine은 이미 OPS
+      Build 단계에서 재조회를 안 하는 비대칭 구조라 왜 다른지도 함께 확인 필요.
+    - **FY_REP — perfTrackerByFY 외부 워크북을 FY 개수만큼 반복 오픈**: `computeFYRepMarketingRowsForFY_()`
+      (`FYREP_001_Engine.js:489`)가 `SpreadsheetApp.openById()`를 호출부마다 새로 열고,
+      `computeFYRepCompanyRevenueTargetsForFY_()`(:942)도 별개로 또 엶 — `CONFIG.FYREP.FYS`에
+      설정된 FY(24/25/26 등) 하나당 각각 호출되므로, FY_REP Generate 한 번에 외부 오픈이
+      FY 개수 × 최대 2회 반복됨. ACQ_REP/NewP1_REP/Target_REP은 전부 `Ad_Spend_Cache`(주기적
+      트리거로 미리 캐시, Report는 캐시만 읽음) 패턴으로 이미 이 문제를 해소해뒀는데 FY_REP만
+      그 패턴이 없음. **제안(검토 필요, 구현 안 함)**: `Ad_Spend_Cache`와 동일하게 perfTrackerByFY
+      데이터를 주기적 트리거로 로컬 캐시에 미리 읽어두고, `generateFYReport_()`는 캐시만
+      읽도록 전환 — 단, perfTrackerByFY는 사용자가 다른 곳에서 직접 편집하는 외부 시트라
+      캐시 주기 동안의 최신성 트레이드오프는 사용자 확인 필요.
+42. **Engine → OPS/Report 전체 체인을 트리거 단위로 분리하는 방향 재검토 — 기록만
+    (TODO, 구현 착수 전), 2026-09-02 대화 중 "Engine→OPS→Report 순차 3단계"라는 최초
+    전제 자체가 틀렸음을 발견해 정정됨** — 41번(개별 함수 중복 조회)과는 별개 질문 —
+    "Engine/OPS/Report가 전부 한 실행 안에서 순차 연쇄돼 있어서 오래 걸리는 거면 아예
+    트리거 단위로 분리할 수 있는지" 검토.
+    - **정정된 실제 의존 구조(41번 조사 시 만든 조회 매트릭스 재확인 결과)**: "Engine →
+      OPS → Report"는 일직선이 아님 — Engine 6종은 도메인마다 다른 곳으로 갈라짐.
+      (1) Events/BOFU/Search/Content Engine → 각자의 OPS 화면(Events_OPS 등)에서 **끝남**
+      (이 OPS들을 더 읽어가는 Report가 없음 — S&M_REP도 Events_OPS가 아니라 Leads_OPS/
+      MTA_Master를 직접 읽음). (2) ACQ_Summary/NewP1_Engine/Target_Engine → OPS를 아예
+      안 거치고 ACQ_REP/NewP1_REP/Target_REP/FY_REP이 **직접** 읽음 — 이 3개 도메인엔
+      중간 OPS 화면 단계 자체가 없음. **즉 OPS와 Report는 서로 순서 의존 관계가 없고,
+      둘 다 "Engine이 끝난 다음"이라는 조건만 공유** — Engine 다음에 OPS→Report를 순서대로
+      실행할 필요가 없고, Engine이 끝나면 OPS와 Report를 각자 독립된 트리거로 동시에(또는
+      순서 무관하게) 실행해도 됨. 이 발견으로 "Engine/OPS/Report 3단계 순차 분리"였던
+      최초 아이디어가 "Engine 1단계 + (OPS, Report) 2개를 Engine 완료 후 독립적으로"로
+      바뀜 — 후자가 임계 경로(critical path)를 더 짧게 만듦(OPS가 Report를 안 기다리고,
+      Report가 OPS를 안 기다림).
+    - **분리 필요성의 실측 근거**: 2026-08-26 실측(IC Funnel 36,464건 기준) Engine 6종
+      refresh만으로 이미 **~4m39s**(6분 한도의 78%) — 여기에 OPS 4종 재구성 + Report
+      5종 재생성(둘 다 미측정)까지 같은 실행에 얹으면 총합이 한도를 넘길 위험이 있고,
+      Leads/MTA 파이프라인(35만+/8만+행, IC Funnel보다 훨씬 큰 데이터량)은 더 위험할 수
+      있음. **이미 실제로 발생한 전례 있음**: 9번 항목 관련 2026-08-05 사고 — 당시
+      `runLeadsPipelineTail()` 안의 한 단계(중복 삭제, 그 자체는 이후 수정됨)가 느려지며
+      Apps Script 플랫폼이 실행 자체를 강제 종료 → 최상위 try/catch가 개입 못 해
+      `PIPELINE_LOCK`이 영구히 남는 2차 피해로 이어졌던 실제 사례(#20 조사 기록 참고).
+      원인 자체는 고쳤지만 "여러 무거운 단계를 한 실행에 순차로 몰아넣는" 구조는 그대로라
+      재발 가능한 근본 리스크로 남아있음.
+    - **2026-07-28 개별 함수 단위 트리거 분리 기각 결정과의 관계**: 그 결정("트리거
+      디스패치 지연이 hop마다 누적돼 오히려 느려진다")은 함수 16개를 전부 쪼개는 세밀한
+      단위를 가정한 것 — 이번 검토는 그보다 굵은 단위(Engine 1묶음 + OPS/Report 각자
+      독립, 홉 2단계뿐)라 전제가 다름. 또한 그 결정 당시엔 없었던
+      `periodicRefreshAllReports_()`(5개 리포트 하루 2번 KST 10/22시 강제 재계산, 2026-09-01
+      도입)가 지금은 안전망으로 존재 — 파이프라인이 늦게 끝나도 최악의 경우 다음 주기적
+      refresh가 메워주므로, "총 완료 시간이 늘어나는" 비용이 2026-07-28 당시보다 낮아짐.
+    - **Engine을 독립 경계로 분리할 필요성은 근거 있음, OPS/Report 쪽 실행시간은 데이터
+      없음**: Engine 6종이 실측상 이미 한도에 가장 근접한 단일 구간이라 독립 트리거
+      경계가 필요하다는 쪽은 근거가 있음(위 실측 참고). 반면 OPS 4종/Report 5종은
+      실행시간이 아직 미측정이라 이 둘을 정말 병렬/독립으로 나눠도 되는지(PIPELINE_LOCK
+      공유 방식까지 포함해서)는 40번 항목의 실행시간 재측정(설계 확정 후 진행 예정) 없이는
+      판단 불가 — 임의로 처리하지 말 것.
+    - **Report 레이어 5종 각각의 실제 읽기 범위 확인(2026-09-02) — 예상과 반대로 나옴**:
+      사용자가 "ACQ는 신규분만, NewP1은 전체 스캔이라 느릴 것, Target/FY/S&M은 각각
+      해당 주·월만 보면 되니 빠를 것"이라는 가설을 제시해 코드로 직접 검증. 결과가
+      정반대로 나옴 — **NewP1_REP은 이미 가볍고, 오히려 Target/FY/S&M 3개가 "필요한
+      범위만 보면 되는데 실제로는 매번 전체를 다시 훑거나 재계산"하는 구조**였음:
+      - `generateACQReport_()` — 가설대로 가벼움. `readACQSummaryMap_()`이 이미 집계된
+        작은 캐시 테이블만 읽음(원본 Leads_OPS 스캔 없음).
+      - `generateNewP1Report_()` — 가설과 반대로 **이미 가벼움**. Report 단계 자체는
+        `readNewP1EngineRows_()`로 NewP1_Engine 캐시만 읽음(ACQ와 동일 패턴). Leads_OPS
+        전체 스캔은 실재하지만 그건 Engine 단계(`refreshNewP1Engine_()`→
+        `computeNewP1Aggregates_()`, `NEWP1REP_001_Report.js:405`)에서 일어나는 일이라
+        위 Engine 4m39s 실측에 이미 포함돼 있음 — Report 레이어만 놓고 보면 안 느림.
+      - `generateTargetReport_()` — 가설과 반대로 **무거움**. 시작하자마자
+        `refreshTargetEngine_()`(Target_Engine 전체 재계산 — Leads_OPS 전체 + Deal
+        Tracker 캐시 전체 재훑기)를 매번 새로 호출함(`TARGET_002_Report.js:541`). 특정
+        주만 보는 스코핑이 없음.
+      - `generateFYReport_()` — 가설과 반대로 **가장 무거움**. `computeFYRepFlatRows_()`
+        (`FYREP_001_Engine.js:1504`)가 `CONFIG.FYREP.FYS`(24/25/26 전부)를 매번 순회 —
+        해당 월/FY 하나가 아니라 설정된 FY 전체를 매번 재계산. 41번 항목에서 확인한
+        perfTrackerByFY 외부 오픈(FY당 최대 2회)도 이 반복 안에서 매번 재발생.
+      - `generateSMReport_()` — 가설과 반대로 **스코핑 없음**. `sheetToObjects(opsSheet)`/
+        `sheetToObjects(mtaSheet)`(`SMREP_001_Report.js:471-472`)로 Leads_OPS·MTA_Master
+        **전체**를 먼저 메모리에 올린 뒤에야 주 단위로 걸러냄 — 읽기 자체가 이미 전체
+        스캔.
+      **시사점**: Engine 분리(위 항목)와는 별개로, Report 레이어 안에서도 Target_REP/
+      FY_REP/S&M_REP 3개가 "필요한 범위만 증분으로 읽도록" 개선할 여지가 있어 보임 —
+      단 구현 전 반드시 실행시간 재측정(40번 항목)으로 실제 병목 크기부터 확인, 임의로
+      처리하지 말 것.
+    - **왜 무거울 이유가 없는지(2026-09-02 사용자 지적)**: Target_REP(주 단위)/FY_REP
+      (FY·월 단위)/S&M_REP(주 단위) 전부 **과거로 지나간 구간의 숫자는 이후에 바뀌지
+      않는다** — 지난주/지난달/지난 FY 실적은 확정값이라 재계산해도 항상 같은 결과가
+      나옴(단, Revenue처럼 Deal Tracker 역싱크로 뒤늦게 갱신될 수 있는 필드는 예외 —
+      39번 항목의 78건 미매칭처럼 "과거 리드의 필드가 나중에 채워지는" 케이스가 있어
+      완전히 불변은 아님, 이 경계는 설계 시 정확히 확인 필요). 그런데도 위 3개는 매번
+      **전체 기간(과거 포함)을 처음부터 다시 계산**하고 있음 — Target_Engine 전체 재계산,
+      FY 24/25/26 전부 순회, Leads_OPS/MTA_Master 전체 스캔 후 필터링이 전부 이 패턴.
+      **개선 방향(구현 전 검토 필요)**: 이미 확정된 과거 구간(예: 지난 FY, 2주 전 이전
+      주차)의 계산 결과는 캐시에 남겨두고, **이번 실행에서 실제로 바뀔 수 있는 최근 구간
+      (현재 진행 중인 주/월/FY, 그리고 Revenue처럼 늦게 갱신되는 필드가 걸린 구간)만
+      다시 계산**하는 증분 방식으로 전환 — Master Build의 Incremental Append(Properties
+      커서로 "어디까지 처리했는지" 기억)와 같은 원칙을 Report 레이어에도 적용하는 셈.
+      경계 조건(무엇을 "확정된 과거"로 볼지, Revenue 역싱크 지연이 걸리는 구간을 어떻게
+      다룰지)은 설계 단계에서 반드시 확정 필요 — 임의로 처리하지 말 것.

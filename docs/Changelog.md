@@ -1,5 +1,69 @@
 # Changelog — 2026-09-02
 
+## Session-Start Git Sync Check 트리거 조건 명문화
+
+세션 시작 시 `docs/OpenItems.md`/`docs/Changelog.md`를 먼저 확인하지 않고 순수 상태 질문("어디까지
+했었지?")에 바로 답해버려 로컬이 origin보다 3커밋 뒤처진 걸 모른 채 오래된 정보로 답변한 사고
+발생 — 뒤늦게 "오늘 깃 풀된거야?" 질문으로 발견. CLAUDE.md의 "코드를 수정하기 전에 먼저
+`scripts/start-session.sh`를 실행한다"는 문구를 "코드 수정이 임박했을 때만 걸리는 조건"으로
+잘못 해석한 게 원인 — 트리거는 "세션 시작" 자체지 "코드 수정 임박"이 아니라는 걸 명문화하고
+이번 사고를 배경으로 기록.
+
+## 종결된 TEMPQA 스크래치 조사 스크립트 40개 삭제
+
+`TEMPQA_001~047` 47개 중, 각 파일이 지원했던 조사가 실제로 종결됐는지(findings가 Changelog/
+코드에 이미 반영됐는지) `docs/OpenItems.md` 전체와 대조해 전수 판정 — 서브에이전트로 1차
+조사 후 직접 검증. 8개(`TEMPQA_001`은 `biz-segment-qa` 에이전트가 실제 의존하는 진단 도구,
+`TEMPQA_031/034/037/040/042/043/045`는 `docs/OpenItems.md`의 아직 열린 항목에서 재사용/
+재검증 대상으로 명시됨)만 남기고 40개 삭제(1차 39개 삭제 후, CLOSED로 판정됐던 `TEMPQA_032`
+가 목록 옮기는 과정에서 누락된 걸 발견해 추가 삭제). `scripts/check-syntax.sh`/
+`check-duplicate-declarations.sh` 통과 확인.
+
+## GAS 백엔드 설계 — 외부 분석 문서를 실제 코드와 대조 검증(`docs/OpenItems.md` #40)
+
+사용자가 외부에서 작성해온 GitHub 상위 스타 GAS 저장소 분석 문서("실제 `.js` 소스는 안 읽고
+`/docs/`만 근거로 했다"고 스스로 명시)를 실제 코드로 하나씩 검증. Workspace 계정 확정(사용자
+확인), 실행 시간 재측정은 아래 파이프라인 재설계 트랙 확정 후로 보류. 실재하는 격차 3건
+(Report Generate 체크박스가 `PIPELINE_LOCK` 미확인 상태로 동시 실행 가능, clasp dev/prod
+미분리, LockService/CacheService/Advanced Sheets Service/fetchAll 전부 미사용)과, 문서
+프레이밍이 틀렸거나 이미 한 번 검토된 항목 2건(Rebuild 커서 체이닝은 2026-07-28에 이미
+비동기화 대상에서 제외 결정된 항목, Jest 부재는 맞지만 Node vm 즉석 검증 관행이 이미 있음)을
+구분해 기록만 완료 — 구현 착수 전.
+
+## Sync Pipeline 아티팩트 — 5개 독립 파이프라인 구조로 전면 갱신
+
+`docs/Changelog.md` 위쪽 "Leads_OPS 필드 소유권 전면 재편" 반영을 위해 2026-08-26 버전
+(진입점 3개: Leads/MTA/IC Funnel)을 5개(New Leads/MTA/IC Funnel/SAL/Revenue) 구조로 재작성
+— Before(2026-08-26까지, SAL·Revenue가 MTA 터치 기반 sync에 얹혀있어 "터치 없으면 갱신 안
+됨" 구조적 공백)/After(각자 자기 필드만 책임지는 독립 파이프라인) 비교 섹션 신규, 공유
+`PIPELINE_LOCK`+FIFO 대기열 흐름을 반영한 mermaid 다이어그램 재작성, 필드 소유권 표 갱신.
+사용자 지적으로 "UTM Program Dictionary" 트랙 카드도 정정 — 재채굴(`periodicRefreshDictionaries_()`,
+12시간 주기)만 체인 밖이고, 조회(`resolveBusinessSegment_()`)는 Leads/MTA Import마다 실제로
+실행됨을 구분해서 명시. 같은 URL로 republish
+(https://claude.ai/code/artifact/a4afa464-fdab-4e72-a6ec-3ac87e519a99).
+
+## Engine/OPS/Report 조회 의존성 매트릭스 조사 — 전제 정정 및 Report 레이어 비효율 3건 발견(`docs/OpenItems.md` #41/#42)
+
+Engine 6종·OPS 5종·Report 5종 함수 16개가 각각 무엇을 읽는지 전수 매핑(서브에이전트 조사).
+과정에서 두 가지 잘못된 전제를 코드로 정정: (1) "Engine→OPS→Report 순차 3단계"가 아니라
+Events/BOFU/Search/Content Engine은 OPS에서 끝나고 ACQ_Summary/NewP1_Engine/Target_Engine은
+OPS를 거치지 않고 Report가 직접 읽는 구조 — OPS와 Report는 Engine 완료 후 서로 독립적으로
+실행 가능. (2) "NewP1_REP이 전체 스캔 때문에 느릴 것"이라는 사용자 가설과 반대로 Report
+단계 자체는 캐시만 읽어 이미 가벼움(전체 스캔은 Engine 단계에 이미 포함). 대신 예상과 반대로
+Target_REP(`refreshTargetEngine_()` 전체 재계산을 Generate마다 재호출)/FY_REP(`CONFIG.
+FYREP.FYS` 전체 FY를 매번 순회 + 외부 워크북 FY당 최대 2회 반복 오픈)/S&M_REP(Leads_OPS·
+MTA_Master 전체를 스코핑 없이 로드 후 필터링) 3개가 실제로 무거운 구조였음을 발견. 추가로
+BOFU/Content Engine·OPS Build가 Meta_Raw+UTM Dictionary를 완전히 동일한 함수로 이중 조회하는
+것도 확인. 사용자가 "과거 확정 구간은 안 바뀌는데 왜 매번 재계산하냐" 지적 — 확정된 과거는
+캐시, 최근 구간만 증분 재계산하는 방향을 제안으로 기록. 전부 기록만, 구현 착수 전.
+
+## exec-plan 신규 생성 — 파이프라인 Refresh 시간 단축 트랙
+
+위 #40~#42 논의를 다음 세션에서 이어받을 수 있도록 `docs/exec-plans/active/
+2026-09-02-pipeline-refresh-time-redesign.md` 신규 — Goal/Progress/Surprises & Discoveries/
+Decision Log 전부 이번 세션 논의 내용으로 채움. 사용자가 "설계 확정되면 알려줄게, 그때
+진행하자"고 명시해 구현은 보류 상태로 남김.
+
 ## SAL을 IC Funnel 리포트에서 완전히 분리 — 전용 외부 스프레드시트로 독립(`docs/OpenItems.md` #38 P1 TODO #1)
 
 전날 SAL 8월 갭 조사 후 남은 잔여 24건(Salesforce IC Funnel 리포트가 "New (Not Contacted)
