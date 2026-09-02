@@ -4,10 +4,14 @@
  * S&M_REP (Sales & Marketing Weekly Dashboard)
  *
  * Responsibility
- * Leads_OPS/MTA_Master를 주간(월~일) 단위로 집계해 리드 유입량과 SAL
- * 전환량을 세그먼트별로 보여주는 대시보드. Target_REP과 동일한 "FY 하나
- * 선택 → 그 FY의 전체 주가 행"구조(TARGET_001_Engine.js의
- * getMondayOfWeek_()/generateCalendarWeeksForFY_() 재사용).
+ * 리드 유입량과 SAL 전환량을 세그먼트별 주간(월~일) 단위로 보여주는
+ * 대시보드. Target_REP과 동일한 "FY 하나 선택 → 그 FY의 전체 주가 행"구조
+ * (TARGET_001_Engine.js의 getMondayOfWeek_()/generateCalendarWeeksForFY_()
+ * 재사용). **2026-09-03부터 Leads_OPS/MTA_Master를 직접 스캔하지 않음** —
+ * `ACQREP_002_Summary.js`의 `refreshACQSummaryWeekly_()`(ACQ Engine이 이미
+ * 하던 스캔에 얹은 주 단위 캐시, `ACQ_Summary_Weekly` 시트)만 읽는다
+ * (`docs/OpenItems.md` #41 계열, 실측 119.8초 → 캐시 읽기 수준으로 단축
+ * 목적). 계산 로직/출력 정의는 전부 그대로 — 입력 소스만 교체.
  *
  * 지표 정의 (2026-08-18 사용자 확정)
  * - All Leads   : 그 주(MTA Created Date 기준) MTA_Master 터치 행 자체의
@@ -40,9 +44,21 @@
  * 20 Reporting
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-09-03)
+ * - **Leads_OPS/MTA_Master 자체 전체 스캔 제거 — ACQ_Summary_Weekly 캐시로
+ *   전환(`docs/OpenItems.md` #41 계열)** — 실측 119.8초(Report 레이어 전체의
+ *   68%, 파이프라인 전체의 20%, `docs/PerformanceBenchmark.md` 2026-09-03)가
+ *   근거. `computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords,
+ *   weekStarts)` → `computeSMRepWeeklyAggregates_(weeklyMap, weekStarts)`로
+ *   시그니처 변경(내부 계산 함수라 하위호환 대상 아님) — `readACQSummaryWeeklyMap_()`
+ *   (`ACQREP_002_Summary.js` v1.4.0)이 반환하는 사전집계 맵을 받아 bucket
+ *   매핑만 읽기 시점에 적용, 출력 shape/값 정의는 전부 동일. `generateSMReport_()`
+ *   가 `sheetToObjects()` 2회 호출을 제거하고 `readACQSummaryWeeklyMap_()` 1회
+ *   호출로 교체. 회귀 테스트: `testComputeSMRepWeeklyAggregates()` 갱신(Node
+ *   하네스로 PASS 확인, 동일 시나리오/동일 기대값 — 소스만 목킹 캐시로 교체).
  * v1.2.0 (2026-09-01)
  * - SAL 블록 breakdown(BOFU/Search/Organic/Referral)에도 P1 필터 추가(사용자
  *   요청 — "SAL의 BOFU/Search/Organic/Referral 세그먼트는 P1 숫자만 보이도록").
@@ -65,21 +81,34 @@
 
 /**
  * ==========================================================
- * Compute S&M_REP Weekly Aggregates (Leads_OPS/MTA_Master 각 1회 스캔)
+ * Compute S&M_REP Weekly Aggregates (ACQ_Summary_Weekly 캐시 읽기, 재스캔 없음)
  *
- * WHY
- * All Leads(MTA_Master)와 New Leads/New P1/SAL(Leads_OPS)은 소스 시트가
- * 다르고 각자 다른 날짜 컬럼(MTA Created Date / Create Date / Sales
- * Accepted Date) 기준으로 주가 갈리므로, 한 번의 스캔으로 모든 걸 처리할
- * 수 없다 — 시트별로 정확히 1회씩만 스캔(Article 10: Read Once)하고
- * 결과를 weekKey 기준으로 병합한다. Sheet IO 없이 Node 하네스로 테스트
- * 가능하도록 순수 함수로 분리(다른 *_By_Week_() 계열 함수와 동일 패턴,
- * TARGET_002_Report.js computeTargetActualP1ByWeek_() 참고).
+ * WHY (2026-09-03 재설계, `docs/OpenItems.md` #41 계열)
+ * 기존엔 이 함수가 Leads_OPS/MTA_Master 전체를 직접 스캔했음(실측 119.8초,
+ * `docs/PerformanceBenchmark.md` 2026-09-03 — S&M_REP Generate 전체 시간의
+ * 68%, 파이프라인 전체의 20%). ACQ_REP이 이미 정확히 같은 필드(All Leads/
+ * New Leads/New P1/SAL)를 같은 소스(Leads_OPS/MTA_Master, isEffectiveP1_
+ * 포함)로 계산해 `ACQ_Summary`(월 단위) 캐시에 저장해두고 있었고, 2026-09-03
+ * 설계 논의에서 그 스캔에 주 단위 서브맵만 추가로 얹은 `ACQ_Summary_Weekly`
+ * 캐시(`ACQREP_002_Summary.js` v1.4.0 `refreshACQSummaryWeekly_()`)를 신설 —
+ * 이 함수는 이제 그 캐시만 읽고 시트를 재스캔하지 않는다.
+ *
+ * **ACQ_REP과 정의를 절대 갈라지지 않게 유지하는 것이 이 설계의 핵심**
+ * (2026-09-03 설계 논의 — raw Master의 Lead Priority를 직접 쓰는 대안은
+ * 기각됨, Lead Priority가 리드 유입 후 실무자 검수로 바뀔 수 있는 필드라
+ * Leads_OPS의 Priority Override/다운그레이드 가드를 거치지 않으면 #35류
+ * 갭이 재발할 위험이 있음). SAL P1(P1 필터된 SAL)만 월 단위 ACQ_Summary엔
+ * 없던 S&M 전용 신규 지표 — `computeOPSAggregates_()`(ACQREP_001_Report.js
+ * v1.19.0)에서 같은 스캔으로 함께 계산됨.
+ *
+ * bucket 매핑(Event/BOFU/Content/Organic/Referral, BOFU/Search/Organic/
+ * Referral)은 캐시가 raw Business Segment 단위라 여전히 이 함수(읽기
+ * 시점)에서 적용 — 로직 자체는 기존과 동일, 입력 소스만 교체.
  *
  * INPUT
- * leadsOpsRecords : Object[]  (sheetToObjects(Leads_OPS 시트) 결과)
- * mtaRecords      : Object[]  (sheetToObjects(MTA_Master 시트) 결과)
- * weekStarts      : Date[]    (리포트에 나열될 모든 Week Start, 월요일)
+ * weeklyMap  : Object  (readACQSummaryWeeklyMap_() 결과, "weekStart|segment" ->
+ *              {allLeads, newLeads, newP1, sal, salP1})
+ * weekStarts : Date[]  (리포트에 나열될 모든 Week Start, 월요일)
  *
  * OUTPUT
  * Object  "yyyy-MM-dd"(Week Start) -> {
@@ -95,7 +124,7 @@
  * testComputeSMRepWeeklyAggregates() 참고
  * ==========================================================
  */
-function computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords, weekStarts){
+function computeSMRepWeeklyAggregates_(weeklyMap, weekStarts){
 
   const toKey = function(date){
     return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
@@ -127,77 +156,29 @@ function computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords, weekStarts){
 
   }
 
-  //----------------------------------------------------------
-  // All Leads — MTA_Master 터치 행 개수 (MTA Created Date 기준 주)
-  //----------------------------------------------------------
+  Object.keys(weeklyMap).forEach(function(mapKey){
 
-  mtaRecords.forEach(function(record){
+    const sepIndex = mapKey.indexOf("|");
+    const weekKey = mapKey.slice(0, sepIndex);
 
-    const mtaCreated = record["MTA Created Date"];
+    if(!validKeys[weekKey]) return;
 
-    if(!(mtaCreated instanceof Date) || isNaN(mtaCreated.getTime())) return;
+    const segment = mapKey.slice(sepIndex + 1);
+    const entry = weeklyMap[mapKey];
 
-    const key = toKey(getMondayOfWeek_(mtaCreated));
+    const row = ensureRow(weekKey);
 
-    if(!validKeys[key]) return;
+    row.allLeads += entry.allLeads || 0;
+    row.newLeads += entry.newLeads || 0;
+    row.newP1 += entry.newP1 || 0;
+    row.allSAL += entry.sal || 0;
+    row.salP1 += entry.salP1 || 0;
 
-    ensureRow(key).allLeads++;
+    const leadsBucket = leadsMap[segment];
+    if(leadsBucket) row.leadsBreakdown[leadsBucket] += entry.newP1 || 0;
 
-  });
-
-  //----------------------------------------------------------
-  // New Leads/New P1/breakdown(Create Date) + All SAL/P1/breakdown
-  // (Sales Accepted Date) — Leads_OPS 1회 스캔
-  //----------------------------------------------------------
-
-  leadsOpsRecords.forEach(function(record){
-
-    const segment = String(record["Business Segment"] || "").trim();
-    const isP1 = isEffectiveP1_(record["Lead Priority"], record["Priority Override"]);
-
-    const createDate = record["Create Date"];
-
-    if(createDate instanceof Date && !isNaN(createDate.getTime())){
-
-      const key = toKey(getMondayOfWeek_(createDate));
-
-      if(validKeys[key]){
-
-        const row = ensureRow(key);
-
-        row.newLeads++;
-
-        if(isP1) row.newP1++;
-
-        const bucket = leadsMap[segment];
-
-        if(bucket && isP1) row.leadsBreakdown[bucket]++;
-
-      }
-
-    }
-
-    const salDate = record["Sales Accepted Date"];
-
-    if(salDate instanceof Date && !isNaN(salDate.getTime())){
-
-      const key = toKey(getMondayOfWeek_(salDate));
-
-      if(validKeys[key]){
-
-        const row = ensureRow(key);
-
-        row.allSAL++;
-
-        if(isP1) row.salP1++;
-
-        const bucket = salMap[segment];
-
-        if(bucket && isP1) row.salBreakdown[bucket]++;
-
-      }
-
-    }
+    const salBucket = salMap[segment];
+    if(salBucket) row.salBreakdown[salBucket] += entry.salP1 || 0;
 
   });
 
@@ -217,39 +198,26 @@ function testComputeSMRepWeeklyAggregates(){
   const weekStart = new Date(2026, 6, 27);
   const weekStarts = [weekStart];
 
-  const mtaRecords = [
-    { "MTA Created Date": new Date(2026, 6, 28) },  // 유효 주 안(화요일)
-    { "MTA Created Date": new Date(2026, 6, 28) },  // 같은 Lead라도 터치 행이면 각각 카운트
-    { "MTA Created Date": new Date(2026, 6, 20) },  // 유효 주 밖 — 제외
-    { "MTA Created Date": null }                    // 날짜 없음 — 제외
-  ];
+  // 2026-09-03 재설계 — readACQSummaryWeeklyMap_() 결과 형태를 그대로 목킹
+  // (Leads_OPS/MTA_Master 원본 레코드 대신 이미 집계된 캐시 맵을 입력으로 줌).
+  // 원본 테스트 시나리오와 동일한 케이스를 "weekStart|segment" 키의 사전집계
+  // 값으로 재현 — 기대값은 변경 없음(소스만 바뀌었을 뿐 로직은 동일).
+  const weeklyMap = {
+    // MTA 터치 2건(세그먼트 미상 → Other) — All Leads
+    "2026-07-27|Other": { allLeads: 2, newLeads: 0, newP1: 0, sal: 0, salP1: 0 },
+    // Seminar, Priority 1, Create Date 주 안 — New Leads + New P1 + Event(Leads)
+    "2026-07-27|Seminar": { allLeads: 0, newLeads: 1, newP1: 1, sal: 0, salP1: 0 },
+    // Search, Priority 2(P1 아님) — New Leads만, Leads 블록 매핑 없음(어디에도 안 잡힘)
+    "2026-07-27|Search": { allLeads: 0, newLeads: 1, newP1: 0, sal: 0, salP1: 0 },
+    // BOFU, Create Date는 이 주 밖(다른 주 키로 집계돼 여기 없음), Sales Accepted
+    // Date만 이 주 안 — All SAL/P1/BOFU(SAL)로만 잡혀야 함
+    "2026-07-27|BOFU": { allLeads: 0, newLeads: 0, newP1: 0, sal: 1, salP1: 1 },
+    // Referral, Priority 3(P1 아님) — New Leads/All SAL엔 잡히되 newP1/salP1
+    // 필터에 걸려 breakdown(둘 다 New P1/P1(SAL) 필터 적용)엔 안 잡혀야 함
+    "2026-07-27|Referral": { allLeads: 0, newLeads: 1, newP1: 0, sal: 1, salP1: 0 }
+  };
 
-  const leadsOpsRecords = [
-    // New Leads(Create Date 주 안) + New P1 + Event(Seminar)
-    {
-      "Create Date": new Date(2026, 6, 27), "Sales Accepted Date": null,
-      "Business Segment": "Seminar", "Lead Priority": "Priority 1", "Priority Override": ""
-    },
-    // New Leads + Search(=Leads 블록 breakdown 매핑 없음 — 어느 컬럼에도 안 잡힘)
-    {
-      "Create Date": new Date(2026, 6, 30), "Sales Accepted Date": null,
-      "Business Segment": "Search", "Lead Priority": "Priority 2", "Priority Override": ""
-    },
-    // Create Date는 유효 주 밖이지만 Sales Accepted Date가 유효 주 안 —
-    // All SAL/P1/BOFU(SAL)로만 잡혀야 함
-    {
-      "Create Date": new Date(2026, 5, 1), "Sales Accepted Date": new Date(2026, 6, 29),
-      "Business Segment": "BOFU", "Lead Priority": "Priority 1", "Priority Override": ""
-    },
-    // Referral, Create/SAL 둘 다 유효 주 안이지만 Priority 3(P1 아님) —
-    // leadsBreakdown(New P1 필터 적용)에는 안 잡히고 salBreakdown(필터 없음)에는 잡혀야 함
-    {
-      "Create Date": new Date(2026, 6, 27), "Sales Accepted Date": new Date(2026, 6, 27),
-      "Business Segment": "Referral", "Lead Priority": "Priority 3", "Priority Override": ""
-    }
-  ];
-
-  const result = computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords, weekStarts);
+  const result = computeSMRepWeeklyAggregates_(weeklyMap, weekStarts);
 
   const key = Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
   const row = result[key];
@@ -432,8 +400,9 @@ function setupSMReport(){
  *
  * WHY
  * Control Area의 FY 값을 읽어 그 FY의 전체 주(generateCalendarWeeksForFY_(),
- * TARGET_001_Engine.js)를 행으로 나열하고, Leads_OPS/MTA_Master를 각 1회
- * 스캔(computeSMRepWeeklyAggregates_())한 결과를 채워 넣는다. 재실행해도
+ * TARGET_001_Engine.js)를 행으로 나열하고, `readACQSummaryWeeklyMap_()`
+ * (ACQ Engine 주 단위 캐시, 2026-09-03부터 — 직접 스캔 안 함)을
+ * `computeSMRepWeeklyAggregates_()`로 집계한 결과를 채워 넣는다. 재실행해도
  * 안전(Report Area 전체를 덮어씀, Control Area는 건드리지 않음).
  * ==========================================================
  */
@@ -465,13 +434,12 @@ function generateSMReport_(){
   const weeks = generateCalendarWeeksForFY_(targetFY);
   const weekStarts = weeks.map(function(w){ return w.weekStart; });
 
-  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
-  const mtaSheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+  // 2026-09-03 재설계 — Leads_OPS/MTA_Master 재스캔 대신 ACQ Engine의 주 단위
+  // 캐시만 읽음(`docs/OpenItems.md` #41 계열, `computeSMRepWeeklyAggregates_()`
+  // WHY 참고). 실측 119.8초 → 캐시 읽기 수준(수 초)으로 단축 기대.
+  const weeklyMap = readACQSummaryWeeklyMap_();
 
-  const leadsOpsRecords = opsSheet ? sheetToObjects(opsSheet) : [];
-  const mtaRecords = mtaSheet ? sheetToObjects(mtaSheet) : [];
-
-  const aggregates = computeSMRepWeeklyAggregates_(leadsOpsRecords, mtaRecords, weekStarts);
+  const aggregates = computeSMRepWeeklyAggregates_(weeklyMap, weekStarts);
   const dataRows = buildSMRepDataRows_(weekStarts, aggregates);
 
   //----------------------------------------------------------

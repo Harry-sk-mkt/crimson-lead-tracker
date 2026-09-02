@@ -7,53 +7,76 @@
 
 2026-07-30 신설.
 
-## 현재 아키텍처 (2026-07-30 기준)
+## 현재 아키텍처 (2026-09-03 기준)
 
-`00_Config.js`/`20_OPS_Config.js`/`50_Events_Config.js`/`60_BOFU_Config.js`/`70_Search_Config.js`/
-`80_Content_Config.js`의 실제 `SHEET`/`ENGINE` 상수를 확인해 그린 현재 파이프라인. `docs/Architecture.md`의
-Stage 정의(00 Import → 10 Master Build → 20 Reporting)를 실제 시트명/파일번호와 함께 구체화한 것.
+`CORE_001_Config.js`/`OPS_001_Config.js`/`EVENTS_001_Config.js`/`BOFU_001_Config.js`/
+`SEARCH_001_Config.js`/`CONTENT_001_Config.js`/`SMREP_001_Report.js`/`FYREP_001_Engine.js`의
+실제 `SHEET`/`ENGINE` 상수를 확인해 그린 현재 파이프라인(2026-08-09 파일명 신규 네이밍
+컨벤션 반영, 2026-09-02 Leads_OPS 필드 소유권 전면 재편 + SAL 외부시트 분리 + Revenue
+역싱크 반영, 2026-09-03 S&M_REP 성능 개선 반영 — 이전 버전은 git 이력 참고).
+`docs/Architecture.md`의 Stage 정의(00 Import → 10 Master Build → 20 Reporting)를 실제
+시트명/파일명과 함께 구체화한 것.
 
 ```mermaid
 flowchart TB
     SFExport["Salesforce Lead/MTA\nCSV Export"]
+    ICFunnelExport["Salesforce IC Funnel\nReport Export"]
+    SALExport["Salesforce SAL Report\nExport (New/Not Contacted Date)"]
     DealTracker["[KOR] Deal Tracking\n(외부 스프레드시트)\nRevenue/#Deals Source of Truth"]
     ChannelSheets["외부 채널시트 / Naver gid\n(Target_REP 벤치마크용)"]
+    PerfTracker["perfTrackerByFY\n(외부 스프레드시트, FY_REP Marketing 소스)"]
 
-    SFExport --> Import["Stage 00 — Import\n00_Import.js, 01~06"]
+    SFExport --> Import["Stage 00 — Import\nIMPORT_001~008"]
     Import --> LeadsRaw[("Leads_Raw")]
     Import --> MTARaw[("MTA_Raw")]
 
-    LeadsRaw --> MasterBuild["Stage 10 — Master Build\n07/09/10/12/13/14/16"]
+    LeadsRaw --> MasterBuild["Stage 10 — Master Build\nMASTER_001/003/004~008"]
     MTARaw --> MasterBuild
     MasterBuild --> LeadsMaster[("Leads_Master")]
     MasterBuild --> MTAMaster[("MTA_Master")]
 
-    LeadsMaster --> OPSBuild["Leads_OPS Build\n21~24"]
-    MTAMaster --> OPSBuild
+    LeadsMaster --> OPSBuild["Leads_OPS Build\nOPS_001~006\n(기본정보+First Touch+Lead Priority)"]
+    MTAMaster -->|"#Touches만\nMASTER_003"| OPSBuild
     OPSBuild --> LeadsOPS[("Leads_OPS")]
     OPSBuild -. QA .-> LeadsOPSQA[("Leads_OPS_QA")]
 
-    LeadsOPS --> ACQ["ACQ_REP / ACQ_Summary\n30~32"]
-    LeadsOPS --> NewP1["NewP1_REP / NewP1_Engine\n40~41"]
-    LeadsOPS --> Events["Events_OPS / Events_Engine\n50~55"]
-    LeadsOPS --> BOFU["BOFU_OPS / BOFU_Engine\n60~65"]
-    LeadsOPS --> Search["Search_OPS / Search_Engine\n70~76\n(2트랙 예외 — Leads_OPS만 사용)"]
-    LeadsOPS --> Content["Content_OPS / Content_Engine\n80~85"]
+    ICFunnelExport --> ICFunnelRaw[("ICFunnel_Raw")]
+    ICFunnelRaw -->|"IC Booked/Completed만\nMASTER_009"| LeadsOPS
+
+    SALExport --> SALRaw[("SAL_Raw\n(외부 스프레드시트)")]
+    SALRaw -->|"Sales Accepted Date만\nMASTER_010"| LeadsOPS
+
+    DealTracker -->|"Revenue + Opportunity Won Date\n(Email 매칭, MASTER_011)"| LeadsOPS
+
+    LeadsOPS --> ACQ["ACQ_REP / ACQ_Summary\nACQREP_001~003"]
+    LeadsOPS --> NewP1["NewP1_REP / NewP1_Engine\nNEWP1REP_001~002"]
+    LeadsOPS --> Events["Events_OPS / Events_Engine\nEVENTS_001~006"]
+    LeadsOPS --> BOFU["BOFU_OPS / BOFU_Engine\nBOFU_001~006"]
+    LeadsOPS --> Search["Search_OPS / Search_Engine\nSEARCH_001~006\n(2트랙 예외 — Leads_OPS만 사용)"]
+    LeadsOPS --> Content["Content_OPS / Content_Engine\nCONTENT_001~006"]
+
+    ACQ -->|"같은 스캔 재사용\n(2026-09-03)"| ACQWeekly[("ACQ_Summary_Weekly")]
+    ACQWeekly --> SMRep["S&M_REP\nSMREP_001~002"]
 
     DealTracker -->|"Revenue (Close Date 기준)"| ACQ
     DealTracker -->|"Won/Revenue (Created Date 기준, 부분 2트랙)"| NewP1
     DealTracker -->|"#Deals/Revenue (프로그램명 매칭)"| Events
     DealTracker -->|"#Deals/Revenue (프로그램명 매칭)"| BOFU
     DealTracker -->|"#Deals/Revenue (프로그램명 매칭)"| Content
-    DealTracker -->|"전체 Source of Truth"| Target["Target_REP / Target_Engine\n90~92"]
+    DealTracker -->|"전체 Source of Truth"| Target["Target_REP / Target_Engine\nTARGET_001~003"]
+    DealTracker -->|"Revenue Rows (Close Date 기준)"| FYRep["FY_REP\nFYREP_001~003"]
     ChannelSheets --> Target
+    PerfTracker -->|"Marketing 섹션 + Company Revenue Target"| FYRep
 ```
 
 **읽는 법**
 - 리드~세일즈 액티비티(New P1/SAL/IC Booked 등)는 전부 `Leads_OPS` 기준 — 이 화살표는 위 다이어그램에 전부 생략(모든 리포트가 공통으로 `Leads_OPS`를 읽음).
 - Revenue/#Deals가 들어가는 지표만 Deal Tracker(외부 시트)를 2번째 소스로 추가 참조 — "2트랙 아키텍처"([[project_two_track_revenue_deal_tracker]] 참고).
 - **Search_OPS/Search_Engine만 예외** — raw UTM 그레인 문제로 아직 Deal Tracker 전환 대상에서 빠져있음(`docs/OpenItems.md` #5 참고), 여전히 Leads_OPS의 `Opportunity Won Date`/`Revenue`를 그대로 씀.
-- QA/유지보수 유틸리티(`24_OPSQA.js`, `76_TempQA_SearchCatchAll.js`, `93_TempQA_DealTrackerMatch.js`, `94_TempQA_CohortMedianV.js`, `94_WorkbookMaintenance.js`, `99_ResetRawMaster.js`)는 메인 데이터 흐름이 아니라 검증/복구 도구라 다이어그램에서 제외.
+- **Leads_OPS 필드 소유권은 리포트별로 분리돼 있음(2026-09-02 전면 재편)** — New Leads(Leads_Master)/MTA(#Touches만)/SAL(SAL_Raw 외부시트)/IC Funnel(IC Booked/Completed만)/Revenue(Deal Tracker 역싱크) 각자 자기 필드만 씀, 위 다이어그램에 그대로 반영. 상세: `docs/OperationsLayer.md` "Field Ownership 전면 재편" 섹션.
+- **S&M_REP은 Leads_OPS/MTA_Master를 직접 스캔하지 않음(2026-09-03부터)** — ACQ Engine이 이미 하는 스캔에 얹은 주 단위 캐시(`ACQ_Summary_Weekly`)만 읽음(실측 119.8s → 4.0s, `docs/OpenItems.md` #41 참고). New P1 정의는 ACQ_REP과 완전히 동일(Leads_OPS의 Priority Override/다운그레이드 가드 포함) — 소스가 갈라지지 않음.
+- FY_REP은 Leads_OPS(ACQ/Pipeline 섹션) + Deal Tracker(Revenue 섹션) + perfTrackerByFY(Marketing 섹션 + Company Revenue Target) 3개 소스를 합쳐 계산.
+- QA/유지보수 유틸리티(`OPS_006_QA.js`, `TEMPQA_*.js`, `MAINT_001_WorkbookMaintenance.js`, `RESET_001_ResetRawMaster.js`)는 메인 데이터 흐름이 아니라 검증/복구 도구라 다이어그램에서 제외.
 
 ## End Goal (2026-07-30 확정)
 

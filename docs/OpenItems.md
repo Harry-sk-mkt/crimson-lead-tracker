@@ -704,8 +704,13 @@
       판단 가능. 전체 합산 시간만 재면 이 부분이 안 보임 — 임의로 처리하지 말 것.
     - 상세 원문 분석(저장소 비교표, Best Practices 인용 등)은 이 세션 대화 기록 참고 — 별도
       문서로 저장하지 않음.
-41. **Engine/OPS/Report 조회 의존성 매트릭스 확인 중 발견한 중복 외부 오픈 2건 — 기록만
-    (TODO, 구현 착수 전)** — 2026-09-02 사용자 요청으로 Engine 6종·OPS 5종·Report 5종
+41. ~~Engine/OPS/Report 조회 의존성 매트릭스 확인 중 발견한 중복 외부 오픈 2건~~ — **✅ 둘 다
+    구현 및 실측 검증 완료(2026-09-03)**: BOFU/Content는 모듈 스코프 메모이제이션
+    (`BOFU_002_Engine.js` v1.7.0/`CONTENT_002_Engine.js` v1.8.0), FY_REP은
+    `openFYRepMarketingSourceFile_()` 단일 오픈(`FYREP_001_Engine.js` v1.8.0). 상세:
+    `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`. (아래는 발견
+    당시 원문, 참고용)
+    2026-09-02 사용자 요청으로 Engine 6종·OPS 5종·Report 5종
     함수가 각자 무엇을 읽는지 전수 확인(어느 함수가 어떤 시트/외부 워크북을 여는지 매핑).
     대부분은 "Engine이 원본을 계산 → OPS는 Engine 캐시만 읽음 → Report는 OPS/Engine 캐시만
     읽음"으로 깔끔하게 연쇄돼 있으나, 예외 2건이 같은 외부 파일을 같은 실행 주기 안에서
@@ -734,9 +739,16 @@
       데이터를 주기적 트리거로 로컬 캐시에 미리 읽어두고, `generateFYReport_()`는 캐시만
       읽도록 전환 — 단, perfTrackerByFY는 사용자가 다른 곳에서 직접 편집하는 외부 시트라
       캐시 주기 동안의 최신성 트레이드오프는 사용자 확인 필요.
-42. **Engine → OPS/Report 전체 체인을 트리거 단위로 분리하는 방향 재검토 — 기록만
-    (TODO, 구현 착수 전), 2026-09-02 대화 중 "Engine→OPS→Report 순차 3단계"라는 최초
-    전제 자체가 틀렸음을 발견해 정정됨** — 41번(개별 함수 중복 조회)과는 별개 질문 —
+42. **Engine → OPS/Report 전체 체인을 트리거 단위로 분리하는 방향 재검토 — S&M_REP
+    증분화는 ✅ 구현 완료(2026-09-03, 119.8s → 4.0s), Target_REP/FY_REP 증분화 +
+    Engine 독립 트리거 분리는 여전히 설계 미확정(TODO)** — S&M_REP은 "확정된 과거 구간"
+    경계 설계 자체가 필요 없는 다른 경로(ACQ Engine이 이미 하던 Leads_OPS 기반 스캔을
+    공유)로 해소됨, 상세: `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`.
+    Target_REP(`refreshTargetEngine_()` 매번 전체 재계산)/FY_REP(`CONFIG.FYREP.FYS` 전체
+    순회)은 이 해법이 그대로 적용되지 않아(다른 계산 구조) 여전히 미해결 — 임의로 처리하지
+    말 것. 아래는 2026-09-02 최초 검토 시점 원문(전제 정정 등은 여전히 유효).
+    2026-09-02 대화 중 "Engine→OPS→Report 순차 3단계"라는 최초
+    전제 자체가 틀렸음을 발견해 정정됨 — 41번(개별 함수 중복 조회)과는 별개 질문 —
     "Engine/OPS/Report가 전부 한 실행 안에서 순차 연쇄돼 있어서 오래 걸리는 거면 아예
     트리거 단위로 분리할 수 있는지" 검토.
     - **정정된 실제 의존 구조(41번 조사 시 만든 조회 매트릭스 재확인 결과)**: "Engine →
@@ -818,3 +830,27 @@
       커서로 "어디까지 처리했는지" 기억)와 같은 원칙을 Report 레이어에도 적용하는 셈.
       경계 조건(무엇을 "확정된 과거"로 볼지, Revenue 역싱크 지연이 걸리는 구간을 어떻게
       다룰지)은 설계 단계에서 반드시 확정 필요 — 임의로 처리하지 말 것.
+43. **Lead Priority(P1) 기준 리스트 기반 자동 Flagging — 아이디어만 기록, 미착수(TODO)**
+    (2026-09-03) — S&M_REP 성능 개선 설계 논의 중 발견: `Lead Priority`가 리드 유입 후
+    바뀔 수 있는 이유는 Salesforce 자동 재분류가 아니라 **실무자가 P1 기준(연 학비
+    2500만원 이상 학교) 대비 수기 검수 후 정정**하는 것(사용자 확인) — 그리고 이 P1
+    기준에 해당하는 학교 리스트가 실제로 존재함. **아이디어**: Import마다 도는 에이전트가
+    이 리스트를 기준으로 방금 들어온 리드의 학교와 대조해, 리스트 기준과 다르게 찍힌
+    Lead Priority 값(예: 리스트상 P1 대상 학교인데 Priority가 P1이 아니거나 그 반대)을
+    자동으로 flagging — 지금은 정정이 실무자 수기 검수에만 의존하는데, 이 flagging이
+    있으면 검수 대상을 좁혀주거나 놓친 케이스를 잡아줄 수 있음. **아직 설계 착수 전** —
+    리스트 자체가 어디 있는지/형식/최신성, flagging 결과를 어디에 어떻게 노출할지(별도
+    QA 시트? Leads_OPS_QA 확장?) 전부 미정. 임의로 처리하지 말 것.
+44. **SAL Sync가 무관한 Engine 6종까지 매번 전부 재실행 — 코드로 확인, 미착수(TODO)**
+    (2026-09-03) — S&M_REP 성능 개선 설계 논의 중 사용자가 "SAL/IC 같은 세일즈 퍼널
+    데이터가 들어올 때마다 New P1까지 전부 다시 훑을 필요가 있냐"고 지적, 코드 확인 결과
+    실제로 낭비 확인됨. `syncSALToOPS_()`(`MASTER_010_SALSync.js:356-363`)는 `Sales
+    Accepted Date` 필드 하나만 동기화하는데(Create Date/Lead Priority는 전혀 안 건드림),
+    끝에서 `refreshACQSummary_()`/`refreshNewP1Engine_()`/Events/BOFU/Search/Content
+    Engine/`refreshTargetActuals_()` 7개를 조건 없이 전부 재실행 — Leads_OPS/MTA_Master
+    전체 재스캔이 SAL 하나 때문에 매번 도는 구조. (`syncICFunnelToOPS_()`는 Lead Priority도
+    함께 동기화하는 경로라 New P1이 실제로 바뀔 수 있어 이 문제에 덜 해당 —
+    `applyPriorityDowngradeGuard_()` 참고.) **막힌 지점**: 제대로 고치려면
+    `refreshACQSummary_()`(및 나머지 Engine들)를 "SAL 파생 부분만 부분 갱신" 가능하게
+    쪼개야 하는데, 이건 그 자체로 별도 설계/구현 작업 — 오늘(#39 Revenue 매칭 실패 조사 중
+    파생된 S&M_REP 성능 개선) 범위에는 포함하지 않기로 함. 임의로 처리하지 말 것.

@@ -6,5 +6,19 @@
       "mcp__claude_ai_Notion__notion-fetch",
       "Bash(clasp --version)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/start-session.sh 2>&1",
+            "timeout": 30,
+            "statusMessage": "Running session-start git sync check..."
+          }
+        ]
+      }
+    ]
   }
 }

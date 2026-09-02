@@ -17,9 +17,28 @@
  * 20 Reporting
  *
  * Version
- * v1.18.0
+ * v1.19.1
  *
  * Change Log
+ * v1.19.1 (2026-09-03)
+ * - **회귀 수정 — 주 단위 집계 추가 후 `refreshACQSummary_()`가 24.7s → 122.5s로
+ *   5배 느려짐(사용자 실측)**. 원인: v1.19.0에서 추가한 weekKey 계산이 3만6천+행
+ *   루프마다 `Utilities.formatDate()`(서비스 호출)를 호출 — 이 프로젝트가
+ *   2026-08-06에 Deal Tracker 경로에서 이미 한 번 겪은 것과 동일한 성능
+ *   클래스(위 v1.14.4 참고). 신규 순수 함수 `formatWeekKeyDate_()`로 교체 —
+ *   `CONFIG.DATE.TIMEZONE`이 `Session.getScriptTimeZone()`(런타임 자체
+ *   타임존)이라 `getMondayOfWeek_()`의 로컬 Date 컴포넌트와 항상 일치하므로
+ *   순수 JS 포맷도 기존과 바이트 단위로 동일한 결과(타임존 변환이 실제로
+ *   일어나지 않는 케이스). 값/로직 변경 없음, 호출 방식만 교체.
+ * v1.19.0 (2026-09-03)
+ * - `computeMTAAggregates_()`/`computeOPSAggregates_()`에 주 단위 서브맵
+ *   (`allLeadsWeekly`/`newLeadsWeekly`/`newP1Weekly`/`salWeekly`/`salP1Weekly`)
+ *   추가(additive, 기존 월 단위 반환값 변경 없음) — `ACQREP_002_Summary.js`
+ *   v1.4.0의 신규 `refreshACQSummaryWeekly_()`가 소비(`docs/OpenItems.md`
+ *   #41 계열, S&M_REP 전체 재스캔 제거 목적). 같은 루프 안에서 `getMondayOfWeek_()`
+ *   (`TARGET_001_Engine.js`)로 weekKey만 추가 계산 — 추가 IO 없음. SAL P1은
+ *   isEffectiveP1_() 판정 한 줄만 SAL 블록에 추가한 신규 계산(월 단위
+ *   ACQ_Summary엔 없던 지표, S&M 전용 수요).
  * v1.18.0 (2026-08-18)
  * - `handleReportGenerateEdit()`에 S&M_REP 분기 추가(`CONFIG.SM_REP.SHEET`
  *   → `handleSMReportGenerateEdit_()`, SMREP_001_Report.js 신규) — 신규
@@ -945,6 +964,39 @@ function writeACQEngine_(sheet, engineRows){
 
 /**
  * ==========================================================
+ * Format Week Key (순수 함수, 서비스 호출 없는 "yyyy-MM-dd" 포맷)
+ *
+ * WHY (2026-09-03, 실측 회귀 발견 후 수정)
+ * `computeMTAAggregates_()`/`computeOPSAggregates_()`의 주 단위 집계
+ * 루프(각 3만6천+행)에서 `Utilities.formatDate()`(Apps Script 서비스 호출,
+ * 호출당 오버헤드 있음)를 매 행 호출했더니 `refreshACQSummary_()`가
+ * 24.7s → 122.5s로 5배 느려짐(사용자 실측, `docs/PerformanceBenchmark.md`
+ * 2026-09-03). `CONFIG.DATE.TIMEZONE`이 `Session.getScriptTimeZone()`(런타임
+ * 자체 타임존)이라 `getMondayOfWeek_()`가 이미 그 타임존 기준 로컬 Date
+ * 컴포넌트(new Date(y,m,d))로 만든 값과 항상 같음 — 즉 이 특정 케이스는
+ * 실제 타임존 변환이 일어나지 않으므로, 순수 JS getFullYear/getMonth/getDate로
+ * 포맷해도 Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd")와
+ * 바이트 단위로 동일한 결과 — 서비스 호출만 제거.
+ *
+ * ⚠️ 이 최적화는 "타임존 변환이 필요 없는 경우"에만 안전하다 — 외부
+ * 스프레드시트에서 읽은 Date나 CONFIG.DATE.TIMEZONE과 다른 고정 타임존이
+ * 필요한 곳에는 이 함수를 재사용하지 말 것(이 프로젝트가 반복 겪은
+ * 타임존 버그 클래스, `normalizeExternalCalendarDate_()` 참고).
+ * ==========================================================
+ */
+function formatWeekKeyDate_(date){
+
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+
+  return y + "-" + m + "-" + d;
+
+}
+
+
+/**
+ * ==========================================================
  * Compute MTA Aggregates (All Leads / All P1)
  *
  * WHY
@@ -971,7 +1023,8 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
 
   const result = {
     allLeads: {},
-    allP1: {}
+    allP1: {},
+    allLeadsWeekly: {} // 2026-09-03 — S&M_REP 주간 캐시용(docs/OpenItems.md #41 계열, 같은 스캔 재사용)
   };
 
   if(!sheet) return result;
@@ -1013,6 +1066,9 @@ function computeMTAAggregates_(rangeStart, rangeEndExclusive){
     if(String(row[priorityCol]).indexOf("1") !== -1){
       result.allP1[key] = (result.allP1[key] || 0) + 1;
     }
+
+    const weekKey = formatWeekKeyDate_(getMondayOfWeek_(date)) + "|" + segment;
+    result.allLeadsWeekly[weekKey] = (result.allLeadsWeekly[weekKey] || 0) + 1;
 
   }
 
@@ -1126,7 +1182,14 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
     newP1: {},
     sal: {},
     icBooked: {},
-    icComplete: {}
+    icComplete: {},
+    // 2026-09-03 — S&M_REP 주간 캐시용(docs/OpenItems.md #41 계열, 같은 스캔 재사용).
+    // salP1은 월 단위 ACQ_Summary에는 없던 신규 지표(S&M 전용 수요) — SAL 블록에서
+    // isEffectiveP1_() 판정 한 줄만 추가하면 되는 부가 계산이라 여기서 같이 뽑는다.
+    newLeadsWeekly: {},
+    newP1Weekly: {},
+    salWeekly: {},
+    salP1Weekly: {}
   };
 
   if(!sheet) return result;
@@ -1172,11 +1235,20 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
     if(createDate instanceof Date && !isNaN(createDate.getTime()) && inRange(createDate)){
 
       const key = keyFor(createDate, segment);
+      const isP1 = isEffectiveP1_(row[priorityCol], row[priorityOverrideCol]);
 
       result.newLeads[key] = (result.newLeads[key] || 0) + 1;
 
-      if(isEffectiveP1_(row[priorityCol], row[priorityOverrideCol])){
+      if(isP1){
         result.newP1[key] = (result.newP1[key] || 0) + 1;
+      }
+
+      const weekKey = formatWeekKeyDate_(getMondayOfWeek_(createDate)) + "|" + segment;
+
+      result.newLeadsWeekly[weekKey] = (result.newLeadsWeekly[weekKey] || 0) + 1;
+
+      if(isP1){
+        result.newP1Weekly[weekKey] = (result.newP1Weekly[weekKey] || 0) + 1;
       }
 
     }
@@ -1188,8 +1260,19 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
     const salesAcceptedVal = row[salesAcceptedCol];
 
     if(salesAcceptedVal instanceof Date && !isNaN(salesAcceptedVal.getTime()) && inRange(salesAcceptedVal)){
+
       const key = keyFor(salesAcceptedVal, segment);
+
       result.sal[key] = (result.sal[key] || 0) + 1;
+
+      const weekKey = formatWeekKeyDate_(getMondayOfWeek_(salesAcceptedVal)) + "|" + segment;
+
+      result.salWeekly[weekKey] = (result.salWeekly[weekKey] || 0) + 1;
+
+      if(isEffectiveP1_(row[priorityCol], row[priorityOverrideCol])){
+        result.salP1Weekly[weekKey] = (result.salP1Weekly[weekKey] || 0) + 1;
+      }
+
     }
 
     //------------------------------------------------------

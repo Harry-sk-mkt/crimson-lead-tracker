@@ -1,3 +1,75 @@
+# Changelog — 2026-09-03
+
+## Session-Start Git Sync Check 미실행 사고 재발 + 재발 방지 hook 도입
+
+전날(2026-09-02) 세션에서 이미 한 번 명문화한 "세션 시작 = 트리거" 원칙을 이번 세션에서도
+또 어김 — 첫 메시지("어디까지했지?")에 `git fetch` 없이 답변했다가 사용자의 "깃확인했어?"
+질문으로 뒤늦게 발견(로컬이 origin보다 3커밋 뒤처져 있었음, fast-forward pull로 해결). 문서
+명문화만으로는 반복 방지가 안 된다는 판단(사용자 확정)으로, `.claude/settings.json`에
+**SessionStart hook** 추가 — 세션 시작마다 harness가 강제로 `scripts/start-session.sh`를
+실행하고 결과를 컨텍스트에 주입, Claude의 판단에 의존하지 않는 구조로 전환.
+
+## 파이프라인 실행시간 실측 계측 도입 + 전체 재실측 (`docs/OpenItems.md` #40/#42)
+
+`MASTER_002_PipelineAsync.js`에 `[TIMING]` Logger 계측 추가(`advancePipelineStage_()`/
+`refreshReportGenerate_()`/`refreshOPSSheets_()` — 로직 변경 없이 순수 계측) 후
+`runLeadsPipelineTail()` 전체(Leads_Master 36,612행 기준) 재실측: 총 10m12s 중 Engine
+6종 169.9s(27.8%), Report 5종 175.2s(28.6%, 그중 **S&M_REP 단독 119.8s = Report
+레이어의 68%, 전체의 20%**)로 확인 — Target/FY_REP은 상대적으로 작음(25.6s/22.3s).
+IC Funnel 데이터로 추정했던 "Engine만으로 6분 한도의 78%" 우려보다 Leads 파이프라인
+실측은 여유 있어(30분 한도의 34%) Engine 독립 트리거 분리보다 S&M_REP 증분화가 훨씬
+임팩트 큰 개선으로 우선순위 정정. 상세: `docs/PerformanceBenchmark.md`.
+
+## #41 중복 외부 조회 3건 제거 — BOFU/Content Meta 이중조회, FY_REP 반복오픈
+
+`computeBOFUMetaCampaignDataAggregates_()`/`computeContentMetaCampaignDataAggregates_()`가
+Engine 단계(Spent용)와 OPS Build 단계(Campaign/날짜/Clicks용) 양쪽에서 파라미터 없이
+동일 호출돼 Meta_Raw+UTM_Program_Dictionary를 매번 두 번씩 읽던 것을 모듈 스코프
+메모이제이션으로 제거(`UTIL_002_UtmProgramDictionary.js`의 `_utmProgramDictCache`
+전례 재사용) — `BOFU_002_Engine.js` v1.7.0/`CONTENT_002_Engine.js` v1.8.0. FY_REP은
+`computeFYRepMarketingRowsForFY_()`/`computeFYRepCompanyRevenueTargetsForFY_()`가
+FY마다(현재 4개) 각각 `perfTrackerByFY`를 독립적으로 열어 최대 8회 반복 오픈하던 것을
+`openFYRepMarketingSourceFile_()`(실행당 1회만 오픈)로 교체 — `FYREP_001_Engine.js`
+v1.8.0.
+
+## S&M_REP 성능 개선 — 전체 재스캔 제거, 119.8초 → 4.0초 (핵심 성과)
+
+S&M_REP(`generateSMReport_()`)이 Generate마다 Leads_OPS/MTA_Master 전체를 자체
+`sheetToObjects()`로 재스캔하던 게 병목의 핵심(파이프라인 전체의 20%)으로 확인돼
+재설계 착수. 설계 과정에서 "Leads_OPS를 아예 안 거치고 raw Master에서 직접 계산하면
+어떤가"(사용자 제안 — SAL/IC 같은 세일즈 퍼널은 비동기 처리, 스냅샷 지표는 Leads_OPS
+없이도 계산 가능하지 않냐)를 논의했으나, New P1의 소스인 `Lead Priority`가 리드 유입
+후 실무자가 P1 기준(연 학비 2500만원 이상 학교 리스트) 대비 수기 검수해 바꿀 수 있는
+필드라는 게 확인되면서 raw Master 값을 쓰면 이미 실제로 발생했던 #35(New P1 8월 갭)가
+재발할 위험이 있어 New P1에 한해 기각 — Leads_OPS의 Priority Override/다운그레이드
+가드를 계속 거치기로 확정. New P1이 결국 Leads_OPS를 기다려야 하는 이상 소스를 섞어도
+실질적 시간 이득이 없다는 점도 함께 확인.
+
+**최종 설계**: ACQ Engine(`computeMTAAggregates_()`/`computeOPSAggregates_()`)이 이미
+하던 스캔에 주 단위 서브맵만 추가로 얹어(추가 IO 없음) 신규 `ACQ_Summary_Weekly` 캐시로
+저장(`refreshACQSummaryWeekly_()`, `ACQREP_002_Summary.js` v1.4.0), S&M_REP은 이
+캐시만 읽음(`SMREP_001_Report.js` v1.3.0) — `computeOPSAggregates_()`(ACQREP_001_Report.js
+v1.19.0)에 SAL P1(월 단위엔 없던 신규 지표) 계산도 추가. New P1은 ACQ_REP과 완전히
+동일한 소스·타이밍이라 정의 불일치(#35/#38류) 위험 없음.
+
+**1차 구현 회귀 발견·수정**: 주 단위 weekKey 계산에 `Utilities.formatDate()`(서비스
+호출)를 3만6천+행 루프마다 호출해 `refreshACQSummary_()`가 24.7s → 122.5s로 5배
+느려짐(사용자 실측) — 2026-08-06에 Deal Tracker 경로에서 이미 한 번 겪은 것과 동일한
+성능 클래스. `CONFIG.DATE.TIMEZONE = Session.getScriptTimeZone()`이라 `getMondayOfWeek_()`
+의 로컬 Date 컴포넌트와 항상 일치함을 확인한 뒤 순수 JS 포맷 함수 `formatWeekKeyDate_()`
+로 교체(바이트 단위로 동일한 결과) — `ACQREP_001_Report.js` v1.19.1. 재실측으로 33.8s
+(정상 범위) 복귀, S&M_REP 4.0s 유지, 나머지 전 항목 회귀 없음 확인(사용자 실측).
+
+**파생 TODO 2건**(구현 범위 밖, `docs/OpenItems.md` #43/#44): P1 기준 리스트 기반 자동
+flagging 아이디어, SAL Sync가 무관한 Engine 6종까지 매번 전부 재실행하는 낭비 구조.
+
+## `docs/Roadmap.md` 아키텍처 플로우차트 갱신 (2026-07-30 → 2026-09-03 기준)
+
+파일명 신규 네이밍 컨벤션 전면 반영(구 `00_Config.js`류 → `CORE_001_Config.js`류),
+그동안 다이어그램에 누락돼 있던 S&M_REP/FY_REP/SAL_Raw(외부시트)/ICFunnel_Raw/Revenue
+역싱크 노드 추가, Leads_OPS 필드 소유권 분리(2026-09-02 재편) 반영, 오늘 신설된 ACQ
+Engine → `ACQ_Summary_Weekly` → S&M_REP 관계 추가.
+
 # Changelog — 2026-09-02
 
 ## Session-Start Git Sync Check 트리거 조건 명문화

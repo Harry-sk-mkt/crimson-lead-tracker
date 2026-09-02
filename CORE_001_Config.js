@@ -9,9 +9,13 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.56.0
+ * v1.57.0
  *
  * Change Log
+ * v1.57.0 (2026-09-03)
+ * - `CONFIG.ACQ.SUMMARY_WEEKLY_SHEET` 신규 — S&M_REP이 자체 전체 스캔 대신
+ *   읽는 주 단위 ACQ Engine 캐시 시트 이름(`docs/OpenItems.md` #41 계열,
+ *   `ACQREP_002_Summary.js`의 `refreshACQSummaryWeekly_()` 참고).
  * v1.56.0 (2026-09-02)
  * - **아키텍처 변경 2단계(사용자 확정) — Leads_OPS 필드 소유권을 리포트별로
  *   완전히 재편**: New Leads(기본정보+First Touch+Lead Priority) / MTA(터치
@@ -801,7 +805,8 @@ const CONFIG = {
   ACQ: {
 
     SHEET: "ACQ_REP",
-    SUMMARY_SHEET: "ACQ_Summary", 
+    SUMMARY_SHEET: "ACQ_Summary",
+    SUMMARY_WEEKLY_SHEET: "ACQ_Summary_Weekly", // 2026-09-03 — S&M_REP 전용 주 단위 캐시(docs/OpenItems.md #41 계열)
 
     ROWS: {
       CONTROL_HEADER: 1,

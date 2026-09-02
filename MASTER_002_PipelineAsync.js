@@ -22,9 +22,21 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.25.0
+ * v1.26.0
  *
  * Change Log
+ * v1.26.0 (2026-09-03)
+ * - **단계별/리포트별/OPS별 실행시간 계측 추가(`docs/OpenItems.md` #42, exec-plan
+ *   2026-09-02-pipeline-refresh-time-redesign)** — 실행시간 재실측을 "전체 합산이
+ *   아니라 리포트별/구간별로 나눠서" 하기로 한 결정을 실행하기 위한 순수 계측
+ *   변경(로직/동작 변경 없음, Logger.log만 추가). `advancePipelineStage_()`가 모든
+ *   Engine/OPS/Report 굵은 단계마다 `[TIMING] type/stageName completed in Nms`를
+ *   자동으로 남기고, `refreshReportGenerate_()`/`refreshOPSSheets_()` 내부의 개별
+ *   generate*_()/build*OPS() 호출도 각각 `[TIMING] ... completed in Nms`(성공) 또는
+ *   실패까지 걸린 시간(실패)을 남기도록 확장 — Apps Script Execution 로그에서
+ *   `[TIMING]`으로 필터링하면 Engine 6종/OPS 4종/Report 5종 전부의 개별 소요시간을
+ *   한 번의 실행으로 얻을 수 있다. 실행시간 실측 자체가 목적이라 별도 testXXXX()는
+ *   추가하지 않음(계측 문자열 포맷에 검증할 기대값/실제값이 없음).
  * v1.25.0 (2026-09-02)
  * - **Revenue 전용 5번째 파이프라인 신규**(`MASTER_011_RevenueSync.js`,
  *   Leads_OPS 필드 소유권 재편 2단계 — 사용자 확정) — IC Funnel/SAL과
@@ -1331,9 +1343,16 @@ function advancePipelineStage_(type, state, stageName, stageFn, completedKeys){
   writePipelineStatusState_(type, state);
   writePipelineStatusToReadme_();
 
+  const stageStartMs = Date.now(); // 2026-09-03 — 단계별 실행시간 실측용(docs/OpenItems.md #42)
+
   try{
     stageFn();
   } catch(err){
+
+    Logger.log(
+      CONFIG.LOG.PREFIX + " [TIMING] " + type + "/" + stageName + " FAILED after " +
+      (Date.now() - stageStartMs) + "ms"
+    );
 
     if(completedKeys && completedKeys.length){
       completedKeys.forEach(function(key){
@@ -1346,6 +1365,11 @@ function advancePipelineStage_(type, state, stageName, stageFn, completedKeys){
     throw err;
 
   }
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " [TIMING] " + type + "/" + stageName + " completed in " +
+    (Date.now() - stageStartMs) + "ms"
+  );
 
   if(completedKeys && completedKeys.length){
 
@@ -1482,63 +1506,78 @@ function refreshReportFYDropdowns_(){
  */
 function refreshReportGenerate_(type, state){
 
+  // 2026-09-03 — 리포트별 실행시간 실측용(docs/OpenItems.md #42, exec-plan
+  // 2026-09-02-pipeline-refresh-time-redesign) — 각 generate*_() 호출을
+  // Date.now() 스냅샷으로 감싸 Logger에 개별 소요시간을 남긴다. 실패해도
+  // 실패까지 걸린 시간을 남겨 어디서 오래 걸리다 죽었는지 알 수 있게 한다.
+
+  let t0 = Date.now();
   setPipelineStageStatus_(type, state, "acqRep", "RUNNING");
   try{
     generateACQReport_();
     markPipelineStageComplete_(type, state, "acqRep");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] generateACQReport_ completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "acqRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: ACQ_REP Generate 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "newP1Rep", "RUNNING");
   try{
     generateNewP1Report_();
     markPipelineStageComplete_(type, state, "newP1Rep");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] generateNewP1Report_ completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "newP1Rep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: NewP1_REP Generate 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "targetRep", "RUNNING");
   try{
     generateTargetReport_();
     markPipelineStageComplete_(type, state, "targetRep");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] generateTargetReport_ completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "targetRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: Target_REP Generate 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "smRep", "RUNNING");
   try{
     generateSMReport_();
     markPipelineStageComplete_(type, state, "smRep");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] generateSMReport_ completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "smRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: S&M_REP Generate 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "fyRep", "RUNNING");
   try{
     generateFYReport_();
     markPipelineStageComplete_(type, state, "fyRep");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] generateFYReport_ completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "fyRep", "FAILED");
     Logger.log(
       "refreshReportGenerate_: FY_REP Generate 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
@@ -1764,51 +1803,62 @@ function runInstallAllReportsPeriodicRefreshTrigger(){
  */
 function refreshOPSSheets_(type, state){
 
+  // 2026-09-03 — OPS별 실행시간 실측용(docs/OpenItems.md #42) — refreshReportGenerate_()와
+  // 동일 패턴.
+
+  let t0 = Date.now();
   setPipelineStageStatus_(type, state, "eventsOps", "RUNNING");
   try{
     buildEventsOPS();
     markPipelineStageComplete_(type, state, "eventsOps");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] buildEventsOPS completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "eventsOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Events_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "bofuOps", "RUNNING");
   try{
     buildBOFUOPS();
     markPipelineStageComplete_(type, state, "bofuOps");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] buildBOFUOPS completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "bofuOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: BOFU_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "searchOps", "RUNNING");
   try{
     buildSearchOPS();
     markPipelineStageComplete_(type, state, "searchOps");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] buildSearchOPS completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "searchOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Search_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 
+  t0 = Date.now();
   setPipelineStageStatus_(type, state, "contentOps", "RUNNING");
   try{
     buildContentOPS();
     markPipelineStageComplete_(type, state, "contentOps");
+    Logger.log(CONFIG.LOG.PREFIX + " [TIMING] buildContentOPS completed in " + (Date.now() - t0) + "ms");
   } catch(err){
     setPipelineStageStatus_(type, state, "contentOps", "FAILED");
     Logger.log(
       "refreshOPSSheets_: Content_OPS 갱신 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
+      (err && err.message ? err.message : err) + " (" + (Date.now() - t0) + "ms 소요 후 실패)"
     );
   }
 

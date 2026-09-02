@@ -14,9 +14,18 @@
  * - rebuildLeadsMaster(), rebuildMTAMaster()
  *
  * Version
- * v1.3.2
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-09-03)
+ * - **신규 "Weekly Engine" — `refreshACQSummaryWeekly_()`/`writeACQSummaryWeekly_()`/
+ *   `readACQSummaryWeeklyMap_()`, `ACQ_Summary_Weekly` 캐시 시트(`docs/OpenItems.md`
+ *   #41 계열)** — S&M_REP이 Generate마다 Leads_OPS/MTA_Master 전체를 자체
+ *   스캔하던 것(실측 119.8초) 제거 목적. `refreshACQSummary_()`가 이미 계산한
+ *   `mtaAgg`/`opsAgg`(월 단위와 동일 스캔, 동일 소스·타이밍)의 신규 `*Weekly`
+ *   서브맵을 받아 별도 시트에 씀 — 추가 스캔 없음. `computeOPSAggregates_()`
+ *   (`ACQREP_001_Report.js` v1.19.0)에 SAL P1(월 단위엔 없던 신규 지표) 계산
+ *   추가. `SMREP_001_Report.js`가 다음 커밋에서 이 캐시를 읽도록 전환 예정.
  * v1.3.2 (2026-08-09)
  * - `debugListAllSheetNames()` 삭제 — 호출부 전무 + 주석에 "TEMP" 명시된
  *   디버그용 스크래치 함수, 안 쓰는 함수 정리 요청으로 사용자 확인 후 삭제.
@@ -109,12 +118,185 @@ function refreshACQSummary_(){
 
   writeACQSummary_(rows);
 
+  // 2026-09-03 — S&M_REP 전용 주 단위 캐시도 같은 스캔(mtaAgg/opsAgg)으로 함께 갱신
+  // (docs/OpenItems.md #41 계열 — S&M_REP이 자체 전체 스캔하던 것을 제거하기 위함).
+  // 별도 스캔 없음 — 이미 계산된 aggregate map만 재사용.
+  refreshACQSummaryWeekly_(mtaAgg, opsAgg);
+
   const seconds = ((new Date() - start) / 1000).toFixed(2);
 
   Logger.log(
     CONFIG.LOG.PREFIX + " ACQ Summary Refresh Completed : " +
     rows.length + " rows (" + seconds + "s)"
   );
+
+}
+
+
+/**
+ * ==========================================================
+ * ACQ Summary Weekly Headers (S&M_REP 전용 캐시)
+ * ==========================================================
+ */
+const ACQ_SUMMARY_WEEKLY_HEADERS = [
+  "WeekStart", "Segment", "All Leads", "New Leads", "New P1", "SAL", "SAL P1"
+];
+
+
+/**
+ * ==========================================================
+ * Refresh ACQ Summary Weekly (S&M_REP 전용 주 단위 캐시, "Weekly Engine")
+ *
+ * WHY (2026-09-03, `docs/OpenItems.md` #41 계열 — S&M_REP 성능 개선)
+ * S&M_REP(`SMREP_001_Report.js`)이 Generate마다 Leads_OPS/MTA_Master
+ * 전체를 자체적으로 다시 스캔하던 것(실측 119.8초, `docs/PerformanceBenchmark.md`
+ * 2026-09-03)을 제거하기 위한 신규 "Weekly Engine". `refreshACQSummary_()`가
+ * 이미 계산해둔 `mtaAgg`/`opsAgg`(All Leads/New Leads/New P1/SAL, 월 단위와
+ * 동일한 필드·동일한 소스·동일한 타이밍 — Leads_OPS 빌드 이후)의 주 단위
+ * 서브맵(`*Weekly`)을 그대로 받아 별도 시트에 쓴다 — Leads_OPS/MTA_Master를
+ * 다시 읽지 않음(같은 스캔 재사용, "월 Engine 따로 + 주 Engine 따로"이되
+ * 스캔은 1번, 사용자 확정 설계).
+ *
+ * SAL P1(P1 필터된 SAL)은 월 단위 ACQ_Summary엔 없는 지표 — S&M_REP 전용
+ * 수요라 이 함수에서만 씀. New P1과 동일하게 `isEffectiveP1_()`(Priority
+ * Override 포함, 다운그레이드 가드 적용된 Leads_OPS 값) 기준이라 ACQ_REP과
+ * 완전히 같은 정의 — 소스/타이밍이 갈라지지 않는다(#35/#38류 불일치 방지가
+ * 이 설계의 핵심 이유, 2026-09-03 설계 논의 참고).
+ *
+ * @param {Object} mtaAgg  computeMTAAggregates_(null, null) 결과
+ * @param {Object} opsAgg  computeOPSAggregates_(null, null) 결과
+ * ==========================================================
+ */
+function refreshACQSummaryWeekly_(mtaAgg, opsAgg){
+
+  const allKeys = {};
+
+  [
+    mtaAgg.allLeadsWeekly, opsAgg.newLeadsWeekly, opsAgg.newP1Weekly,
+    opsAgg.salWeekly, opsAgg.salP1Weekly
+  ].forEach(function(map){
+    Object.keys(map).forEach(function(key){
+      allKeys[key] = true;
+    });
+  });
+
+  const rows = Object.keys(allKeys).map(function(key){
+
+    const sepIndex = key.indexOf("|");
+    const weekStart = key.slice(0, sepIndex);
+    const segment = key.slice(sepIndex + 1);
+
+    return [
+      weekStart,
+      segment,
+      mtaAgg.allLeadsWeekly[key] || 0,
+      opsAgg.newLeadsWeekly[key] || 0,
+      opsAgg.newP1Weekly[key] || 0,
+      opsAgg.salWeekly[key] || 0,
+      opsAgg.salP1Weekly[key] || 0
+    ];
+
+  });
+
+  writeACQSummaryWeekly_(rows);
+
+}
+
+
+/**
+ * ==========================================================
+ * Write ACQ Summary Weekly to Sheet (없으면 생성)
+ * ==========================================================
+ */
+function writeACQSummaryWeekly_(rows){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(CONFIG.ACQ.SUMMARY_WEEKLY_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(CONFIG.ACQ.SUMMARY_WEEKLY_SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, ACQ_SUMMARY_WEEKLY_HEADERS.length)
+    .setValues([ACQ_SUMMARY_WEEKLY_HEADERS]);
+
+  if(rows.length > 0){
+
+    // WeekStart 자동 Date 변환 방지(AD_004_SpendCache.js Ad_Spend_Cache_Weekly와
+    // 동일 이유·동일 대응 — 이 프로젝트가 반복 겪은 날짜/타임존 버그 클래스 예방).
+    sheet.getRange(2, 1, rows.length, 1).setNumberFormat("@");
+    sheet.getRange(2, 1, rows.length, ACQ_SUMMARY_WEEKLY_HEADERS.length).setValues(rows);
+
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
+ * Read ACQ Summary Weekly as Lookup Map (Key "weekStart|segment" → Row Object)
+ *
+ * WHY
+ * S&M_REP(`SMREP_001_Report.js`)이 이 함수만 호출해서 즉시 조회하도록 함
+ * (Leads_OPS/MTA_Master 재스캔 없음, `readACQSummaryMap_()`와 동일 원칙).
+ * ==========================================================
+ */
+function readACQSummaryWeeklyMap_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.ACQ.SUMMARY_WEEKLY_SHEET);
+
+  const map = {};
+
+  if(!sheet) return map;
+
+  const values = sheet.getDataRange().getValues();
+
+  if(values.length <= 1) return map;
+
+  for(let i = 1; i < values.length; i++){
+
+    const row = values[i];
+    const key = String(row[0]).trim() + "|" + row[1];
+
+    map[key] = {
+      allLeads: row[2],
+      newLeads: row[3],
+      newP1: row[4],
+      sal: row[5],
+      salP1: row[6]
+    };
+
+  }
+
+  return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — refreshACQSummaryWeekly_() 수동 실행용 공개 래퍼(재계산 없이
+ * refreshACQSummary_()의 부산물이라, 단독 실행은 최근 refreshACQSummary_()
+ * 실행 시점 기준 aggregate를 다시 스캔해서 만든다 — 편집기에서 이 캐시만
+ * 따로 재생성하고 싶을 때용)
+ * ==========================================================
+ */
+function runRefreshACQSummaryWeekly(){
+
+  const mtaAgg = computeMTAAggregates_(null, null);
+  const opsAgg = computeOPSAggregates_(null, null);
+
+  refreshACQSummaryWeekly_(mtaAgg, opsAgg);
+
+  Logger.log(CONFIG.LOG.PREFIX + " ACQ Summary Weekly Refresh Completed.");
 
 }
 

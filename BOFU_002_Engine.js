@@ -32,9 +32,17 @@
  * 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-09-03)
+ * - **Meta_Raw+UTM_Program_Dictionary 이중 조회 제거(`docs/OpenItems.md` #41,
+ *   실측 근거: `docs/PerformanceBenchmark.md` 2026-09-03)** —
+ *   `computeBOFUMetaCampaignDataAggregates_()`가 `refreshBOFUEngine_()`(Engine)
+ *   과 `buildBOFUOPS()`(`BOFU_003_Build.js:48`, OPS Build) 양쪽에서 파라미터
+ *   없이 동일 호출되던 것을 모듈 스코프 메모이제이션(`_bofuMetaCampaignDataAggCache`,
+ *   `UTIL_002_UtmProgramDictionary.js`의 `_utmProgramDictCache`와 동일 전례)로
+ *   전환 — 같은 실행 안에서 1번만 계산. 로직/반환값/출력 변경 없음.
  * v1.6.0 (2026-08-25)
  * - `computeBOFUMetaSpendAggregates_()` → `computeBOFUMetaCampaignDataAggregates_()`로
  *   교체(사용자 요청, Spent 자동화에 이은 2단계) — `refreshBOFUEngine_()`의
@@ -266,7 +274,7 @@ function testIsEligibleBOFUProgram() {
 
 /**
  * ==========================================================
- * Compute BOFU Meta Campaign Data Aggregates (IO 래퍼)
+ * Compute BOFU Meta Campaign Data Aggregates (IO 래퍼, 실행 단위 메모이제이션)
  *
  * WHY
  * `EVENTS_002_Engine.js`의 제네릭 `aggregateMetaCampaignDataByProgram_()`/
@@ -278,13 +286,36 @@ function testIsEligibleBOFUProgram() {
  * 반환값 전체(spend 외 clicks/results/campaignNames/campaignStart/
  * campaignEnd/hasOngoing)를 사용(2026-08-25, Spent 자동화에 이은 2단계
  * 사용자 요청).
+ *
+ * **메모이제이션(2026-09-03, `docs/OpenItems.md` #41)**: `refreshBOFUEngine_()`
+ * (Engine 단계, spend만 사용)와 `buildBOFUOPS()`(`BOFU_003_Build.js:48`, OPS
+ * Build 단계, 나머지 필드 사용)가 파라미터 없이 완전히 동일한 이 함수를 같은
+ * 실행(`runLeadsPipelineTail()`/`runMTAPipelineTail()`) 안에서 두 번 호출해
+ * Meta_Raw + UTM_Program_Dictionary를 매번 두 번씩 읽고 있었음(실측 근거:
+ * `docs/PerformanceBenchmark.md` 2026-09-03). Engine 반환값 자체를 시트/
+ * PropertiesService로 캐시하지 않은 이유는 v1.6.0 changelog에 이미 명시된
+ * 대로 Date/배열 값의 시트 왕복 타입 손실 위험(Content_OPS Month 셀 Date
+ * 강제변환 사례) 때문 — 대신 스크립트 전역 변수로 **같은 실행 안에서만**
+ * 메모이제이션한다(직렬화 없음, 타입 손실 위험 자체가 없음). Apps Script는
+ * 별도 실행마다 전역 스코프를 새로 초기화하므로 실행 간 stale 캐시 위험도
+ * 없음. `buildBOFUOPS()`가 파이프라인 밖에서(메뉴 등) 단독 호출되는 경우도
+ * 이 함수가 그 실행 안에서 한 번만 계산되므로 동작에 차이 없음(로직 변경
+ * 없음, 순수 호출 횟수 최적화). 네이밍/패턴은 `UTIL_002_UtmProgramDictionary.js`의
+ * `_utmProgramDictCache`(기존 확립된 모듈 스코프 메모이제이션 전례)를 그대로
+ * 따름 — 별도 실행에서는 자동 초기화되는 정상 GAS 패턴이라 stale 위험 없음.
  * ==========================================================
  */
+let _bofuMetaCampaignDataAggCache = null;
+
 function computeBOFUMetaCampaignDataAggregates_() {
 
-  return aggregateMetaCampaignDataByProgram_(
+  if (_bofuMetaCampaignDataAggCache) return _bofuMetaCampaignDataAggCache;
+
+  _bofuMetaCampaignDataAggCache = aggregateMetaCampaignDataByProgram_(
     readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleBOFUProgram_
   );
+
+  return _bofuMetaCampaignDataAggCache;
 
 }
 

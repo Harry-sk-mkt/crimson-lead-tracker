@@ -40,9 +40,17 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-09-03)
+ * - **perfTrackerByFY 반복 오픈 제거(`docs/OpenItems.md` #41, 실측 근거:
+ *   `docs/PerformanceBenchmark.md` 2026-09-03)** — `computeFYRepMarketingRowsForFY_()`/
+ *   `computeFYRepCompanyRevenueTargetsForFY_()`가 FY마다(FYS 4개 기준 최대
+ *   8회) 각각 독립적으로 `SpreadsheetApp.openById()`하던 것을 신규
+ *   `openFYRepMarketingSourceFile_()`(모듈 스코프 메모이제이션, 실행당 1회만
+ *   오픈)로 교체. `getSheetByName()`은 FY마다 다른 탭이라 그대로 유지, 순수
+ *   오픈 횟수만 최적화(로직/출력 변경 없음).
  * v1.7.0 (2026-08-24)
  * - `computeFYRepTeamKoreaTargetsByFY_()` Target 소스 재교체 — 22행 "Marketing
  *   Revenue Target" × VAT 10%(`CONFIG.FYREP.TEAM_KOREA_VAT_MULTIPLIER`, 삭제됨)
@@ -465,6 +473,40 @@ function testBuildFYRepMarketingRawRows(){
 
 /**
  * ==========================================================
+ * Open FY_REP Marketing Source File (IO 래퍼, 실행 단위 메모이제이션)
+ *
+ * WHY (2026-09-03, `docs/OpenItems.md` #41)
+ * `computeFYRepMarketingRowsForFY_()`와 `computeFYRepCompanyRevenueTargetsForFY_()`
+ * 둘 다 같은 외부 `perfTrackerByFY` 스프레드시트(`CONFIG.FYREP.MARKETING_SOURCE.
+ * SPREADSHEET_ID`)를 FY마다(`CONFIG.FYREP.FYS`, 현재 FY24~27) 독립적으로
+ * `openById()`해 한 번의 FY_REP Generate에 최대 `2 × FYS.length`회 반복
+ * 오픈하고 있었음(실측 근거: `docs/PerformanceBenchmark.md` 2026-09-03,
+ * `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`).
+ * `computeFYRepCompanyRevenueTargetsForFY_()`의 기존 주석("호출 빈도가
+ * 리포트 생성 시 1회뿐이라 별도 캐싱 없음")은 FYS가 1개였던 시점 기준으로
+ * 이제는 사실과 다름 — FY당 1회이지 리포트당 1회가 아님. `openById()`(네트워크
+ * 왕복 있는 무거운 부분)만 실행당 1번으로 캐시하고, 이후 `getSheetByName()`
+ * (이미 연 Spreadsheet 객체 안에서는 가벼움)은 FY마다 그대로 호출 — 탭 자체는
+ * FY마다 다르므로 시트 캐싱은 하지 않음. `BOFU_002_Engine.js`의
+ * `_bofuMetaCampaignDataAggCache`와 동일한 모듈 스코프 메모이제이션 패턴
+ * (별도 실행에서는 자동 초기화, stale 위험 없음).
+ * ==========================================================
+ */
+let _fyRepMarketingSourceFileCache = null;
+
+function openFYRepMarketingSourceFile_(){
+
+  if(!_fyRepMarketingSourceFileCache){
+    _fyRepMarketingSourceFileCache = SpreadsheetApp.openById(CONFIG.FYREP.MARKETING_SOURCE.SPREADSHEET_ID);
+  }
+
+  return _fyRepMarketingSourceFileCache;
+
+}
+
+
+/**
+ * ==========================================================
  * Compute FY_REP Marketing Rows For FY (IO 래퍼)
  *
  * WHY
@@ -486,7 +528,7 @@ function computeFYRepMarketingRowsForFY_(fy){
 
   if(!tabConfig) return [];
 
-  const file = SpreadsheetApp.openById(config.SPREADSHEET_ID);
+  const file = openFYRepMarketingSourceFile_();
   const sheet = file.getSheetByName(tabConfig.NAME);
 
   if(!sheet) return [];
@@ -922,7 +964,10 @@ function testScanFYRepQuarterlySummaryRevenueTargets(){
  * WHY
  * perfTrackerByFY의 FY 하나 탭 Quarterly Summary를 읽어 월별 회사 전체
  * Revenue Target을 만든다. Marketing 섹션과 같은 탭·같은 스프레드시트를
- * 다시 연다(호출 빈도가 리포트 생성 시 1회뿐이라 별도 캐싱 없음).
+ * 다시 연다 — **2026-09-03 정정**: 위 주석("호출 빈도가 리포트 생성 시
+ * 1회뿐")은 FYS가 1개였던 시점 기준으로 이제는 사실과 다름(FY당 1회,
+ * `docs/OpenItems.md` #41 실측 참고) — `openFYRepMarketingSourceFile_()`
+ * (모듈 스코프 메모이제이션)로 전환.
  *
  * INPUT
  * fy : number
@@ -939,7 +984,7 @@ function computeFYRepCompanyRevenueTargetsForFY_(fy){
 
   if(!tabConfig) return {};
 
-  const file = SpreadsheetApp.openById(marketingConfig.SPREADSHEET_ID);
+  const file = openFYRepMarketingSourceFile_();
   const sheet = file.getSheetByName(tabConfig.NAME);
 
   if(!sheet) return {};

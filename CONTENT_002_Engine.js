@@ -21,9 +21,14 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-09-03)
+ * - **Meta_Raw+UTM_Program_Dictionary 이중 조회 제거(`docs/OpenItems.md` #41,
+ *   `BOFU_002_Engine.js` v1.7.0과 동일 패턴)** — `computeContentMetaCampaignDataAggregates_()`
+ *   를 모듈 스코프 메모이제이션(`_contentMetaCampaignDataAggCache`)으로 전환.
+ *   로직/반환값/출력 변경 없음.
  * v1.7.0 (2026-08-25)
  * - `computeContentMetaSpendAggregates_()` → `computeContentMetaCampaignDataAggregates_()`로
  *   교체(사용자 요청, Spent 자동화에 이은 2단계) — `refreshContentEngine_()`의
@@ -215,7 +220,7 @@ function testIsEligibleContentProgram() {
 
 /**
  * ==========================================================
- * Compute Content Meta Campaign Data Aggregates (IO 래퍼)
+ * Compute Content Meta Campaign Data Aggregates (IO 래퍼, 실행 단위 메모이제이션)
  *
  * WHY
  * `EVENTS_002_Engine.js`의 제네릭 `aggregateMetaCampaignDataByProgram_()`/
@@ -226,13 +231,27 @@ function testIsEligibleContentProgram() {
  * `applyContentMetaCampaignDataIfMatched_()`가 Campaign/Off-On/Start
  * Date/End Date/Link clicks/Results 자동 덮어쓰기에 반환값 전체를
  * 사용(2026-08-25, Spent 자동화에 이은 2단계 사용자 요청).
+ *
+ * **메모이제이션(2026-09-03, `docs/OpenItems.md` #41)**: `BOFU_002_Engine.js`의
+ * `computeBOFUMetaCampaignDataAggregates_()`와 완전히 동일한 이유·동일 패턴 —
+ * `refreshContentEngine_()`/`buildContentOPS()`(`CONTENT_003_Build.js:49`)가
+ * 파라미터 없이 같은 실행 안에서 이 함수를 두 번 호출해 Meta_Raw +
+ * UTM_Program_Dictionary를 매번 두 번씩 읽던 것을 모듈 스코프 변수로 제거
+ * (직렬화/시트 왕복 없음, `UTIL_002_UtmProgramDictionary.js`의
+ * `_utmProgramDictCache`와 동일 전례 — 별도 실행에서는 자동 초기화).
  * ==========================================================
  */
+let _contentMetaCampaignDataAggCache = null;
+
 function computeContentMetaCampaignDataAggregates_() {
 
-  return aggregateMetaCampaignDataByProgram_(
+  if (_contentMetaCampaignDataAggCache) return _contentMetaCampaignDataAggCache;
+
+  _contentMetaCampaignDataAggCache = aggregateMetaCampaignDataByProgram_(
     readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleContentProgram_
   );
+
+  return _contentMetaCampaignDataAggCache;
 
 }
 
