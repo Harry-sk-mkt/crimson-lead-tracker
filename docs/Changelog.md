@@ -1,4 +1,69 @@
-# Changelog — 2026-09-01
+# Changelog — 2026-09-02
+
+## SAL을 IC Funnel 리포트에서 완전히 분리 — 전용 외부 스프레드시트로 독립(`docs/OpenItems.md` #38 P1 TODO #1)
+
+전날 SAL 8월 갭 조사 후 남은 잔여 24건(Salesforce IC Funnel 리포트가 "New (Not Contacted)
+Date Time" 필드를 export하지 못하는 버그, IC Booked Date 2016~2026 필터 범위가 원인으로
+추정)이 리포트 재구성으로도 해결이 안 될 가능성이 있어, 사용자가 근본적 재설계를 결정:
+"SAL만 IC Funnel 리포트에 묶지 말고 별도 리포트+별도 Raw 시트로 분리한 후 외부 시트로
+만들자" — 메인 스프레드시트 용량 문제(오픈 속도 저하)도 같이 해결 목적.
+
+`CONFIG.SAL` 신규(`CORE_001_Config.js` v1.55.0) — 사용자가 새로 만든 외부 스프레드시트
+ID(`1Vo8iYMT6s0jAtjLbDR7xTwk7gBjNfSyTEGIdmYBLbgE`) 확인 후 반영. `MASTER_010_SALSync.js`
+신규 — IC Funnel과 동일 아키텍처(Master 빌드 없음, Lead ID별 최신 스냅샷 직접 sync)이되
+Raw 시트가 외부 스프레드시트에 있음. `IMPORT_006_SheetWriter.js`/`IMPORT_008_RawDeduplicator.js`에
+optional `targetSpreadsheet` 파라미터 추가(기존 4개 호출부 하위호환)해 `IMPORT_005_RawWriter.js`의
+신규 `writeSALRaw()`가 외부 시트에 직접 append 가능하도록 함. `MASTER_002_PipelineAsync.js`에
+4번째 독립 파이프라인(SAL) 추가 — README Pipeline Status 표에 새 행, PIPELINE_LOCK은
+Leads/MTA/IC Funnel과 공유. "📥 Update → Import SAL Report" 메뉴 신규.
+`MASTER_009_ICFunnelSync.js`(v1.6.0)는 Sales Accepted Date 관리에서 완전히 손을 뗌.
+
+Salesforce SAL 전용 리포트 필드: Lead ID(필수)/New (Not Contacted) Date Time(필수)/Lead
+Status(선택, 향후 Nurturing 제외 로직용) — IC Booked Date 필터 없는 "All leads" 범위로 export.
+
+## Leads_OPS 필드 소유권 전면 재편 — Revenue를 MTA 터치 기반에서 Deal Tracker 역싱크로 이관
+
+SAL 분리 작업 중 사용자가 더 큰 그림을 제안: "New Leads/MTA/SAL/IC Booked/IC Complete/Revenue를
+각각 개별 리포트에서 불러오고, 전부 Lead ID를 키값으로 Leads_OPS를 업데이트하는 구조로
+재편하자." 조사 결과 Revenue가 그동안 `MASTER_003_MTAFunnelSync.js`(MTA_Master 터치 기반)로만
+동기화되고 있어, Search_OPS(2트랙 아키텍처 예외로 여전히 Leads_OPS 자체 Revenue를 씀)가 SAL과
+동일한 "터치 없으면 갱신 안 됨" 구조적 문제를 겪고 있었음이 발견됨.
+
+**최종 구조(사용자 확정)**: New Leads(기본정보+First Touch+Lead Priority, 변경 없음) / MTA
+(`#Touches`만 신규 관리, Revenue·Lead Priority sync 제거) / SAL(Sales Accepted Date, 위 참고) /
+IC Funnel(IC Booked/Completed만, Opportunity Won Date 제거) / Revenue(신규, Deal Tracker
+외부시트에서 Email 매칭 역싱크 — Revenue + Opportunity Won Date). Lead Priority 다운그레이드
+방지 가드(`applyPriorityDowngradeGuard_()`)는 IC Funnel 경로에 안전장치로 유지(사용자 확정 —
+`docs/OpenItems.md` #20 New P1 8월 갭 재발 방지 목적으로 도입됐던 장치라 제거 리스크가 있다고
+판단), MTA 경로 것만 제거.
+
+구현: `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS.EMAIL`(V열, 22 — 사용자 확인) 신규,
+`TARGET_001_Engine.js`(v1.30.0)의 `transformDealTrackerRow_()`/`DEAL_TRACKER_ENGINE_HEADERS`/
+`dealTrackerRowToArray_()`/`arrayToDealTrackerRow_()`에 email 필드 추가(additive). 신규
+`MASTER_011_RevenueSync.js` — `computeRevenueByEmail_()`(같은 Email 여러 딜이면 Revenue 합계,
+Opportunity Won Date는 최신 Close Date 채택 — 가정, 실측 검증 전) + `syncRevenueToOPS_()`.
+`MASTER_003_MTAFunnelSync.js`(v1.10.0) `computeMTAFunnelByLeadId_()`에 `touchCount` 추가,
+syncFieldMap을 `{"#Touches": "touchCount"}`로 축소. `OPS_001_Config.js`(v2.6) HEADER에
+`#Touches` 신규(Total IC Requests 옆, 부속 널쳐링 지표 그룹).
+
+**Revenue 파이프라인 트리거 방식(사용자 요청 "역싱크는 트리거로 비동기")**: CSV Import가
+없는 유일한 파이프라인이라, Leads/MTA/IC Funnel/SAL 4개 파이프라인 tail이 끝날 때마다
+(성공/실패 무관) `enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE)`를 호출해
+기존 락 충돌 자동재시도 FIFO 인프라(`releasePipelineLockAndProcessQueue_()`)를 그대로
+재사용 — 신규 스케줄링 코드 없이 매번 자동으로 뒤이어 실행되도록 구현. `MASTER_002_
+PipelineAsync.js`(v1.25.0) README Pipeline Status 표가 6행(헤더+New Leads+MTA Leads+IC
+Funnel+SAL+Revenue)으로 확장, `writePipelineStatusToReadme_()`의 행 증분 마이그레이션
+로직을 미리 일반화해둔 덕에(SAL 추가 시점에 이미 루프화) 코드 변경 없이 자동 대응.
+
+**실행 검증 완료(2026-09-02, 사용자 확인)**: `runRebuildDealTrackerEngine()` — 783개 딜
+전체 재구축(3.49초, Email 포함) 성공. `runSyncRevenueToOPS()` — 고유 Email 122개 중 44건
+Leads_OPS 반영, 뒤이은 ACQ/NewP1/Events/BOFU/Search/Content Engine refresh 7개 전부 정상
+완료. **잔여 발견**: 78건(64%)이 Leads_OPS 매칭 실패 — 사용자 가설은 "Account로 병합
+(convert)된 리드는 Leads 리포트에서 안 보여서"(Salesforce Lead→Account/Contact 전환 시
+Leads export에서 빠지지만 Deal Tracker엔 그 Email 딜이 남음). 실측 검증 전, `docs/OpenItems.md`
+#39에 다음 세션 조사 항목으로 기록.
+
+
 
 ## Reporting Layer 전면 자동화 — S&M_REP/FY_REP Import 자동 Generate 편입, 주기적 Refresh 트리거, 락 충돌 자동 재시도
 

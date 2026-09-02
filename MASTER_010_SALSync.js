@@ -1,0 +1,412 @@
+/**
+ * ==========================================================
+ * Marketing 2.0
+ * SAL Sync (외부 스프레드시트 — SAL_Raw)
+ *
+ * Responsibility
+ * SAL_Raw(전용 외부 스프레드시트, Append 전용, Master 빌드 없음)에서
+ * Lead ID별 최신 레코드를 뽑아 Leads_OPS의 "Sales Accepted Date"로
+ * 역동기화.
+ *
+ * WHY (도입 배경, 2026-09-02)
+ * SAL(Sales Accepted) 판정은 Salesforce Lead Status가 Nurturing →
+ * New (Not Contacted)로 전환된 시각("New (Not Contacted) Date Time"
+ * 필드) 기준이다 — Lead 레벨 스냅샷이라 그 리드에 새 마케팅 터치가
+ * 없으면 `MASTER_003_MTAFunnelSync.js`(MTA_Master 터치 기반) 경로로는
+ * 영원히 갱신 안 됨(`docs/OpenItems.md` #38, SAL 8월 갭 305 vs 243 조사).
+ * 이 필드를 `MASTER_009_ICFunnelSync.js`의 ICFunnel_Raw에 편입시켜봤으나,
+ * Salesforce IC Funnel 리포트 자체가 이 필드를 export하지 못하는 버그
+ * (IC Booked Date 2016~2026 필터 범위 문제로 추정, 리포트 재구성으로도
+ * 해결 안 됨 — 잔여 24건, #38 P1 TODO #1)가 있어 사용자가 근본적으로
+ * 재설계를 결정: **SAL만 IC Funnel 리포트에서 분리해 별도 Salesforce
+ * 리포트("All leads" 범위, IC Booked Date 필터 없음 — 이 리포트에서는
+ * 필드가 정상 export됨, TEMPQA_045 실측 확인)로 export하고, 그 Raw
+ * 데이터를 메인 스프레드시트가 아닌 전용 외부 스프레드시트(`CONFIG.SAL.
+ * EXTERNAL.SPREADSHEET_ID`)에 저장한다.** 메인 스프레드시트 용량이 커져
+ * 오픈 속도가 느려지는 문제도 함께 완화하려는 목적(사용자 확인).
+ *
+ * Master 빌드 없음 / 배치 읽기·쓰기 재사용
+ * `MASTER_009_ICFunnelSync.js`와 동일한 아키텍처 — Lead 단위 최신
+ * 스냅샷만 의미가 있어 Incremental Master Build 없이 Raw를 직접 읽어
+ * Leads_OPS로 동기화하고, 컬럼별 배치 read/write는
+ * `MASTER_003_MTAFunnelSync.js`의 `computeMTASyncColumnUpdates_()`(범용
+ * 순수 함수)를 그대로 재사용한다.
+ *
+ * Must NOT
+ * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Revenue 등) 건드리지 않음
+ * - 값이 비어있는 필드는 기존 OPS 값을 덮어쓰지 않음
+ * - `syncSALToOPS_()`를 `importCsv()`에서 직접(동기) 호출하지 않음 —
+ *   반드시 `scheduleSALPipelineTail_()`을 통해 백그라운드 트리거로 실행할 것
+ *   (IC Funnel과 동일 원칙 — Engine refresh 체인이 무거워 업로드 다이얼로그가
+ *   오래 안 닫히는 문제 방지)
+ *
+ * Version
+ * v1.0.0
+ *
+ * Change Log
+ * v1.0.0 (2026-09-02)
+ * - 최초 구현. `docs/OpenItems.md` #38 P1 TODO #1 참고.
+ * ==========================================================
+ */
+
+
+/**
+ * ==========================================================
+ * Open SAL External Spreadsheet (IO 래퍼)
+ *
+ * WHY
+ * CONFIG.SAL.EXTERNAL.SPREADSHEET_ID가 아직 비어있으면(사용자가 새
+ * 스프레드시트를 만들어 ID를 공유하기 전) 추측으로 진행하지 않고 명시적
+ * 에러로 실패한다("No Assumptions" 원칙).
+ * ==========================================================
+ */
+function openSALExternalSpreadsheet_(){
+
+  const spreadsheetId = CONFIG.SAL.EXTERNAL.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "CONFIG.SAL.EXTERNAL.SPREADSHEET_ID가 비어있습니다 — 새 외부 " +
+      "스프레드시트를 만들어 ID를 CORE_001_Config.js에 채워넣어야 합니다."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
+
+
+/**
+ * ==========================================================
+ * Pick Latest SAL Records (Lead ID별 시트상 마지막 행 채택)
+ *
+ * `MASTER_009_ICFunnelSync.js`의 `pickLatestICFunnelRecords_()`와 동일
+ * 원칙 — SAL_Raw는 Append 전용이라 같은 Lead ID가 여러 주 export에
+ * 중복 등장할 수 있음, 시트상 나중 행(= 나중에 import된 것)을 최신으로
+ * 간주.
+ *
+ * INPUT
+ * rawRecords : Object[]  (SAL_Raw 전체 레코드)
+ *
+ * OUTPUT
+ * Object  { [leadId]: record }
+ *
+ * TEST
+ * testPickLatestSALRecords() 참고.
+ * ==========================================================
+ */
+function pickLatestSALRecords_(rawRecords){
+
+  const leadIdField = CONFIG.SAL.COLUMNS.LEAD_ID;
+
+  const latestByLeadId = {};
+
+  rawRecords.forEach(function(record){
+
+    const leadId = String(record[leadIdField] || "").trim();
+
+    if(!leadId) return;
+
+    latestByLeadId[leadId] = record;
+
+  });
+
+  return latestByLeadId;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — pickLatestSALRecords_()
+ * ==========================================================
+ */
+function testPickLatestSALRecords(){
+
+  const leadIdField = CONFIG.SAL.COLUMNS.LEAD_ID;
+
+  const rawRecords = [];
+
+  rawRecords.push((function(){ const r = {}; r[leadIdField] = "L1"; r.marker = "first"; return r; })());
+  rawRecords.push((function(){ const r = {}; r[leadIdField] = "L2"; r.marker = "only"; return r; })());
+  rawRecords.push((function(){ const r = {}; r[leadIdField] = "L1"; r.marker = "second (latest)"; return r; })());
+
+  const result = pickLatestSALRecords_(rawRecords);
+
+  const pass =
+    Object.keys(result).length === 2 &&
+    result["L1"].marker === "second (latest)" &&
+    result["L2"].marker === "only";
+
+  Logger.log("testPickLatestSALRecords: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute SAL By Lead ID
+ *
+ * WHY
+ * SAL_Raw의 날짜 컬럼도 IC Funnel과 동일하게 day-first 텍스트로
+ * Plain Text 보호될 것으로 예상됨(`CONFIG.RAW_DATE_COLUMNS.SAL`) —
+ * 반드시 parseDate(value, "DMY")로 명시 파싱한다.
+ *
+ * INPUT
+ * latestByLeadId : Object  (pickLatestSALRecords_() 출력)
+ *
+ * OUTPUT
+ * Object  { [leadId]: { salesAcceptedDate } }
+ *         (computeMTASyncColumnUpdates_()가 기대하는 funnelByLeadId 형태와
+ *         동일 — syncColumns의 funnelKey로 조회됨)
+ *
+ * TEST
+ * testComputeSALByLeadId() 참고 — day-first 파싱이 실제로 month/day를
+ * 뒤바꾸지 않는지 확인.
+ * ==========================================================
+ */
+function computeSALByLeadId_(latestByLeadId){
+
+  const cols = CONFIG.SAL.COLUMNS;
+
+  const result = {};
+
+  Object.keys(latestByLeadId).forEach(function(leadId){
+
+    const record = latestByLeadId[leadId];
+
+    result[leadId] = {
+      salesAcceptedDate: parseDate(record[cols.SALES_ACCEPTED_DATE], "DMY")
+    };
+
+  });
+
+  return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeSALByLeadId_()
+ * ==========================================================
+ */
+function testComputeSALByLeadId(){
+
+  const cols = CONFIG.SAL.COLUMNS;
+
+  const latestByLeadId = {};
+
+  latestByLeadId["L1"] = (function(){
+    const r = {};
+    r[cols.SALES_ACCEPTED_DATE] = "3/8/2026, 9:00 am";  // 8월 3일 (day-first)
+    return r;
+  })();
+
+  const result = computeSALByLeadId_(latestByLeadId);
+
+  const pass =
+    result["L1"].salesAcceptedDate instanceof Date &&
+    result["L1"].salesAcceptedDate.getMonth() === 7 &&  // August = index 7
+    result["L1"].salesAcceptedDate.getDate() === 3;
+
+  Logger.log(
+    "testComputeSALByLeadId: " + (pass ? "PASS" : "FAIL") +
+    " salesAcceptedDate=" + result["L1"].salesAcceptedDate
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Sync SAL to Leads_OPS
+ * ==========================================================
+ */
+function syncSALToOPS_(){
+
+  const start = new Date();
+
+  Logger.log("======================================");
+  Logger.log("SAL Sync Started");
+  Logger.log("======================================");
+
+  //----------------------------------------------------------
+  // Read SAL_Raw (외부 스프레드시트)
+  //----------------------------------------------------------
+
+  const externalFile = openSALExternalSpreadsheet_();
+  const rawSheet = externalFile.getSheetByName(CONFIG.SAL.SHEET);
+
+  if(!rawSheet){
+    throw new Error(
+      CONFIG.SAL.SHEET + " sheet not found in external SAL spreadsheet. " +
+      "Import SAL Report 먼저 실행하세요."
+    );
+  }
+
+  const rawRecords = sheetToObjects(rawSheet);
+
+  const latestByLeadId = pickLatestSALRecords_(rawRecords);
+
+  const salByLeadId = computeSALByLeadId_(latestByLeadId);
+
+  const leadIds = Object.keys(salByLeadId);
+
+  Logger.log("SAL_Raw Records : " + rawRecords.length);
+  Logger.log("Unique Lead IDs (latest only) : " + leadIds.length);
+
+  //----------------------------------------------------------
+  // Read Leads_OPS — Lead ID → Row 매핑
+  //----------------------------------------------------------
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if(!opsSheet){
+    throw new Error(OPS.SHEET.OPS + " sheet not found. buildLeadsOPS() 먼저 실행하세요.");
+  }
+
+  const headerMap = getHeaderMap(opsSheet);
+
+  const leadIdCol = headerMap["Lead ID"];
+
+  if(leadIdCol === undefined){
+    throw new Error("Lead ID column not found in " + OPS.SHEET.OPS);
+  }
+
+  const lastRow = opsSheet.getLastRow();
+
+  if(lastRow < OPS.ROWS.DATA_START){
+    Logger.log("Leads_OPS has no data rows. Nothing to sync.");
+    return;
+  }
+
+  const opsLeadIdValues = opsSheet
+    .getRange(OPS.ROWS.DATA_START, leadIdCol + 1, lastRow - OPS.ROWS.DATA_START + 1, 1)
+    .getValues();
+
+  const leadIdToRow = {};
+
+  opsLeadIdValues.forEach(function(row, index){
+
+    const leadId = String(row[0] || "").trim();
+
+    if(leadId){
+      leadIdToRow[leadId] = OPS.ROWS.DATA_START + index;
+    }
+
+  });
+
+  //----------------------------------------------------------
+  // Sync 실행 — 컬럼별 배치 읽기/쓰기
+  // (computeMTASyncColumnUpdates_()는 범용 순수 함수, MASTER_003 참고)
+  //----------------------------------------------------------
+
+  const syncFieldMap = {
+    "Sales Accepted Date": "salesAcceptedDate"
+  };
+
+  const syncColumns = Object.keys(syncFieldMap)
+    .map(function(opsFieldName){
+      return {
+        opsFieldName: opsFieldName,
+        funnelKey: syncFieldMap[opsFieldName],
+        colIndex: headerMap[opsFieldName]
+      };
+    })
+    .filter(function(col){ return col.colIndex !== undefined; });
+
+  const numRows = lastRow - OPS.ROWS.DATA_START + 1;
+
+  const existingColumnValues = {};
+
+  syncColumns.forEach(function(col){
+    existingColumnValues[col.opsFieldName] = opsSheet
+      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getValues();
+  });
+
+  const syncResult = computeMTASyncColumnUpdates_(
+    leadIds, salByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+  );
+
+  syncColumns.forEach(function(col){
+
+    if(!syncResult.columnChanged[col.opsFieldName]) return;
+
+    opsSheet
+      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .setValues(syncResult.columnValues[col.opsFieldName]);
+
+  });
+
+  const updated = syncResult.updated;
+  const notFoundInOPS = syncResult.notFoundInOPS;
+
+  const seconds = ((new Date() - start) / 1000).toFixed(2);
+
+  Logger.log("");
+  Logger.log("========== SAL SYNC SUMMARY ==========");
+  Logger.log("Updated in Leads_OPS : " + updated);
+  Logger.log("Not found in Leads_OPS : " + notFoundInOPS);
+  Logger.log("Time : " + seconds + "s");
+  Logger.log("=======================================");
+
+  refreshACQSummary_();
+  refreshNewP1Engine_();
+
+  refreshEventsEngine_();
+  refreshBOFUEngine_();
+  refreshSearchEngine_();
+  refreshContentEngine_();
+  refreshTargetActuals_();
+
+}
+
+
+/**
+ * ==========================================================
+ * 수동 실행용 공개 래퍼 (편집기에서 직접 Run — 동기 실행)
+ * ==========================================================
+ */
+function runSyncSALToOPS(){
+
+  syncSALToOPS_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Schedule SAL Pipeline Tail (백그라운드 트리거 예약)
+ *
+ * `MASTER_009_ICFunnelSync.js`의 `scheduleICFunnelPipelineTail_()`와
+ * 동일 패턴 — `syncSALToOPS_()` 끝의 Engine refresh들이 무거워 업로드
+ * 다이얼로그가 오래 안 닫히는 문제를 피하기 위해 설치형 1회성 트리거로
+ * 백그라운드 처리. PIPELINE_LOCK은 Leads/MTA/IC Funnel과 공유(같은
+ * PropertiesService 키) — 넷 중 어느 것이 실행 중이어도 나머지는 겹치지
+ * 않게 스킵/대기열(`enqueuePendingPipelineType_()`)됨.
+ * ==========================================================
+ */
+function scheduleSALPipelineTail_(){
+
+  const locked = !acquirePipelineLock_(CONFIG.PIPELINE.TYPES.SAL);
+
+  if(locked){
+
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.SAL);
+
+    Logger.log(
+      "[SALSync] Pipeline lock held by another run — queued for automatic retry after it finishes."
+    );
+
+    return { backgroundSkipped: true };
+
+  }
+
+  schedulePipelineTail_("runSALPipelineTail");
+
+  return { backgroundScheduled: true };
+
+}

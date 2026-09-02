@@ -22,9 +22,18 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.29.0
+ * v1.30.0
  *
  * Change Log
+ * v1.30.0 (2026-09-02)
+ * - `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS.EMAIL`(V열) 신규 소비 —
+ *   `transformDealTrackerRow_()` 반환값에 `email` 필드 추가(additive, cols.EMAIL
+ *   없으면 빈 문자열 — 기존 호출부 영향 없음). `DEAL_TRACKER_ENGINE_HEADERS`/
+ *   `dealTrackerRowToArray_()`/`arrayToDealTrackerRow_()`에도 끝에 Email
+ *   컬럼 추가(additive, 기존 인덱스 불변). `MASTER_011_RevenueSync.js`(신규)가
+ *   이 필드로 Leads_OPS Revenue/Opportunity Won Date를 Email 기준 역싱크.
+ *   ⚠️ 이미 캐시된 DealTracker_Engine 기존 행은 Email이 비어있으므로
+ *   `rebuildDealTrackerEngine_()` 1회 재실행 필요(수동, Apps Script 편집기).
  * v1.29.0 (2026-08-27)
  * - **사용자 결정 — 세그먼트별 상대 비중은 유지, 총합만 확정 타겟에 맞춤**:
  *   Pipeline Share Override(v1.28.0) 적용 후에도 Target_Engine의 세그먼트별
@@ -1390,7 +1399,11 @@ function transformDealTrackerRow_(row, cols, sourceTimeZone){
     leadSource: String(row[cols.LEAD_SOURCE - 1] || "").trim().toLowerCase(),
     sourceCategory: String(row[cols.SOURCE_CATEGORY - 1] || "").trim(),
     leadSourceDetail: String(row[cols.LEAD_SOURCE_DETAIL - 1] || "").trim(),
-    businessSegment: String(row[cols.SEGMENT - 1] || "").trim()
+    businessSegment: String(row[cols.SEGMENT - 1] || "").trim(),
+    // 2026-09-02 추가 — MASTER_011_RevenueSync.js가 Leads_OPS Revenue/
+    // Opportunity Won Date 역싱크 매칭키로 사용(cols.EMAIL 없으면 빈 문자열,
+    // 하위호환 — 기존 호출부는 이 필드를 안 씀).
+    email: String(row[(cols.EMAIL || 0) - 1] || "").trim().toLowerCase()
   };
 
 }
@@ -1405,12 +1418,14 @@ function testTransformDealTrackerRow(){
 
   const cols = {
     CLOSE_DATE: 1, CREATED_DATE: 2, REVENUE: 3,
-    LEAD_SOURCE: 4, SOURCE_CATEGORY: 5, SEGMENT: 6, LEAD_SOURCE_DETAIL: 7
+    LEAD_SOURCE: 4, SOURCE_CATEGORY: 5, SEGMENT: 6, LEAD_SOURCE_DETAIL: 7,
+    EMAIL: 8
   };
 
   const validRow = [
     new Date(2026, 6, 15), new Date(2026, 5, 1), "$1,000",
-    "Paid Search", "Search Ads", "Search", "WB-2026-06-KOR-MOFU-Core Test"
+    "Paid Search", "Search Ads", "Search", "WB-2026-06-KOR-MOFU-Core Test",
+    "Test@Example.com"
   ];
 
   const result = transformDealTrackerRow_(validRow, cols, "Asia/Seoul");
@@ -1430,6 +1445,7 @@ function testTransformDealTrackerRow(){
     result.revenue === 1000 &&
     result.leadSource === "paid search" &&
     result.businessSegment === "Search" &&
+    result.email === "test@example.com" &&
     transformDealTrackerRow_(noCloseDateRow, cols, "Asia/Seoul") === null &&
     transformDealTrackerRow_(noCreatedDateRow, cols, "Asia/Seoul").createdDate === null &&
     transformDealTrackerRow_(noCreatedDateRow, cols, "Asia/Seoul").createdFY === null;
@@ -1509,7 +1525,11 @@ function readDealTrackerRawRowsFromExternal_(){
  */
 const DEAL_TRACKER_ENGINE_HEADERS = [
   "Close Date", "Close FY", "Created Date", "Created FY",
-  "Revenue", "Lead Source", "Source Category", "Lead Source Detail", "Business Segment"
+  "Revenue", "Lead Source", "Source Category", "Lead Source Detail", "Business Segment",
+  // 2026-09-02 추가 — MASTER_011_RevenueSync.js 매칭키(끝에 추가, additive —
+  // 기존 인덱스 0~8은 그대로). 이미 캐시된 옛 행은 이 컬럼이 빈 값이므로
+  // rebuildDealTrackerEngine_() 1회 재구축 필요.
+  "Email"
 ];
 
 
@@ -1517,7 +1537,8 @@ function dealTrackerRowToArray_(row){
 
   return [
     row.closeDate, row.closeFY, row.createdDate, row.createdFY,
-    row.revenue, row.leadSource, row.sourceCategory, row.leadSourceDetail, row.businessSegment
+    row.revenue, row.leadSource, row.sourceCategory, row.leadSourceDetail, row.businessSegment,
+    row.email || ""
   ];
 
 }
@@ -1534,7 +1555,8 @@ function arrayToDealTrackerRow_(arr){
     leadSource: arr[5],
     sourceCategory: arr[6],
     leadSourceDetail: arr[7],
-    businessSegment: arr[8]
+    businessSegment: arr[8],
+    email: arr[9] || ""
   };
 
 }

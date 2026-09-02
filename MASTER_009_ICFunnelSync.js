@@ -46,9 +46,51 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.3.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-09-02)
+ * - **"Opportunity Won Date" sync 제거** — Leads_OPS 필드 소유권 재편
+ *   2단계(사용자 확정) — IC Funnel은 이제 IC Booked/Completed 정보만
+ *   소유, Won Date는 `MASTER_011_RevenueSync.js`(Deal Tracker 외부시트,
+ *   Email 매칭)로 이관. `syncICFunnelToOPS_()`의 syncFieldMap에서만 제거—
+ *   `computeICFunnelByLeadId_()`는 wonDate를 계속 반환하지만 여기선 안 쓰임
+ *   (무해, 기존 SAL/IC 3개 필드 이관 때와 동일 원칙). Lead Priority
+ *   다운그레이드 가드는 안전장치로 유지(사용자 확정, `docs/OpenItems.md` #20).
+ * v1.6.0 (2026-09-02)
+ * - **Sales Accepted Date sync 완전 제거** — `docs/OpenItems.md` #38 P1
+ *   TODO #1(Salesforce IC Funnel 리포트가 "New (Not Contacted) Date Time"
+ *   필드를 export하지 못하는 버그)이 리포트 재구성으로도 안 풀려, 사용자
+ *   결정으로 SAL을 이 파일에서 완전히 떼어내 전용 외부 시트로 이관
+ *   (`CONFIG.SAL`, `MASTER_010_SALSync.js` 신규). `computeICFunnelByLeadId_()`/
+ *   `syncICFunnelToOPS_()`의 syncFieldMap에서 salesAcceptedDate 제거,
+ *   `testComputeICFunnelByLeadId()` 기대값 원복,
+ *   `runAddICFunnelRawSalesAcceptedDateColumn()`은 이제 Lead Priority
+ *   컬럼만 확인(SALES_ACCEPTED_DATE 대상 제거 — CONFIG.IC_FUNNEL.COLUMNS에서
+ *   해당 필드 자체가 없어짐).
+ * v1.5.0 (2026-09-01)
+ * - `runAddICFunnelRawSalesAcceptedDateColumn()` 신규(1회성 수동 실행 유틸) —
+ *   `IMPORT_006_SheetWriter.js`의 `appendSheetRecords()`가 기존 시트 헤더를
+ *   그대로 쓰고 CSV의 새 컬럼을 조용히 버리는 동작 때문에, "Lead Priority"/
+ *   "Sales Accepted Date"(New (Not Contacted) Date Time) 둘 다 코드에는
+ *   있지만 실제 `ICFunnel_Raw` 헤더엔 없어서 값이 전혀 반영 안 되던 문제
+ *   실측 확인(TEMPQA_046_ICFunnelRawHeaderDump.js). 헤더 맨 끝에 누락된
+ *   컬럼명만 추가(기존 데이터/다른 컬럼 무변경, 재실행 안전).
+ * v1.4.0 (2026-09-01)
+ * - **"Sales Accepted Date" sync 대상 추가** — `docs/OpenItems.md` SAL 8월
+ *   갭(305 vs 243) 조사 결과, SAL도 IC Booked/Completed/Won Date와 같은
+ *   Lead 레벨 스냅샷 지연 문제를 겪음이 확인됨(TEMPQA_045_
+ *   AugustSALSalesforceLeadTrace.js, 62건 갭 중 49건이 이 원인). 사용자
+ *   확인: Salesforce SAL 판정 기준은 "New (Not Contacted) Date Time"
+ *   필드(Lead Status가 Nurturing→New (Not Contacted)로 전환된 시각) —
+ *   `CONFIG.IC_FUNNEL.COLUMNS.SALES_ACCEPTED_DATE`(`CORE_001_Config.js`
+ *   v1.54.0) 신규, `computeICFunnelByLeadId_()`에 salesAcceptedDate 추가,
+ *   `syncICFunnelToOPS_()`의 syncFieldMap에 "Sales Accepted Date" 추가.
+ *   `MASTER_003_MTAFunnelSync.js`(v1.9.0)는 이 필드에서 손을 떼고 Revenue만
+ *   관리 — IC 3개 필드 때와 동일한 "두 파이프라인이 같은 필드를 다른
+ *   순서로 덮어쓰는 위험 제거" 원칙(사용자 확정). Lead Priority와 달리
+ *   다운그레이드 방지 가드는 불필요(날짜 필드라 "더 높은 값 우선" 개념
+ *   자체가 없음, IC 3개 필드와 동일하게 처리).
  * v1.3.0 (2026-09-01)
  * - `scheduleICFunnelPipelineTail_()` 락 충돌 시 `enqueuePendingPipelineType_()`
  *   (MASTER_002_PipelineAsync.js)로 자동 재시도 대기열에 등록하도록 변경
@@ -350,10 +392,14 @@ function syncICFunnelToOPS_(){
   // (computeMTASyncColumnUpdates_()는 범용 순수 함수, MASTER_003 참고)
   //----------------------------------------------------------
 
+  // 2026-09-02 — "Opportunity Won Date"는 MASTER_011_RevenueSync.js(Deal
+  // Tracker 기반, Email 매칭)로 이관돼 여기서 제외(IC Funnel = booked/complete
+  // 정보만, 사용자 확정). computeICFunnelByLeadId_()는 wonDate를 계속
+  // 반환하지만 여기서 안 쓰일 뿐 무해(IC 3개 필드/SAL 이관 때와 동일 원칙,
+  // 불필요한 변경 범위 확장 방지).
   const syncFieldMap = {
     "IC Booked Date": "icBookedDate",
     "IC Completed Date": "icCompletedDate",
-    "Opportunity Won Date": "wonDate",
     "Lead Priority": "leadPriority"
   };
 
@@ -435,6 +481,80 @@ function syncICFunnelToOPS_(){
 function runSyncICFunnelToOPS(){
 
   syncICFunnelToOPS_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Add ICFunnel Raw Header Columns (1회성 수동 실행 유틸)
+ *
+ * WHY (2026-09-01, 2026-09-02 SALES_ACCEPTED_DATE 부분 제거)
+ * `IMPORT_006_SheetWriter.js`의 `appendSheetRecords()`는 시트에 이미
+ * 데이터가 있으면(신규 시트가 아니면) **기존 헤더를 그대로 쓰고, CSV에
+ * 새로 생긴 컬럼은 조용히 버린다**(records.map 시 headers 배열 기준으로만
+ * 값을 뽑음, `IMPORT_006_SheetWriter.js` 참고) — Raw는 원본 보존 원칙상
+ * 매번 헤더를 재작성하지 않기 때문.
+ *
+ * **실측으로 드러난 발견(TEMPQA_046)**: `ICFunnel_Raw`의 실제 헤더를
+ * 확인해보니 "Lead Priority"가 애초에 헤더에 없었음 — 2026-08-28에
+ * `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`를 코드에 추가할 때도 이 시트
+ * 헤더 자체는 갱신되지 않아서, ICFunnel_Raw를 통한 Lead Priority 동기화는
+ * 그동안 계속 무동작(항상 빈 값)이었던 것으로 보임 — New P1 갭 개선은
+ * 전부 MASTER_003_MTAFunnelSync.js의 MTA_Master 기반 경로에서만 온
+ * 것으로 추정. 이 함수로 바로잡음("New (Not Contacted) Date Time"도
+ * 같은 방식으로 한 차례 추가했었으나, 2026-09-02 SAL을 이 파일에서 완전히
+ * 분리하며 그 컬럼 관리 대상에서 제거 — `MASTER_010_SALSync.js` 참고).
+ *
+ * 이 함수는 헤더 행 맨 끝에 누락된 컬럼명을 딱 한 번 추가한다(이미 있으면
+ * 건드리지 않음 — 재실행 안전). 기존 데이터 행은 전혀 건드리지 않음(새
+ * 컬럼 값은 당연히 빈 칸으로 시작) — 이후 재import되는 새 행부터 이
+ * 컬럼에 실제 값이 채워진다(오래된 기존 행은 그 값을 가진 새 export가
+ * 다시 들어와야 채워짐, `pickLatestICFunnelRecords_()`가 Lead ID별 최신
+ * 행을 채택하므로 재import 한 번이면 충분).
+ *
+ * 사용법: 이 함수 실행 → Salesforce IC Funnel 리포트를 전체 기간으로
+ * 재export(Lead Priority 포함) → "📥 Update → Import IC Funnel"로 재import
+ * → `runSyncICFunnelToOPS()`.
+ * ==========================================================
+ */
+function runAddICFunnelRawSalesAcceptedDateColumn(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
+
+  if(!sheet){
+    Logger.log(CONFIG.IC_FUNNEL.SHEET + " 시트가 없습니다.");
+    return;
+  }
+
+  const columnsToEnsure = [
+    CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY
+  ];
+
+  columnsToEnsure.forEach(function(columnName){
+
+    const lastCol = sheet.getLastColumn();
+    const headerValues = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+    if(headerValues.indexOf(columnName) !== -1){
+      Logger.log("이미 헤더에 \"" + columnName + "\"가 있습니다 — 스킵.");
+      return;
+    }
+
+    sheet.getRange(1, lastCol + 1).setValue(columnName);
+
+    Logger.log(
+      "\"" + columnName + "\"를 " + CONFIG.IC_FUNNEL.SHEET + " 헤더 " +
+      (lastCol + 1) + "번째 컬럼으로 추가했습니다."
+    );
+
+  });
+
+  Logger.log(
+    "완료 — 이제 Salesforce IC Funnel 리포트를 전체 기간으로 재export" +
+    "(Lead Priority + New (Not Contacted) Date Time 포함) 후 재import하세요."
+  );
 
 }
 

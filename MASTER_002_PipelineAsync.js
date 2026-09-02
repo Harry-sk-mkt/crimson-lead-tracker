@@ -22,9 +22,46 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.22.0
+ * v1.25.0
  *
  * Change Log
+ * v1.25.0 (2026-09-02)
+ * - **Revenue 전용 5번째 파이프라인 신규**(`MASTER_011_RevenueSync.js`,
+ *   Leads_OPS 필드 소유권 재편 2단계 — 사용자 확정) — IC Funnel/SAL과
+ *   같은 패턴이되 CSV Import가 없는 유일한 타입이라 `importCsv()`에서
+ *   스케줄되지 않음. 대신 `runLeadsPipelineTail()`/`runMTAPipelineTail()`/
+ *   `runICFunnelPipelineTail()`/`runSALPipelineTail()` 넷 다 성공/실패
+ *   무관하게 자기 락을 반납하기 직전 `enqueuePendingPipelineType_(CONFIG.
+ *   PIPELINE.TYPES.REVENUE)`를 호출해 매번 대기열에 편입시키고,
+ *   `releasePipelineLockAndProcessQueue_()`가 자동으로 이어서 실행(사용자
+ *   요청 "역싱크는 트리거로 비동기" — 기존 FIFO 대기열/자동재시도 인프라
+ *   재사용, 신규 스케줄링 코드 불필요). `pipelineStatusPropertyKey_()`/
+ *   `pipelineTailHandlerNameByType_()`에 REVENUE 분기 추가,
+ *   `buildPipelineStatusGrid_()` 5번째 파라미터(revenueState) + "Revenue"
+ *   행 추가(헤더+New Leads+MTA Leads+IC Funnel+SAL+Revenue = 6행), 신규
+ *   `runRevenuePipelineTail()`. `testBuildPipelineStatusGrid()` 기대값
+ *   갱신(6행 그리드) — 기존 4행 증분 마이그레이션 루프(writePipelineStatusToReadme_)는
+ *   이미 일반화돼 있어 코드 변경 없이 6행까지 자동 대응.
+ * v1.24.0 (2026-09-02)
+ * - **SAL 전용 4번째 파이프라인 신규**(`docs/OpenItems.md` #38 P1 TODO #1,
+ *   MASTER_010_SALSync.js) — IC Funnel과 완전히 동일한 패턴(PIPELINE_LOCK
+ *   공유, README Pipeline Status 표에 독립 행). `pipelineStatusPropertyKey_()`/
+ *   `pipelineTailHandlerNameByType_()`에 SAL 분기 추가, `buildPipelineStatusGrid_()`
+ *   4번째 파라미터(salState) + "SAL" 행 추가(헤더+New Leads+MTA Leads+
+ *   IC Funnel+SAL = 5행), `writePipelineStatusToReadme_()`가 이미 4행
+ *   블록으로 자리잡은 시트에 SAL 행 자리(anchorRow+4)를 감지해 1행만
+ *   insertRowsBefore(IC Funnel 추가 때와 동일한 증분 마이그레이션 패턴).
+ *   신규 `runSALPipelineTail()` — `runICFunnelPipelineTail()`과 동일 구조
+ *   (`syncSALToOPS_()` → `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/
+ *   `refreshReportGenerate_()`). `testBuildPipelineStatusGrid()` 기대값
+ *   갱신(5행 그리드).
+ * v1.23.0 (2026-09-01)
+ * - `runForceReleasePipelineLock()` 신규(수동 실행 전용) — 사용자가
+ *   Executions 화면에서 오래 걸리는 실행을 직접 Stop execution으로 강제
+ *   종료하면 finally 블록이 안 돌아 `PIPELINE_LOCK`이 30분간 계속 잡혀
+ *   있던 문제(IC Funnel 재import 대기 중 실측 발견) — 안전 확인 후
+ *   즉시 풀 수 있는 수동 진입점. `releasePipelineLockAndProcessQueue_()`
+ *   재사용(대기 중이던 타입 자동 재시도까지 처리).
  * v1.22.0 (2026-09-01)
  * - **락 충돌 자동 재시도(사용자 요청)**: 기존엔 PIPELINE_LOCK을 다른
  *   타입이 쥐고 있으면 이번 사이클은 Master append만 반영하고 "몇 분 후
@@ -433,16 +470,17 @@ function buildPipelineStatusCell_(state){
  * 끝났으면 "Complete", 아직이면 빈 문자열 — 사용자 확정("완료되면 Complete로").
  *
  * INPUT
- * leadsState / mtaState / icFunnelState : { status, stage, startedAt, finishedAt, error, stages }
+ * leadsState / mtaState / icFunnelState / salState / revenueState : { status, stage, startedAt, finishedAt, error, stages }
  *   stages : { [CONFIG.PIPELINE.STATUS_COLUMNS[i].KEY]: "RUNNING"|"DONE"|"FAILED" }
  *   (진입한 적 없는 키는 아예 없음 — 그 컬럼은 빈 문자열로 렌더링됨)
  *   각 필드 미제공 시 status는 "IDLE", stages는 {}로 간주(전 컬럼 빈 문자열).
- *   icFunnelState(2026-08-26 신규, 선택)는 세부 단계(Master Update~Target_REP)를
- *   전혀 안 쓰므로(IC Funnel 파이프라인엔 그런 하위 단계가 없음) stages가 항상
- *   {}에 가깝고, 전 단계 컬럼이 빈 문자열로 렌더링됨 — Status 열만 의미 있음.
+ *   icFunnelState(2026-08-26 신규)/salState/revenueState(둘 다 2026-09-02
+ *   신규, 셋 다 선택)는 세부 단계(Master Update~Target_REP)를 전혀 안
+ *   쓰므로(그런 하위 단계가 없는 파이프라인) stages가 항상 {}에 가깝고,
+ *   전 단계 컬럼이 빈 문자열로 렌더링됨 — Status 열만 의미 있음.
  *
  * OUTPUT
- * string[4][2 + N]  (A열부터, 1~4행 — 헤더 1행 + New Leads/MTA Leads/IC Funnel 3행)
+ * string[6][2 + N]  (A열부터, 1~6행 — 헤더 1행 + New Leads/MTA Leads/IC Funnel/SAL/Revenue 5행)
  *
  * TEST
  * buildPipelineStatusGrid_() 참고 — RUNNING/FAILED/DONE 조합을 넣으면 Status
@@ -450,11 +488,13 @@ function buildPipelineStatusCell_(state){
  * 빈 객체({})를 넣으면 Status가 "IDLE"이고 모든 단계 컬럼이 빈 문자열이어야 함.
  * ==========================================================
  */
-function buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState){
+function buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState, salState, revenueState){
 
   const leads = leadsState || {};
   const mta = mtaState || {};
   const icFunnel = icFunnelState || {};
+  const sal = salState || {};
+  const revenue = revenueState || {};
 
   const columns = CONFIG.PIPELINE.STATUS_COLUMNS;
 
@@ -478,7 +518,9 @@ function buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState){
     headerRow,
     buildRow("New Leads", leads),
     buildRow("MTA Leads", mta),
-    buildRow("IC Funnel", icFunnel)
+    buildRow("IC Funnel", icFunnel),
+    buildRow("SAL", sal),
+    buildRow("Revenue", revenue)
   ];
 
 }
@@ -818,6 +860,8 @@ function pipelineTailHandlerNameByType_(type){
 
   if(type === CONFIG.PIPELINE.TYPES.MTA) return "runMTAPipelineTail";
   if(type === CONFIG.PIPELINE.TYPES.ICFUNNEL) return "runICFunnelPipelineTail";
+  if(type === CONFIG.PIPELINE.TYPES.SAL) return "runSALPipelineTail";
+  if(type === CONFIG.PIPELINE.TYPES.REVENUE) return "runRevenuePipelineTail";
   return "runLeadsPipelineTail";
 
 }
@@ -893,6 +937,35 @@ function releasePipelineLockAndProcessQueue_(){
     CONFIG.LOG.PREFIX + " 락 충돌로 대기 중이던 " + next.type +
     " 파이프라인 자동 재시도 예약."
   );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — PIPELINE_LOCK 수동 강제 해제 (Apps Script 편집기에서 직접 실행 전용)
+ *
+ * WHY (2026-09-01)
+ * 사용자가 Executions 화면에서 오래 걸리는 실행(예: runICFunnelPipelineTail)을
+ * 직접 "Stop execution"으로 강제 종료하면, 그 실행의 finally 블록
+ * (`releasePipelineLockAndProcessQueue_()` 호출부)이 실행되지 않아
+ * `PIPELINE_LOCK`이 계속 잡힌 채로 남는다 — `LOCK_STALE_THRESHOLD_MS`(30분)가
+ * 지나야 자동 self-heal되므로, 사용자가 방금 안전하게 종료했음을 직접
+ * 확인한 경우 30분을 기다리지 않고 즉시 풀 수 있게 하는 수동 진입점.
+ *
+ * ⚠️ 실제로 아무 실행도 안 돌고 있는 게 확실할 때만 실행할 것 — 진짜
+ * 실행 중인 파이프라인의 락을 지우면 그 실행이 끝날 때 자기도 모르게
+ * 다른 실행의 락을 반납/대기열을 처리해버리는 경쟁 상황이 생길 수 있음.
+ * `releasePipelineLockAndProcessQueue_()`를 그대로 재사용 — 락 해제 후
+ * 대기 중이던 타입(예: import 재시도로 큐잉된 ICFUNNEL)이 있으면 자동으로
+ * 이어서 실행 예약까지 됨.
+ * ==========================================================
+ */
+function runForceReleasePipelineLock(){
+
+  releasePipelineLockAndProcessQueue_();
+
+  Logger.log(CONFIG.LOG.PREFIX + " PIPELINE_LOCK 수동 강제 해제 완료.");
 
 }
 
@@ -1045,6 +1118,14 @@ function pipelineStatusPropertyKey_(type){
     return CONFIG.PROPERTIES.PIPELINE_STATUS_ICFUNNEL;
   }
 
+  if(type === CONFIG.PIPELINE.TYPES.SAL){
+    return CONFIG.PROPERTIES.PIPELINE_STATUS_SAL;
+  }
+
+  if(type === CONFIG.PIPELINE.TYPES.REVENUE){
+    return CONFIG.PROPERTIES.PIPELINE_STATUS_REVENUE;
+  }
+
   return CONFIG.PROPERTIES.PIPELINE_STATUS_LEADS;
 
 }
@@ -1118,15 +1199,16 @@ function writePipelineStatusState_(type, state){
  * 때마다 이 함수가 호출되므로 별도 조건부 서식 규칙 없이 매번 값과 함께
  * 색도 최신 상태로 유지됨.
  *
- * **2026-08-26 IC Funnel 행 추가 마이그레이션**: 그리드가 3행(헤더+New
- * Leads+MTA Leads)에서 4행(+ IC Funnel)으로 늘어남 — 이미 3행 블록이
- * 자리잡은 시트(title이 이미 "Pipeline Status")는 위 title 분기를 안 타서
- * 그냥 덮어쓰기만 하면 기존에 A4(그 다음 빈 구분 행)에 있던 내용이 밀리지
- * 않고 깨질 위험이 있음 — IC Funnel 행이 들어갈 자리(anchorRow+3, 예: A4)의
- * 라벨이 아직 "IC Funnel"이 아니면 그 자리에 딱 1행만 insertRowsBefore로
- * 끼워넣은 뒤 씀(사용자 요청: "A4 위에 새 행 추가"). 완전 신규 시트/옛
- * 7행 레이아웃은 이미 grid.length+1(=5)행을 통째로 확보하므로 이 추가
- * 마이그레이션 대상이 아님(중복 삽입 방지, didFullInsert 플래그로 구분).
+ * **2026-08-26 IC Funnel / 2026-09-02 SAL·Revenue 행 추가 마이그레이션**:
+ * 그리드가 3행(헤더+New Leads+MTA Leads) → 4행(+ IC Funnel) → 5행(+ SAL)
+ * → 6행(+ Revenue)으로 늘어남 — 이미 자리잡은 짧은 블록(title이 이미
+ * "Pipeline Status")은 위
+ * title 분기를 안 타서 그냥 덮어쓰기만 하면 그 아래(다음 빈 구분 행 등)에
+ * 있던 내용이 밀리지 않고 깨질 위험이 있음 — 아래 일반화된 루프가 index
+ * 3(IC Funnel)부터 하나씩 라벨을 확인해 없으면 그 자리에 딱 1행만
+ * insertRowsBefore로 끼워넣은 뒤 씀. 완전 신규 시트/옛 7행 레이아웃은 이미
+ * grid.length+1행을 통째로 확보하므로 이 추가 마이그레이션 대상이 아님
+ * (중복 삽입 방지, didFullInsert 플래그로 구분).
  * ==========================================================
  */
 function writePipelineStatusToReadme_(){
@@ -1142,8 +1224,10 @@ function writePipelineStatusToReadme_(){
   const leadsState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.LEADS);
   const mtaState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.MTA);
   const icFunnelState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.ICFUNNEL);
+  const salState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.SAL);
+  const revenueState = readPipelineStatusState_(CONFIG.PIPELINE.TYPES.REVENUE);
 
-  const grid = buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState);
+  const grid = buildPipelineStatusGrid_(leadsState, mtaState, icFunnelState, salState, revenueState);
 
   const anchorRow = CONFIG.PIPELINE.STATUS_ANCHOR_ROW;
   const anchorCol = CONFIG.PIPELINE.STATUS_ANCHOR_COL;
@@ -1164,14 +1248,25 @@ function writePipelineStatusToReadme_(){
     didFullInsert = true;
   }
 
-  if(!didFullInsert && grid.length > 3){
+  if(!didFullInsert){
 
-    const newRowIndex = anchorRow + 3;
-    const newRowLabel = grid[3][0]; // "IC Funnel"
-    const currentLabelAtNewRow = sheet.getRange(newRowIndex, anchorCol).getValue();
+    // 2026-08-26(IC Funnel)/2026-09-02(SAL) 이후 그리드 행이 늘어날 때마다
+    // 재사용되는 일반화된 증분 마이그레이션 — index 3(IC Funnel)부터
+    // grid.length-1(SAL 등 이후 추가되는 행)까지 하나씩 확인해, 그 자리
+    // 라벨이 아직 기대값이 아니면 딱 1행만 insertRowsBefore. 매 반복이 현재
+    // 셀 값을 다시 읽으므로(캐시 없음), 앞선 반복에서 삽입이 일어나 아래
+    // 내용이 밀린 뒤에도 다음 반복이 정확한 위치를 본다 — 3행/4행 레이아웃
+    // 어느 쪽에서 시작해도 안전.
+    for(let i = 3; i < grid.length; i++){
 
-    if(currentLabelAtNewRow !== newRowLabel){
-      sheet.insertRowsBefore(newRowIndex, 1);
+      const rowIndex = anchorRow + i;
+      const expectedLabel = grid[i][0];
+      const currentLabel = sheet.getRange(rowIndex, anchorCol).getValue();
+
+      if(currentLabel !== expectedLabel){
+        sheet.insertRowsBefore(rowIndex, 1);
+      }
+
     }
 
   }
@@ -1873,6 +1968,11 @@ function runLeadsPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
+    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
+    // SAL 각 tail이 끝날 때마다 대기열에 편입시켜 자동으로 뒤이어 실행
+    // (사용자 요청 "역싱크는 트리거로 비동기", MASTER_011_RevenueSync.js 참고).
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
     releasePipelineLockAndProcessQueue_();
 
   } catch(err){
@@ -1887,6 +1987,8 @@ function runLeadsPipelineTail(){
     PropertiesService
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
+
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
 
     releasePipelineLockAndProcessQueue_();
 
@@ -1984,6 +2086,11 @@ function runMTAPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
+    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
+    // SAL 각 tail이 끝날 때마다 대기열에 편입시켜 자동으로 뒤이어 실행
+    // (사용자 요청 "역싱크는 트리거로 비동기", MASTER_011_RevenueSync.js 참고).
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
     releasePipelineLockAndProcessQueue_();
 
   } catch(err){
@@ -1998,6 +2105,8 @@ function runMTAPipelineTail(){
     PropertiesService
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
+
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
 
     releasePipelineLockAndProcessQueue_();
 
@@ -2103,6 +2212,185 @@ function runICFunnelPipelineTail(){
 
   } finally {
 
+    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
+    // SAL 각 tail이 끝날 때마다(성공/실패 무관) 대기열에 편입시켜 자동으로
+    // 뒤이어 실행(사용자 요청 "역싱크는 트리거로 비동기").
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
+    releasePipelineLockAndProcessQueue_();
+
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Run SAL Pipeline Tail
+ *
+ * WHY (2026-09-02)
+ * `runICFunnelPipelineTail()`과 완전히 동일한 구조 — `docs/OpenItems.md`
+ * #38 P1 TODO #1로 SAL을 IC Funnel에서 분리한 전용 외부 시트 파이프라인
+ * (`MASTER_010_SALSync.js`). `syncSALToOPS_()` 하나만 다르고, 그 뒤
+ * `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/`refreshReportGenerate_()`
+ * cascade는 그대로 재사용(제네릭 함수라 `CONFIG.PIPELINE.TYPES.SAL`을 넘기면
+ * README SAL 행의 해당 컬럼들도 자연스럽게 채워짐). PIPELINE_LOCK은
+ * Leads/MTA/IC Funnel과 공유.
+ * ==========================================================
+ */
+function runSALPipelineTail(){
+
+  deleteTriggersByHandlerName_("runSALPipelineTail");
+
+  const type = CONFIG.PIPELINE.TYPES.SAL;
+
+  const state = {
+    status: "RUNNING",
+    stage: "",
+    startedAt: nowTimestamp_(),
+    startedAtMs: Date.now(),
+    finishedAt: "",
+    error: "",
+    stages: {}
+  };
+
+  writePipelineStatusState_(type, state);
+  writePipelineStatusToReadme_();
+
+  try{
+
+    advancePipelineStage_(
+      type, state, "syncSALToOPS_", syncSALToOPS_, ["leadsOps"]
+    );
+
+    advancePipelineStage_(type, state, "refreshOPSSheets_", function(){
+      refreshOPSSheets_(type, state);
+    });
+
+    advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
+
+    advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
+      refreshReportGenerate_(type, state);
+    });
+
+    state.status = "DONE";
+    state.stage = "";
+    state.finishedAt = nowTimestamp_();
+    state.error = "";
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+  } catch(err){
+
+    state.status = "FAILED";
+    state.finishedAt = nowTimestamp_();
+    state.error = String(err && err.message ? err.message : err);
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+    Logger.log(
+      "[SALPipelineTail] FAILED — " +
+      (err && err.message ? err.message : err)
+    );
+
+    throw err;
+
+  } finally {
+
+    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
+    // SAL 각 tail이 끝날 때마다(성공/실패 무관) 대기열에 편입시켜 자동으로
+    // 뒤이어 실행(사용자 요청 "역싱크는 트리거로 비동기").
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
+    releasePipelineLockAndProcessQueue_();
+
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Revenue Pipeline Tail
+ *
+ * WHY (2026-09-02)
+ * `runICFunnelPipelineTail()`/`runSALPipelineTail()`과 완전히 동일한
+ * 구조 — Leads_OPS 필드 소유권 재편(사용자 확정)으로 Revenue/Opportunity
+ * Won Date를 Deal Tracker 외부시트에서 Email 기준 역싱크하는 전용
+ * 파이프라인(`MASTER_011_RevenueSync.js`). CSV Import가 없는 유일한
+ * 타입이라 `importCsv()`에서 스케줄되지 않고, 대신 Leads/MTA/IC Funnel/
+ * SAL 각 tail의 finally 블록이 매번 `enqueuePendingPipelineType_()`로
+ * 이 타입을 대기열에 넣어 `releasePipelineLockAndProcessQueue_()`가
+ * 자동으로 이어서 실행하게 한다. `syncRevenueToOPS_()` 하나만 다르고,
+ * 그 뒤 `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/
+ * `refreshReportGenerate_()` cascade는 그대로 재사용.
+ * ==========================================================
+ */
+function runRevenuePipelineTail(){
+
+  deleteTriggersByHandlerName_("runRevenuePipelineTail");
+
+  const type = CONFIG.PIPELINE.TYPES.REVENUE;
+
+  const state = {
+    status: "RUNNING",
+    stage: "",
+    startedAt: nowTimestamp_(),
+    startedAtMs: Date.now(),
+    finishedAt: "",
+    error: "",
+    stages: {}
+  };
+
+  writePipelineStatusState_(type, state);
+  writePipelineStatusToReadme_();
+
+  try{
+
+    advancePipelineStage_(
+      type, state, "syncRevenueToOPS_", syncRevenueToOPS_, ["leadsOps"]
+    );
+
+    advancePipelineStage_(type, state, "refreshOPSSheets_", function(){
+      refreshOPSSheets_(type, state);
+    });
+
+    advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
+
+    advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
+      refreshReportGenerate_(type, state);
+    });
+
+    state.status = "DONE";
+    state.stage = "";
+    state.finishedAt = nowTimestamp_();
+    state.error = "";
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+  } catch(err){
+
+    state.status = "FAILED";
+    state.finishedAt = nowTimestamp_();
+    state.error = String(err && err.message ? err.message : err);
+
+    writePipelineStatusState_(type, state);
+    writePipelineStatusToReadme_();
+
+    Logger.log(
+      "[RevenuePipelineTail] FAILED — " +
+      (err && err.message ? err.message : err)
+    );
+
+    throw err;
+
+  } finally {
+
+    // REVENUE는 다른 타입을 대기열에 편입시키지 않음(무한 루프 방지) —
+    // 이 타입만 유일하게 "결과로 뭔가를 큐잉"하지 않는 종단(leaf) 파이프라인.
     releasePipelineLockAndProcessQueue_();
 
   }
@@ -2318,11 +2606,27 @@ function testBuildPipelineStatusGrid(){
       finishedAt: "2026-08-26 08:01:00 KST",
       error: "",
       stages: {}
+    },
+    {
+      status: "DONE",
+      stage: "",
+      startedAt: "2026-09-02 08:00:00 KST",
+      finishedAt: "2026-09-02 08:01:00 KST",
+      error: "",
+      stages: {}
+    },
+    {
+      status: "DONE",
+      stage: "",
+      startedAt: "2026-09-02 08:02:00 KST",
+      finishedAt: "2026-09-02 08:03:00 KST",
+      error: "",
+      stages: {}
     }
   );
 
   const ok =
-    grid.length === 4 &&
+    grid.length === 6 &&
     grid[0].length === 14 &&
     grid[0][0] === "Pipeline Status" &&
     grid[0][1] === "Status" &&
@@ -2338,33 +2642,45 @@ function testBuildPipelineStatusGrid(){
     grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED" &&
     grid[3][0] === "IC Funnel" &&
     grid[3][1] === "DONE · 2026-08-26 08:01:00 KST" &&
-    grid[3][2] === "" && grid[3][13] === ""; // 세부 단계 없음 — 전부 빈 문자열
+    grid[3][2] === "" && grid[3][13] === "" && // 세부 단계 없음 — 전부 빈 문자열
+    grid[4][0] === "SAL" &&
+    grid[4][1] === "DONE · 2026-09-02 08:01:00 KST" &&
+    grid[4][2] === "" && grid[4][13] === "" && // 세부 단계 없음 — 전부 빈 문자열
+    grid[5][0] === "Revenue" &&
+    grid[5][1] === "DONE · 2026-09-02 08:03:00 KST" &&
+    grid[5][2] === "" && grid[5][13] === ""; // 세부 단계 없음 — 전부 빈 문자열
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +
     " grid=" + JSON.stringify(grid)
   );
 
-  const emptyGrid = buildPipelineStatusGrid_({}, {}, {});
+  const emptyGrid = buildPipelineStatusGrid_({}, {}, {}, {}, {});
   const emptyOk =
-    emptyGrid.length === 4 &&
-    emptyGrid[1][1] === "IDLE" && emptyGrid[2][1] === "IDLE" && emptyGrid[3][1] === "IDLE" &&
-    emptyGrid[1][2] === "" && emptyGrid[2][2] === "" && emptyGrid[3][2] === "";
+    emptyGrid.length === 6 &&
+    emptyGrid[1][1] === "IDLE" && emptyGrid[2][1] === "IDLE" &&
+    emptyGrid[3][1] === "IDLE" && emptyGrid[4][1] === "IDLE" &&
+    emptyGrid[5][1] === "IDLE" &&
+    emptyGrid[1][2] === "" && emptyGrid[2][2] === "" && emptyGrid[3][2] === "" &&
+    emptyGrid[4][2] === "" && emptyGrid[5][2] === "";
 
   Logger.log(
     "testBuildPipelineStatusGrid (empty defaults): " +
     (emptyOk ? "PASS" : "FAIL")
   );
 
-  // icFunnelState 생략(undefined) 시에도 안전하게 4행으로 렌더링되어야 함
-  // (하위 호환 — 기존 2-인자 호출부가 있다면 깨지지 않게)
+  // icFunnelState/salState/revenueState 생략(undefined) 시에도 안전하게
+  // 6행으로 렌더링되어야 함(하위 호환 — 기존 2/3/4-인자 호출부가 있다면
+  // 깨지지 않게)
   const legacyCallGrid = buildPipelineStatusGrid_({}, {});
   const legacyCallOk =
-    legacyCallGrid.length === 4 && legacyCallGrid[3][0] === "IC Funnel" &&
-    legacyCallGrid[3][1] === "IDLE";
+    legacyCallGrid.length === 6 && legacyCallGrid[3][0] === "IC Funnel" &&
+    legacyCallGrid[3][1] === "IDLE" && legacyCallGrid[4][0] === "SAL" &&
+    legacyCallGrid[4][1] === "IDLE" && legacyCallGrid[5][0] === "Revenue" &&
+    legacyCallGrid[5][1] === "IDLE";
 
   Logger.log(
-    "testBuildPipelineStatusGrid (icFunnelState omitted): " +
+    "testBuildPipelineStatusGrid (icFunnelState/salState/revenueState omitted): " +
     (legacyCallOk ? "PASS" : "FAIL")
   );
 

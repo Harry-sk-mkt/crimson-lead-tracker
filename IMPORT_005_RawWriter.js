@@ -12,9 +12,16 @@
  * 00 Import
  *
  * Version
- * v4.1.0
+ * v4.2.0
  *
  * Change Log
+ * v4.2.0 (2026-09-02)
+ * - writeSALRaw() 신규(`docs/OpenItems.md` #38, `MASTER_010_SALSync.js`) —
+ *   SAL을 IC Funnel에서 분리해 전용 외부 스프레드시트(CONFIG.SAL.EXTERNAL.
+ *   SPREADSHEET_ID)에 append. 다른 세 함수와 달리 `filterOutExactDuplicateRawRecords_()`/
+ *   `appendSheetRecords()`에 `targetSpreadsheet`(외부 openById() 결과)를
+ *   명시 전달(IMPORT_006_SheetWriter.js v4.2.0/IMPORT_008_RawDeduplicator.js
+ *   v1.1.0의 신규 optional 파라미터).
  * v4.1.0 (2026-08-25)
  * - writeLeadRaw()/writeMTARaw()/writeICFunnelRaw() 모두 appendSheetRecords()
  *   호출 전에 filterOutExactDuplicateRawRecords_()(IMPORT_008_RawDeduplicator.js
@@ -115,6 +122,46 @@ function writeICFunnelRaw(records){
     CONFIG.IC_FUNNEL.SHEET,
     dedup.kept,
     CONFIG.RAW_DATE_COLUMNS.IC_FUNNEL
+  );
+
+  return {
+    appended: dedup.kept.length,
+    skipped: dedup.skipped.length
+  };
+
+}
+
+/**
+ * ==========================================================
+ * Write SAL Raw (전용 외부 스프레드시트, Append, 완전 동일 중복 제외)
+ *
+ * WHY
+ * `docs/OpenItems.md` #38 — SAL을 IC Funnel 리포트/메인 스프레드시트에서
+ * 완전히 분리, `openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)로
+ * 연 외부 스프레드시트의 SAL_Raw 탭에 append. dedup/append 둘 다 그
+ * Spreadsheet 객체를 명시 전달.
+ * ==========================================================
+ *
+ * @param {Object[]} records
+ * @return {{ appended: number, skipped: number }}
+ */
+function writeSALRaw(records){
+
+  const externalFile = openSALExternalSpreadsheet_();
+
+  const dedup =
+    filterOutExactDuplicateRawRecords_(
+      CONFIG.SAL.SHEET,
+      records,
+      externalFile
+    );
+
+  appendSheetRecords(
+    CONFIG.SAL.SHEET,
+    dedup.kept,
+    CONFIG.RAW_DATE_COLUMNS.SAL,
+    [],
+    externalFile
   );
 
   return {

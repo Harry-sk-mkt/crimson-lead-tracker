@@ -103,6 +103,38 @@ refresh(Leads_OPS/MTA_Master 전체 스캔)는 IC Funnel 데이터 크기와 무
 `runMTAPipelineTail()`과 동일하게 `refreshOPSSheets_()`/`refreshReportFYDropdowns_()`/
 `refreshReportGenerate_()`까지 이어서 실행하도록 확장(`runICFunnelPipelineTail()` v1.18.0).
 
+## Field Ownership 전면 재편 — SAL/Revenue 분리 (2026-09-02, 사용자 확정)
+
+`docs/OpenItems.md` #38(SAL 8월 갭)에서 시작된 조사가 Leads_OPS 전체 필드 소유권
+재설계로 이어짐 — "Revenue가 지금까지 MTA_Master 터치 기반으로만 동기화돼 Search_OPS가
+SAL과 동일한 '터치 없으면 갱신 안 됨' 문제를 겪고 있다"는 게 발견되면서, 리포트별 소유권을
+아래처럼 완전히 분리:
+
+- **New Leads**(Leads_Raw/Master) — 기본정보 + First Touch + Lead Priority(그대로)
+- **MTA**(MTA_Master, 터치 기반) — `#Touches`(신규, 이 리드의 터치 개수)만. Revenue/Lead
+  Priority sync는 여기서 완전히 제거(`MASTER_003_MTAFunnelSync.js` v1.10.0)
+- **SAL**(SAL_Raw, 전용 외부 스프레드시트) — Sales Accepted Date만(`MASTER_010_SALSync.js`,
+  IC Funnel에서 분리된 배경은 위 "IC Funnel Sync" 섹션 아래 별도 기록 참고)
+- **IC Funnel**(ICFunnel_Raw) — IC Booked/Completed Date만. Opportunity Won Date는
+  제거(`MASTER_009_ICFunnelSync.js` v1.7.0)
+- **Revenue**(신규, Deal Tracker 외부 스프레드시트, `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.
+  COLUMNS.EMAIL`로 Email 매칭) — Revenue + Opportunity Won Date(`MASTER_011_RevenueSync.js`
+  신규). Deal Tracker에 같은 Email로 여러 딜이 있으면 Revenue는 합계, Opportunity Won
+  Date는 가장 최근 Close Date를 채택(가정 — 실측 미검증).
+
+Lead Priority 다운그레이드 방지 가드(`applyPriorityDowngradeGuard_()`)는 IC Funnel 경로에
+안전장치로 유지(사용자 확정, `docs/OpenItems.md` #20 New P1 8월 갭 재발 방지) — MTA 경로의
+동일 가드/sync는 "MTA=터치 지표만" 원칙에 따라 제거.
+
+Revenue는 CSV Import가 없는 유일한 파이프라인이라(Deal Tracker는 이미 존재하는 외부 시트를
+읽기만 함) `importCsv()`에서 스케줄되지 않는다 — 대신 Leads/MTA/IC Funnel/SAL 4개
+파이프라인 tail이 끝날 때마다(성공/실패 무관) `enqueuePendingPipelineType_(CONFIG.PIPELINE.
+TYPES.REVENUE)`로 대기열에 편입시켜, 기존 락 충돌 자동재시도 FIFO 인프라
+(`releasePipelineLockAndProcessQueue_()`)가 그대로 재사용되어 매번 자동으로 뒤이어
+실행된다(사용자 요청 "역싱크는 트리거로 비동기"). README Pipeline Status 표에 "SAL"/
+"Revenue" 행이 각각 추가됨(`buildPipelineStatusGrid_()`, 헤더+New Leads+MTA Leads+IC
+Funnel+SAL+Revenue = 6행).
+
 ## Duplicate Email Handling — ⚠️ 미해결
 
 **문서 원칙:**
@@ -152,10 +184,12 @@ Duplicate Email
 | IC Requested | Marketing (매 sync마다 리셋됨 — 아래 "IC Request Tracking" 참고) |
 | Last IC Requested Date | Marketing |
 | Total IC Requests | System (mergeOPS()가 자동 계산, 직접 편집 금지) |
-| IC Booked Date | Salesforce |
-| IC Completed Date | Salesforce |
-| Opportunity Won Date | Salesforce (2026-07-28부터 ACQ_REP/Events/BOFU/Content Revenue의 소스 아님 — Deal Tracker로 대체, 위 2트랙 예외 참고. NewP1_REP/Search_OPS는 여전히 참조) |
-| Revenue | Salesforce (위와 동일) |
+| #Touches | System (2026-09-02 신규 — `syncMTAFunnelToOPS_()`가 MTA_Master 터치 개수로 계산) |
+| Sales Accepted Date | Salesforce (2026-09-02부터 SAL_Raw 전용 외부시트 기반, `syncSALToOPS_()` — 위 "Field Ownership 전면 재편" 참고) |
+| IC Booked Date | Salesforce (`syncICFunnelToOPS_()`) |
+| IC Completed Date | Salesforce (`syncICFunnelToOPS_()`) |
+| Opportunity Won Date | Salesforce (2026-09-02부터 Deal Tracker 외부시트 Email 매칭 기반, `syncRevenueToOPS_()` — 2026-07-28부터 ACQ_REP/Events/BOFU/Content Revenue의 소스는 아니었고, 위 2트랙 예외 참고. NewP1_REP/Search_OPS는 여전히 참조) |
+| Revenue | Salesforce (위와 동일 — 2026-09-02부터 `syncRevenueToOPS_()`) |
 | Revenue Actual | Marketing |
 | Notes | Marketing |
 

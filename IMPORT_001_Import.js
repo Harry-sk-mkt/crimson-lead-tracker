@@ -11,9 +11,17 @@
  * - Master 빌드
  *
  * Version
- * v3.10.0
+ * v3.11.0
  *
  * Change Log
+ * v3.11.0 (2026-09-02)
+ * - **SAL Import Type 신규**(`docs/OpenItems.md` #38, `MASTER_010_SALSync.js`) —
+ *   IC Funnel과 동일한 패턴: `importCsv()`의 `case "SAL"`이 `writeSALRaw()`
+ *   (IMPORT_005_RawWriter.js, 외부 스프레드시트) 직후
+ *   `scheduleSALPipelineTail_()`(백그라운드 트리거)를 호출.
+ *   `formatAppendSummary_()`에 `importType === "SAL"` 분기 추가(IC_FUNNEL과
+ *   동일 형태, 실패 시 안내 함수만 `runSyncSALToOPS()`로 교체),
+ *   `importSALReport()` 메뉴 진입점 신규, `testFormatAppendSummary()` 갱신.
  * v3.10.0 (2026-08-26)
  * - **버그 수정 — 실사용 중 실제 발생**: v3.9.0에서 `case "IC_FUNNEL"`이
  *   `syncICFunnelToOPS_()`를 동기 호출하도록 배선했으나, 그 함수 끝의 7개
@@ -90,7 +98,7 @@
  * Open Upload Dialog
  * ==========================================================
  *
- * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
+ * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL" | "SAL"
  */
 function showUploadDialog_(importType) {
 
@@ -129,8 +137,8 @@ function showUploadDialog_(importType) {
  *
  * INPUT
  * appendResult : { appended, backgroundScheduled?, backgroundSkipped? } | null
- *   (IC_FUNNEL처럼 대응하는 append 함수가 없는 Import Type이면 null)
- * importType : "LEADS" | "MTA" | "IC_FUNNEL"
+ *   (IC_FUNNEL/SAL처럼 대응하는 append 함수가 없는 Import Type이면 null)
+ * importType : "LEADS" | "MTA" | "IC_FUNNEL" | "SAL"
  *   backgroundSkipped 케이스에서 어느 파이프라인 tail 함수를 안내할지 결정
  *   (MTA면 runMTAPipelineTail(), 그 외엔 runLeadsPipelineTail() — 2026-08-06 추가).
  *
@@ -143,11 +151,15 @@ function showUploadDialog_(importType) {
  */
 function formatAppendSummary_(appendResult, importType){
 
-  if(importType === "IC_FUNNEL"){
+  if(importType === "IC_FUNNEL" || importType === "SAL"){
+
+    const label = (importType === "SAL") ? "SAL" : "IC Funnel";
+    const manualRetryFn = (importType === "SAL") ? "runSyncSALToOPS()" : "runSyncICFunnelToOPS()";
+    const manualRetryFile = (importType === "SAL") ? "MASTER_010_SALSync.js" : "MASTER_009_ICFunnelSync.js";
 
     if(appendResult && appendResult.backgroundScheduled){
       return (
-        "IC Funnel Sync가 백그라운드에서 진행됩니다 — 잠시 후 Leads_OPS에 " +
+        label + " Sync가 백그라운드에서 진행됩니다 — 잠시 후 Leads_OPS에 " +
         "반영됩니다(진행상태는 Apps Script 편집기 Executions 로그 참고)."
       );
     }
@@ -155,12 +167,12 @@ function formatAppendSummary_(appendResult, importType){
     if(appendResult && appendResult.backgroundSkipped){
       return (
         "⚠️ 다른 백그라운드 작업이 진행 중이라 이번 사이클은 sync를 건너뛰었습니다. " +
-        "몇 분 후(다른 작업이 끝난 뒤) MASTER_009_ICFunnelSync.js의 " +
-        "runSyncICFunnelToOPS()를 Apps Script 편집기에서 직접 Run 해주세요."
+        "몇 분 후(다른 작업이 끝난 뒤) " + manualRetryFile + "의 " +
+        manualRetryFn + "를 Apps Script 편집기에서 직접 Run 해주세요."
       );
     }
 
-    return "IC Funnel Sync 완료 — Leads_OPS에 반영되었습니다.";
+    return label + " Sync 완료 — Leads_OPS에 반영되었습니다.";
 
   }
 
@@ -216,6 +228,8 @@ function testFormatAppendSummary(){
   const noNew = formatAppendSummary_({ appended: 0 }, "MTA");
   const icFunnelScheduled = formatAppendSummary_({ backgroundScheduled: true }, "IC_FUNNEL");
   const icFunnelSkipped = formatAppendSummary_({ backgroundSkipped: true }, "IC_FUNNEL");
+  const salScheduled = formatAppendSummary_({ backgroundScheduled: true }, "SAL");
+  const salSkipped = formatAppendSummary_({ backgroundSkipped: true }, "SAL");
 
   const ok =
     mtaSkipped.indexOf("runMTAPipelineTail()") !== -1 &&
@@ -224,7 +238,9 @@ function testFormatAppendSummary(){
     scheduled.indexOf("백그라운드에서 진행됩니다") !== -1 &&
     noNew.indexOf("반영할 신규 레코드가 없었습니다") !== -1 &&
     icFunnelScheduled.indexOf("백그라운드에서 진행됩니다") !== -1 &&
-    icFunnelSkipped.indexOf("runSyncICFunnelToOPS()") !== -1;
+    icFunnelSkipped.indexOf("runSyncICFunnelToOPS()") !== -1 &&
+    salScheduled.indexOf("SAL Sync가 백그라운드에서 진행됩니다") !== -1 &&
+    salSkipped.indexOf("runSyncSALToOPS()") !== -1;
 
   Logger.log(
     "testFormatAppendSummary: " + (ok ? "PASS" : "FAIL") +
@@ -296,7 +312,7 @@ function testFormatRawDedupSummary(){
 /**
  * Execute Import Pipeline
  *
- * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL"
+ * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL" | "SAL"
  * @param {string} csvText
  */
 function importCsv(
@@ -440,6 +456,11 @@ function importCsv(
         appendResult = scheduleICFunnelPipelineTail_();
         break;
 
+      case "SAL":
+        rawWriteResult = writeSALRaw(rawRecords);
+        appendResult = scheduleSALPipelineTail_();
+        break;
+
       default:
         throw new Error(
           "Unknown Import Type : " +
@@ -502,5 +523,12 @@ function importMTAReport() {
 function importICFunnelReport() {
 
   showUploadDialog_("IC_FUNNEL");
+
+}
+
+
+function importSALReport() {
+
+  showUploadDialog_("SAL");
 
 }

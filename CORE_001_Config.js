@@ -9,9 +9,54 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.53.0
+ * v1.56.0
  *
  * Change Log
+ * v1.56.0 (2026-09-02)
+ * - **아키텍처 변경 2단계(사용자 확정) — Leads_OPS 필드 소유권을 리포트별로
+ *   완전히 재편**: New Leads(기본정보+First Touch+Lead Priority) / MTA(터치
+ *   지표만, #Touches 신규) / SAL(Sales Accepted Date) / IC Funnel(IC
+ *   Booked/Completed만, Won Date 제거) / Revenue(신규, Deal Tracker 외부
+ *   시트에서 Email 기준 역싱크 — Revenue + Opportunity Won Date). 배경:
+ *   Revenue가 지금까지 MTA_Master(터치 기반) 경로로만 동기화돼 Search_OPS가
+ *   SAL과 동일한 "터치 없으면 갱신 안 됨" 구조적 문제를 그대로 겪고
+ *   있었음(SAL 8월 갭 조사 중 발견). `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.
+ *   COLUMNS.EMAIL`(V열, 22) 신규 — 사용자 확인. `CONFIG.PIPELINE.TYPES.
+ *   REVENUE`/`CONFIG.PROPERTIES.PIPELINE_STATUS_REVENUE` 신규(
+ *   `MASTER_011_RevenueSync.js`) — CSV Import가 없는 유일한 파이프라인이라
+ *   Leads/MTA/IC Funnel/SAL 각 tail이 끝날 때마다 대기열에 자동 편입되는
+ *   방식으로 트리거(사용자 요청 "역싱크는 트리거로 비동기"). Lead Priority
+ *   다운그레이드 방지 가드(`applyPriorityDowngradeGuard_()`)는 IC Funnel
+ *   경로에 안전장치로 유지(사용자 확정, `docs/OpenItems.md` #20 재발 방지),
+ *   MTA 경로의 Priority sync는 "MTA=터치 지표만" 원칙에 따라 제거.
+ * v1.55.1 (2026-09-02)
+ * - `CONFIG.SAL.EXTERNAL.SPREADSHEET_ID` 채움(사용자가 새로 만들어 공유한
+ *   외부 스프레드시트 ID) — v1.55.0에서 빈 문자열로 남겨뒀던 부분.
+ * v1.55.0 (2026-09-02)
+ * - **아키텍처 변경(사용자 확정) — SAL을 IC Funnel 리포트에서 완전히 분리,
+ *   전용 외부 스프레드시트로 독립**. 배경: `docs/OpenItems.md` #38 P1 TODO #1 —
+ *   Salesforce IC Funnel 리포트가 "New (Not Contacted) Date Time"(SAL 판정
+ *   필드) 값을 export하지 못하는 버그(IC Booked Date 2016~2026 필터 범위
+ *   문제로 추정)가 리포트 재구성으로도 해결이 안 됨. 사용자 결정: "SAL만 IC
+ *   Funnel 리포트에 묶지 말고 별도 리포트+별도 Raw 시트로 분리한 후 외부
+ *   시트로 만들자" — 메인 스프레드시트 용량 문제(오픈 속도 저하)도 같이 해결.
+ *   `CONFIG.IC_FUNNEL.COLUMNS.SALES_ACCEPTED_DATE`/`RAW_DATE_COLUMNS.IC_FUNNEL`의
+ *   "New (Not Contacted) Date Time" 완전 제거(MASTER_009_ICFunnelSync.js v1.6.0
+ *   참고) — IC Funnel export 버그의 영향을 원천 차단. `CONFIG.SAL` 신규
+ *   (EXTERNAL.SPREADSHEET_ID는 사용자가 새 Google Sheet를 만들어 공유해줄
+ *   ID로 채워야 함 — 채워지기 전까지 비활성, MASTER_010_SALSync.js 파일 헤더
+ *   참고), `REQUIRED_FIELDS.SAL`/`RAW_DATE_COLUMNS.SAL` 신규,
+ *   `PIPELINE.TYPES.SAL`/`PROPERTIES.PIPELINE_STATUS_SAL` 신규(IC Funnel과
+ *   동일하게 PIPELINE_LOCK은 공유, README Pipeline Status 표에 독립 행).
+ * v1.54.0 (2026-09-01)
+ * - `CONFIG.IC_FUNNEL.COLUMNS.SALES_ACCEPTED_DATE`("New (Not Contacted) Date
+ *   Time") 신규 — SAL 8월 갭(305 vs 243) 조사 결과, SAL도 IC Booked/Completed/
+ *   Won Date와 같은 Lead 레벨 스냅샷 지연을 겪음이 확인됨(TEMPQA_045). 이
+ *   필드를 `RAW_DATE_COLUMNS.IC_FUNNEL`에도 추가(day-first locale 보호).
+ *   `MASTER_009_ICFunnelSync.js`가 이 필드를 Leads_OPS의 기존 "Sales Accepted
+ *   Date" 컬럼으로 동기화, `MASTER_003_MTAFunnelSync.js`는 이 필드 관리에서
+ *   손을 뗌(Revenue만 남음) — IC 3개 필드 때와 동일한 "두 파이프라인이 같은
+ *   필드를 다른 순서로 덮어쓰는 위험 제거" 원칙.
  * v1.53.0 (2026-09-01)
  * - `CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES` 신규 — Import 락 충돌로
  *   스킵됐던 파이프라인을 "다른 백그라운드 작업이 끝나면 자동으로 이어서
@@ -448,6 +493,48 @@ const CONFIG = {
       // computeICFunnelByLeadId_()가 빈 문자열 반환, sync 단계에서 자동 skip).
       LEAD_PRIORITY: "Lead Priority"
 
+      // 2026-09-01 추가했던 SALES_ACCEPTED_DATE("New (Not Contacted) Date
+      // Time")는 2026-09-02 완전 제거 — Salesforce IC Funnel 리포트가 이
+      // 필드를 export하지 못하는 버그(docs/OpenItems.md #38 P1 TODO #1)가
+      // 리포트 재구성으로도 안 풀려, 사용자 결정으로 SAL을 IC Funnel에서
+      // 완전히 분리해 전용 외부 시트(CONFIG.SAL, MASTER_010_SALSync.js)로
+      // 이관했다.
+
+    }
+
+  },
+
+  /**
+   * SAL (Sales Accepted) — 전용 외부 스프레드시트
+   *
+   * 2026-09-02 신규 — docs/OpenItems.md #38 P1 TODO #1 참고. IC Funnel
+   * 리포트가 "New (Not Contacted) Date Time" 필드를 export하지 못하는
+   * 버그가 리포트 재구성으로도 안 풀려, SAL 판정만 별도 Salesforce
+   * 리포트("All leads" 범위, IC Booked Date 필터 없음) + 전용 외부
+   * 스프레드시트로 완전히 분리(메인 스프레드시트 용량/오픈 속도 문제도
+   * 같이 해결). MASTER_010_SALSync.js가 소비.
+   *
+   * ⚠️ EXTERNAL.SPREADSHEET_ID는 사용자가 새 Google Sheet를 만들어 그
+   * 안에 이름이 정확히 SHEET("SAL_Raw")인 탭을 만든 뒤, 그 스프레드시트
+   * ID를 공유해줘야 채울 수 있다 — 빈 문자열인 동안은 SAL Import/Sync가
+   * 전부 명시적 에러로 실패한다(추측으로 아무 ID나 채워넣지 않음, "No
+   * Assumptions" 원칙).
+   */
+  SAL: {
+
+    EXTERNAL: {
+      // 2026-09-02 사용자 공유 — https://docs.google.com/spreadsheets/d/1Vo8iYMT6s0jAtjLbDR7xTwk7gBjNfSyTEGIdmYBLbgE
+      SPREADSHEET_ID: "1Vo8iYMT6s0jAtjLbDR7xTwk7gBjNfSyTEGIdmYBLbgE"
+    },
+
+    SHEET: "SAL_Raw",
+
+    COLUMNS: {
+      LEAD_ID: "Lead ID",
+      // 향후 docs/OpenItems.md #10(SAL에서 Lead Status="Nurturing" 제외)
+      // 구현 시 사용 예정 — 지금은 sync 대상 아님(computeSALByLeadId_ 참고).
+      LEAD_STATUS: "Lead Status",
+      SALES_ACCEPTED_DATE: "New (Not Contacted) Date Time"
     }
 
   },
@@ -474,6 +561,11 @@ const CONFIG = {
       ],
 
       IC_FUNNEL: [
+        "Lead ID"
+      ],
+
+      // 2026-09-02 추가 — SAL 전용 외부 시트(CONFIG.SAL) 신규.
+      SAL: [
         "Lead ID"
       ]
 
@@ -514,10 +606,19 @@ const CONFIG = {
     // 2026-08-26 추가 — ICFunnel_Raw 재도입. 실측 확인된 값이 day-first
     // ("6/8/2026, 3:05 pm", "10/9/2026")라 Sales Accepted Date와 동일한
     // locale 오해석 위험이 있음 — 반드시 Plain Text 보호 대상에 포함.
+    // "New (Not Contacted) Date Time"은 2026-09-01 추가했다가 2026-09-02
+    // SAL_RAW로 이관되며 제거(CONFIG.SAL 신규 참고).
     IC_FUNNEL: [
       "IC Booked Date",
       "IC Completed Date (Pre-Conversion)",
       "Opportunity Won Date"
+    ],
+
+    // 2026-09-02 추가 — SAL_Raw(외부 시트). CSV 실측 확인된 값이 IC Funnel과
+    // 동일 day-first 포맷("10/8/2026, 3:15 pm")일 것으로 예상되는 필드라
+    // Plain Text 보호 대상에 포함(첫 실제 재export 시 실측 확인 필요).
+    SAL: [
+      "New (Not Contacted) Date Time"
     ]
 
   },
@@ -540,6 +641,12 @@ const CONFIG = {
     // 2026-08-26 추가 — IC Funnel 백그라운드 파이프라인을 README Pipeline
     // Status 표에 3번째 행으로 표시하기 위함(pipelineStatusPropertyKey_() 참고).
     PIPELINE_STATUS_ICFUNNEL: "PIPELINE_STATUS_ICFUNNEL",
+    // 2026-09-02 추가 — SAL_Raw(외부 시트) 백그라운드 파이프라인, README
+    // Pipeline Status 표 4번째 행(pipelineStatusPropertyKey_() 참고).
+    PIPELINE_STATUS_SAL: "PIPELINE_STATUS_SAL",
+    // 2026-09-02 추가 — Revenue/Won Date 역싱크(Deal Tracker 기반) 파이프라인,
+    // README Pipeline Status 표 5번째 행.
+    PIPELINE_STATUS_REVENUE: "PIPELINE_STATUS_REVENUE",
 
     // 2026-09-01 추가 — 락 충돌로 스킵된 타입을 자동 재시도 대기열에 담아두기
     // 위함(사용자 요청, MASTER_002_PipelineAsync.js releasePipelineLockAndProcessQueue_()
@@ -573,7 +680,20 @@ const CONFIG = {
       // README Pipeline Status 표(2행: New Leads/MTA Leads)엔 포함하지 않음
       // (writePipelineStatusState_()가 MTA 외엔 전부 LEADS 키로 저장하는 구조라
       // 그대로 얹으면 Leads 상태를 덮어씀 — 의도적으로 별도 트리거만 사용).
-      ICFUNNEL: "ICFUNNEL"
+      ICFUNNEL: "ICFUNNEL",
+
+      // 2026-09-02 추가 — SAL_Raw(외부 시트) 도입. ICFUNNEL과 동일하게
+      // PIPELINE_LOCK 공유, README Pipeline Status 표에 독립 행(4번째,
+      // buildPipelineStatusGrid_() 참고).
+      SAL: "SAL",
+
+      // 2026-09-02 추가 — Revenue/Opportunity Won Date를 Deal Tracker(외부
+      // 시트)에서 Email 기준으로 역싱크(MASTER_011_RevenueSync.js). CSV
+      // Import가 없는 유일한 파이프라인 — Leads/MTA/IC Funnel/SAL 각
+      // 파이프라인 tail이 끝날 때마다 `enqueuePendingPipelineType_()`로
+      // 이 타입을 큐에 넣어 항상 뒤이어 자동 실행되게 함(사용자 요청 —
+      // "역싱크는 트리거로 비동기").
+      REVENUE: "REVENUE"
     },
 
     TRIGGER_DELAY_MS: 1000,
@@ -925,9 +1045,11 @@ const CONFIG = {
                                   //     대부분 2022년 이전 딜)
           CLOSE_DATE: 10,        // J  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
           CREATED_DATE: 11,      // K  (향후 코호트1/2 분리용 — 이번 라운드에선 미사용, 보존)
-          LEAD_SOURCE_DETAIL: 23 // W  (2026-07-28부터 미사용 — 세그먼트 분류는 이제 SEGMENT 컬럼
+          LEAD_SOURCE_DETAIL: 23, // W  (2026-07-28부터 미사용 — 세그먼트 분류는 이제 SEGMENT 컬럼
                                   //     직접 사용, Lead Source Detail은 더 이상 campaign/detail
                                   //     파라미터로 안 씀)
+          EMAIL: 22               // V  (2026-09-02 추가 — Leads_OPS Revenue/Opportunity Won Date
+                                  //     역싱크 매칭키, MASTER_011_RevenueSync.js 참고. 사용자 확인.)
         },
 
         // 조정 베이스 = 전체 딜 − 조정치(세일즈 레퍼럴 + 업셀) — 분모·분자 모두 제외.

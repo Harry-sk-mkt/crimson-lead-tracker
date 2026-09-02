@@ -27,6 +27,30 @@
 | `23_OPS_Write.js` | Leads_OPS 시트 쓰기 |
 | `99_ResetRawMaster.js` | `resetIncrementalCounters()` — Raw/Master 수동 초기화 후 카운터 리셋용 |
 
+## 2026-09-02 변경 이력
+
+- **SAL 전용 외부 스프레드시트 분리**(`docs/OpenItems.md` #38 P1 TODO #1 —
+  Salesforce IC Funnel 리포트가 "New (Not Contacted) Date Time"(SAL 판정
+  필드)을 export하지 못하는 버그가 리포트 재구성으로도 안 풀려, 사용자 결정으로
+  아예 별도 리포트+전용 외부 스프레드시트로 분리): `CONFIG.SAL`(`CORE_001_Config.js`)
+  신규, `MASTER_010_SALSync.js` 신규 — ICFunnel_Raw와 동일 아키텍처(Master 빌드
+  없음, Raw→직접 Leads_OPS sync)이되 Raw 시트 자체가 이 프로젝트 메인
+  스프레드시트가 아니라 `CONFIG.SAL.EXTERNAL.SPREADSHEET_ID`로 지정한 **외부**
+  스프레드시트에 있음(`openSALExternalSpreadsheet_()`). 이 때문에
+  `IMPORT_006_SheetWriter.js`의 `appendSheetRecords()`/`IMPORT_008_RawDeduplicator.js`의
+  `filterOutExactDuplicateRawRecords_()`에 optional `targetSpreadsheet` 파라미터가
+  추가됨(생략 시 기존과 동일하게 메인 스프레드시트 대상, 기존 호출부 전부 하위
+  호환) — `IMPORT_005_RawWriter.js`의 신규 `writeSALRaw()`가 이 파라미터로 외부
+  스프레드시트에 직접 append. `importSALReport()`(`IMPORT_001_Import.js`) 메뉴
+  진입점("📥 Update → Import SAL Report") 신규, `importCsv()`의 `case "SAL"`이
+  `writeSALRaw()` 직후 `scheduleSALPipelineTail_()`(백그라운드 트리거,
+  `runSALPipelineTail()` — `MASTER_002_PipelineAsync.js` v1.24.0)를 호출. IC
+  Funnel과 달리 README Pipeline Status 표에 독립 행("SAL")으로 반영됨.
+  `MASTER_009_ICFunnelSync.js`(v1.6.0)는 Sales Accepted Date 관리에서 완전히
+  손을 뗌. **⚠️ 사용 전 필수**: `CONFIG.SAL.EXTERNAL.SPREADSHEET_ID`를 실제
+  외부 스프레드시트 ID로 채워야 하고, 그 스프레드시트 안에 "SAL_Raw"라는
+  이름의 탭이 있어야 함 — 비어있으면 명시적 에러로 실패(추측 방지).
+
 ## 2026-08-26 변경 이력
 
 - **ICFunnel_Raw 재도입**(`docs/OpenItems.md` #32 — ACQ_REP IC Booked/Complete

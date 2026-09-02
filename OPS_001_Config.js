@@ -7,9 +7,23 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.4
+ * v2.6
  *
  * Change Log
+ * v2.6 (2026-09-02)
+ * - **"#Touches" 신규 컬럼**(HEADER + SYNC_COLUMNS) — Leads_OPS 필드
+ *   소유권 재편(사용자 확정): MTA는 이제 "터치 지표만" 관리(Revenue/Lead
+ *   Priority sync 제거), 그 대신 이 리드의 MTA_Master 터치 개수를
+ *   `syncMTAFunnelToOPS_()`(`MASTER_003_MTAFunnelSync.js` v1.10.0)가
+ *   동기화. "Total IC Requests" 바로 뒤에 배치(부속 널쳐링 지표 그룹).
+ *   SYNC_COLUMNS 주석 전면 갱신 — Revenue/Opportunity Won Date 실제
+ *   소유 함수가 `syncRevenueToOPS_()`(`MASTER_011_RevenueSync.js` 신규,
+ *   Deal Tracker 외부시트 Email 매칭)로 이관된 사실 반영.
+ * v2.5 (2026-09-01)
+ * - 코드 변경 없음 — SYNC_COLUMNS 주변 주석만 정정. "Sales Accepted Date"의
+ *   실제 소유 함수가 SAL 8월 갭 조사(docs/OpenItems.md #32) 결과 MTA_Master
+ *   기반 `syncMTAFunnelToOPS_()`에서 ICFunnel_Raw 기반
+ *   `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`)로 이관된 사실을 반영.
  * v2.4 (2026-08-26)
  * - 코드 변경 없음 — SF_COLUMNS/SYNC_COLUMNS 주변 주석만 정정. IC Booked/
  *   Completed/Won Date의 실제 소유 함수가 ICFunnel_Raw 재도입으로
@@ -98,16 +112,26 @@ const OPS = {
 
   /*
   ==========================================================
-  IC FUNNEL SYNC COLUMNS (2026-07-21 신규)
+  FUNNEL SYNC COLUMNS (2026-07-21 신규, 2026-09-02 필드 소유권 재편)
 
   mergeOPS()는 이 필드들을 Master 값으로 덮어쓰지 않고,
-  기존 OPS 값을 보존한다 — 실제 갱신은 아래 2개 함수가 필드별로
-  나눠 담당한다(2026-08-26, docs/OpenItems.md #32):
-  - "IC Booked Date" / "IC Completed Date" / "Opportunity Won Date"
+  기존 OPS 값을 보존한다 — 실제 갱신은 아래 4개 함수가 필드별로
+  나눠 담당한다(리포트별 소유권 완전 분리, 사용자 확정):
+  - "IC Booked Date" / "IC Completed Date"
     → syncICFunnelToOPS_()  (MASTER_009_ICFunnelSync.js, ICFunnel_Raw 기반,
-      터치 무관 Lead 레벨 최신 상태)
-  - "Revenue" / "Sales Accepted Date"
-    → syncMTAFunnelToOPS_() (MASTER_003_MTAFunnelSync.js, MTA_Master 기반)
+      터치 무관 Lead 레벨 최신 상태 — Opportunity Won Date는 2026-09-02부터
+      이 함수 소유가 아님, 아래 참고)
+  - "Sales Accepted Date"
+    → syncSALToOPS_()  (MASTER_010_SALSync.js, SAL_Raw 전용 외부시트 기반 —
+      2026-09-02부터 IC Funnel에서 분리, docs/OpenItems.md #38)
+  - "#Touches"
+    → syncMTAFunnelToOPS_() (MASTER_003_MTAFunnelSync.js, MTA_Master 기반 —
+      2026-09-02부터 "터치 지표만" 관리, Revenue/Lead Priority는 제외됨)
+  - "Revenue" / "Opportunity Won Date"
+    → syncRevenueToOPS_()  (MASTER_011_RevenueSync.js, Deal Tracker
+      외부시트 기반, Email 매칭 — 2026-09-02 신규. Revenue가 MTA_Master
+      터치 기반으로만 동기화될 때 Search_OPS가 SAL과 동일한 "터치 없으면
+      갱신 안 됨" 문제를 겪던 것을 해결)
   ==========================================================
   */
   SYNC_COLUMNS : [
@@ -116,7 +140,8 @@ const OPS = {
     "IC Completed Date",
     "Opportunity Won Date",
     "Revenue",
-    "Sales Accepted Date"
+    "Sales Accepted Date",
+    "#Touches"
 
   ],
 
@@ -201,6 +226,8 @@ const OPS = {
     "Last IC Requested Date",
 
     "Total IC Requests",
+
+    "#Touches",
 
     "Sales Accepted Date",
 

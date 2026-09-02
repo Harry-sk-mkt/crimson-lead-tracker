@@ -544,3 +544,117 @@
     도 같은 딕셔너리를 쓰므로 이번에 제외한 3개 UTM 키에 걸린 이미 빌드된 Leads_Master/
     MTA_Master 행의 Business Segment는 소급 반영 안 됨(표본 1~2건씩이라 영향 미미로 판단,
     #22 기존 방침대로 rebuild는 보류 — 사용자 확인, 필요시 diff 먼저 확인 후 별도 결정).
+37. **JL(외부 "[FY27] Korea Sales and Marketing Monthly Metrics" 시트) 자동 export — 구현
+    완료(2026-09-01), Aug-26 실측 대조 검증 대기(TODO)** — 사용자가 공유 중인 외부 시트
+    (gid `316435961`, Josephine/Junyong/Simon과 공유)의 B21:M26(Monthly Sales Achieved/No of
+    MQLs/No of SALs/No of ICs Completed/Marketing Spend/No of New Accounts Won), B42:M44
+    (Referral IC Complete/Revenue/Accounts Won), B49:M50(Non-Referral IC Complete/Revenue)를
+    ACQ_REP(ACQ_Summary)/Ad_Spend_Cache/Deal Tracker에서 매일 자동으로 채워 넣어달라는 요청
+    (2026-09-01). `JL_001_Config.js`(설정)/`JL_002_Engine.js`(순수 계산, 단위 테스트 5개
+    전부 PASS)/`JL_003_Write.js`(외부 시트 I/O)로 구현. **지표 매핑은 실 시트 라이브 접근이
+    막힌 상태(Apps Script 편집기 계정이 이 브라우저 세션 Google 계정과 달라 `script.google.com`
+    접근 거부)에서 사용자가 알려준 Aug-26 실측값을 역산 대조해 추정 확정한 것** — 특히 (1)
+    "No of New Accounts Won"/"Referral Accounts Won"이 Deal Tracker에서 Upsell(LEAD_SOURCE에
+    "upsell" 포함)만 제외한 건수 카운트라는 가정, (2) Non-Referral IC/Revenue가 Referral도
+    Other(Upsell·미분류 포함 버킷)도 아닌 5개 핵심 마케팅 세그먼트(`deriveTargetGroup_()`,
+    Seminar/Webinar/BOFU/Search/Content)만의 합이라는 가정 두 가지는 아직 라이브 데이터로
+    검증되지 않았다 — 확인 전까지 완료로 간주하지 말 것. `JL_003_Write.js`의
+    `runVerifyJLAugustActuals()`(Apps Script 편집기에서 직접 Run, 시트에는 아무것도 안 씀)로
+    계산값과 이미 알려진 Aug-26 실측값을 나란히 로그 대조 가능 — 이 결과가 전부 일치해야
+    자동 쓰기(`runRefreshJLExternalSheet()`)를 신뢰할 수 있음. **의도적으로 아직 주기적
+    트리거(`MASTER_002_PipelineAsync.js`의 `periodicRefreshAllReports_()`)에 연결하지
+    않음** — 검증 전에 외부 이해관계자 공유 시트를 매일 자동으로 덮어쓰는 위험을 피하기
+    위함(사용자 확인 후 한 줄 추가로 편입 예정). 상세 매핑 근거는 `JL_001_Config.js` 파일
+    헤더 참고.
+38. **SAL 8월 갭(305 vs 243) — 근본 원인 해결 및 87.5% 회복 완료(2026-09-01),
+    잔여 38건은 Salesforce 리포트 쪽 별개 이슈로 확정, 코드로 처리 불가 — 잔여 항목 P1(최우선)
+    TODO로 지정(2026-09-01 사용자 확정)** — 37번(JL) 검증
+    작업 중 New P1/SAL/IC Complete가 전부 known 실측값보다 낮게 나오는 것을 발견하며 시작.
+    `TEMPQA_041_AugustACQSummaryStalenessCheck.js`로 ACQ_Summary 캐시=원본재계산 일치 확인
+    (캐시 지연 아님, 진짜 데이터 갭). **근본 원인**: SAL(`Sales Accepted Date`)도 IC Booked/
+    Completed/Won Date와 같은 Lead 레벨 스냅샷이라, 그 리드에 새 마케팅 터치가 없으면
+    `MASTER_003_MTAFunnelSync.js`(MTA_Master 터치 기반) 경로로는 영원히 갱신 안 됨 —
+    `TEMPQA_045_AugustSALSalesforceLeadTrace.js`(사용자 제공 Salesforce SAL 리포트 304건
+    전수 대조)로 62건 갭 중 49건이 이 원인임을 실측 확인. 사용자 확인: Salesforce SAL 판정은
+    "New (Not Contacted) Date Time"(Lead Status가 Nurturing→New (Not Contacted)로 전환된
+    시각) 필드 존재 여부 — IC Booked/Completed와 동일한 IC Funnel 리포트(`ICFunnel_Raw`)에
+    이 필드를 추가해 터치 무관 동기화로 전환(`CONFIG.IC_FUNNEL.COLUMNS.SALES_ACCEPTED_DATE`,
+    `MASTER_009_ICFunnelSync.js` v1.5.0, `MASTER_003_MTAFunnelSync.js` v1.9.0는 이 필드에서
+    손을 뗌 — IC 3개 필드 이관 때와 동일 원칙).
+    **실행 중 발견된 별개 버그(수정 완료)**: `IMPORT_006_SheetWriter.js`의
+    `appendSheetRecords()`는 시트에 이미 데이터가 있으면 **기존 헤더를 그대로 쓰고 CSV의
+    새 컬럼은 조용히 버리는** 동작 — `ICFunnel_Raw` 헤더가 예전에 고정된 이후 한 번도 안
+    늘어나서, "Lead Priority"(2026-08-28 추가된 걸로 문서화돼 있었으나 실제 헤더엔 없었음)와
+    신규 "Sales Accepted Date" 둘 다 값이 전혀 반영 안 되고 있었음(`TEMPQA_046_
+    ICFunnelRawHeaderDump.js`로 실측 확인) — 즉 New P1 갭 개선(267→309)은 전부 MASTER_003의
+    MTA_Master 경로에서만 왔고 ICFunnel_Raw를 통한 Lead Priority 동기화는 그동안 계속
+    무동작이었던 것으로 확인됨. `runAddICFunnelRawSalesAcceptedDateColumn()`(1회성 수동
+    유틸, `MASTER_009_ICFunnelSync.js`)로 헤더에 두 컬럼 추가 후 전체 재export/재import로
+    해결.
+    **부수 발견(수정 완료)**: 긴 백그라운드 파이프라인 실행을 Apps Script 편집기에서 직접
+    Stop execution으로 강제 종료하면 `PIPELINE_LOCK`이 30분간 안 풀리는 문제 실측 재확인 —
+    `runForceReleasePipelineLock()`(`MASTER_002_PipelineAsync.js` v1.23.0, 수동 실행 전용)
+    신규로 즉시 해제 가능하게 함.
+    **최종 결과(2026-09-01)**: 헤더 추가 + 전체 재export/재import 후 SAL 정상 일치
+    241→266/304(87.5%)로 회복.
+
+    **✅ P1 TODO #1 — 아키텍처 변경으로 원천 우회(2026-09-02, 사용자 확정), 잔여
+    24건은 SAL 전용 외부 시트 실사용 후 재검증 필요(TODO)**: 원래 원인은 Salesforce
+    IC Funnel 리포트 자체의 필드 export 버그로 확정(코드로 처리 불가) — 사용자가 Lead
+    레코드를 Salesforce에서 직접 열어 "New (Not Contacted) Date Time" 값이 실제로
+    존재함을 확인(예: `00QRC00001JJRCL` = "1/8/2026, 3:24 am")했는데도 IC Funnel 리포트
+    export에선 그 필드가 매번 빈 값으로 나옴(`TEMPQA_047_ICFunnelDuplicateLeadRowTrace.js`로
+    각 리드가 `ICFunnel_Raw`에 정확히 1행뿐이고 그 값이 빈 문자열임을 확인, 중복 행 오채택
+    가설은 기각) — IC Funnel 리포트가 "IC Booked Date: 2016~2026" 범위 필터를 쓰는 반면
+    SAL 리포트는 그런 제약 없는 순수 "All leads" 리포트라는 차이가 원인으로 추정.
+    **사용자 결정(2026-09-02)**: 리포트 재구성으로 고치는 대신 "SAL만 IC Funnel
+    리포트에 묶지 말고 별도 리포트+별도 Raw 시트로 분리한 후 외부 시트로 만들자" —
+    메인 스프레드시트 용량 문제(오픈 속도 저하)도 같이 해결. 구현 완료: `CONFIG.SAL`
+    신규(`CORE_001_Config.js` v1.55.0), `MASTER_010_SALSync.js` 신규(IC Funnel과
+    동일 패턴 — `pickLatestSALRecords_()`/`computeSALByLeadId_()`/`syncSALToOPS_()`,
+    단위 테스트 3개 전부 PASS), `IMPORT_005_RawWriter.js`의 `writeSALRaw()`가 전용
+    외부 스프레드시트(`CONFIG.SAL.EXTERNAL.SPREADSHEET_ID`)에 직접 append
+    (`IMPORT_006_SheetWriter.js`/`IMPORT_008_RawDeduplicator.js`에 optional
+    `targetSpreadsheet` 파라미터 추가, 기존 4개 호출부 전부 하위호환), `MASTER_002_
+    PipelineAsync.js` v1.24.0에 4번째 독립 파이프라인(README Pipeline Status
+    표에 "SAL" 행, PIPELINE_LOCK은 Leads/MTA/IC Funnel과 공유), "📥 Update → Import
+    SAL Report" 메뉴 신규. `MASTER_009_ICFunnelSync.js` v1.6.0은 Sales Accepted Date
+    관리에서 완전히 손을 뗌(IC Funnel export 버그의 영향 자체를 차단).
+    **막힌 지점(사용자 액션 필요, TODO)**: (1) `CONFIG.SAL.EXTERNAL.SPREADSHEET_ID`가
+    아직 빈 문자열 — 사용자가 새 Google Sheet를 만들고 그 안에 "SAL_Raw"라는 이름의
+    탭을 만든 뒤 스프레드시트 ID를 공유해줘야 함. (2) Salesforce에서 SAL 전용 리포트
+    ("All leads" 범위, IC Booked Date 필터 없음, TEMPQA_045에서 쓴 CSV와 유사하되
+    이번엔 "New (Not Contacted) Date Time" 필드까지 포함)를 새로 만들어 export해야
+    함. 둘 다 완료되기 전까지 `runSyncSALToOPS()`/`importSALReport()`는 명시적
+    에러로 실패함(추측으로 진행하지 않음). 완료 후 잔여 24건이 실제로 해소되는지
+    재검증 필요 — 확인 전까지 완료로 간주하지 말 것.
+
+    **🔴 P1 TODO #2 — 잔여 14건: Leads 리포트 필터 범위 문제로 별개, 코드로 처리 불가,
+    사용자 액션 대기**: 이 리드들이 `Leads_OPS`(및 상당수는 `Leads_Master`)에 아예 없음 — IC
+    Funnel/SAL 리포트엔 잡히는데 "Leads" 수동 export 리포트("LeadsIC_KR_mkt_2.0")에서만 빠짐.
+    재import 타이밍 문제 아님(Leads가 IC Funnel보다 오히려 최신인데도 재현됨, 실측 확인) —
+    **사용자가 Salesforce에서 두 리포트("Leads" vs IC Funnel/SAL)의 필터 조건을 직접 나란히
+    비교해야 함**, 임의로 처리하지 말 것. IC Booked/Complete(TEMPQA_042/043)도 같은 종류의
+    미등록 리드(3건, Lead ID `00QRC00000ZsV97`/`00QRC00000D1CCY`/`00QRC000011JJ3o`) 영향을
+    받고 있어 이 필터 이슈가 해결되면 같이 개선될 것으로 예상.
+39. **Leads_OPS 필드 소유권 전면 재편 — 구현 완료(2026-09-02), 실사용 검증 대기(TODO)** —
+    38번 항목(SAL 8월 갭) 조사 중 "Revenue가 MTA_Master 터치 기반으로만 동기화돼 Search_OPS가
+    SAL과 동일한 구조적 문제를 겪고 있다"는 게 발견되면서 사용자가 전체 재설계를 결정.
+    최종 구조: New Leads(기본정보+First Touch+Lead Priority) / MTA(`#Touches`만, 신규) /
+    SAL(Sales Accepted Date, SAL_Raw 외부시트) / IC Funnel(IC Booked/Completed만) /
+    Revenue(신규, Deal Tracker 외부시트에서 Email 기준 역싱크 — Revenue + Opportunity Won
+    Date). 상세 구현은 `docs/OperationsLayer.md` "Field Ownership 전면 재편" 섹션 참고.
+    Lead Priority 다운그레이드 가드는 IC Funnel 경로에 안전장치로 유지(사용자 확정, 20번
+    항목 재발 방지), MTA 경로 것은 제거.
+    **✅ 실행 검증 완료(2026-09-02)**: `runRebuildDealTrackerEngine()` 실행 결과
+    DealTracker_Engine 783개 딜 전체 재구축(3.49초, Email 포함) 성공. 이어서
+    `runSyncRevenueToOPS()` 실행 결과 Deal Tracker 고유 Email 122개 중 **44건 Leads_OPS
+    반영 성공**, 뒤이은 ACQ/NewP1/Events/BOFU/Search/Content Engine refresh 7개 전부 정상
+    완료 확인 — 파이프라인 메커니즘 자체는 정상 동작 확인됨.
+    **🟡 잔여 발견 — 78건(122건 중 64%) Leads_OPS 매칭 실패, 원인 가설 확보·검증 대기(TODO)**:
+    사용자 가설(2026-09-02) — "Account로 병합(convert)된 리드는 Leads 리포트에서 안 보여서
+    그럴 수 있다"(Salesforce Lead→Account/Contact 전환 시 더 이상 "Lead" 레코드가 아니게 되어
+    Leads_Raw export에 안 잡히지만, Deal Tracker엔 그 Email로 딜이 남아있는 경우). 그럴듯한
+    설명이나 실측 확인 전 — 78건 중 실제로 이 케이스가 몇 건이고, 진짜 놓친 리드(이메일
+    대소문자/공백 불일치 등 버그)가 섞여있는지는 확인 안 됨. 임의로 처리하지 말 것, 다음
+    세션에서 78건 이메일 샘플 + Lead Source/Close FY를 덤프하는 임시 조사 스크립트로 확인.

@@ -4,9 +4,13 @@
  * Custom Menu
  *
  * Version
- * v3.5.0
+ * v3.6.0
  *
  * Change Log
+ * v3.6.0 (2026-09-02)
+ * - "📥 Update" 메뉴에 "Import SAL Report"(importSALReport) 추가 — SAL을
+ *   IC Funnel 리포트에서 분리해 전용 외부 시트로 이관(`docs/OpenItems.md`
+ *   #38, `MASTER_010_SALSync.js`).
  * v3.5.0 (2026-08-26)
  * - "📥 Update" 메뉴에 "Import IC Funnel"(importICFunnelReport) 추가 —
  *   ICFunnel_Raw 재도입(`docs/OpenItems.md` #32, IC Booked/Complete 구조적
@@ -58,6 +62,7 @@ function createImportMenu() {
     .addItem("Import Leads", "importLeadReport")
     .addItem("Import MTA", "importMTAReport")
     .addItem("Import IC Funnel", "importICFunnelReport")
+    .addItem("Import SAL Report", "importSALReport")
     .addToUi();
 
 }

@@ -10,9 +10,15 @@
  * 00 Import / 10 Master Build (Shared Component)
  *
  * Version
- * v4.1.1
+ * v4.2.0
  *
  * Change Log
+ * v4.2.0 (2026-09-02)
+ * - appendSheetRecords()에 5번째 optional 파라미터 `targetSpreadsheet` 추가
+ *   (생략 시 기존과 동일하게 `CONFIG.SPREADSHEET` 사용 — 기존 4-인자 호출부
+ *   전부 영향 없음). SAL을 전용 외부 스프레드시트로 분리(`docs/OpenItems.md`
+ *   #38, `MASTER_010_SALSync.js`)하며 `writeSALRaw()`(IMPORT_005_RawWriter.js)가
+ *   이 파라미터로 외부 시트에 직접 append할 수 있어야 해서 추가.
  * v4.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `05_SheetWriter.js` → 신규 `IMPORT_006_SheetWriter.js`, 코드 내용 변경 없음.
  * v4.1.0 (2026-08-06)
@@ -188,13 +194,18 @@ function writeSheetRecords(
  * @param {string} sheetName
  * @param {Object[]} records
  * @param {string[]} [textColumns]
+ * @param {string[]} [numberColumns]
+ * @param {Spreadsheet} [targetSpreadsheet]  생략 시 CONFIG.SPREADSHEET(이
+ *   프로젝트 메인 스프레드시트) — 외부 스프레드시트(SpreadsheetApp.openById()
+ *   결과)에 append해야 할 때만 명시(SAL_Raw 등, 2026-09-02 추가)
  *
  */
 function appendSheetRecords(
   sheetName,
   records,
   textColumns,
-  numberColumns   // ← 신규 파라미터
+  numberColumns,   // ← 신규 파라미터
+  targetSpreadsheet   // ← 신규 파라미터 (2026-09-02)
 ){
 
   textColumns = textColumns || [];
@@ -216,7 +227,7 @@ function appendSheetRecords(
   }
 
   const ss =
-    CONFIG.SPREADSHEET;
+    targetSpreadsheet || CONFIG.SPREADSHEET;
 
   const sheet =
     ss.getSheetByName(

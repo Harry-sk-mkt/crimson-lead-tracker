@@ -34,9 +34,15 @@
  * 00 Import
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-02)
+ * - filterOutExactDuplicateRawRecords_()에 3번째 optional 파라미터
+ *   `targetSpreadsheet` 추가(생략 시 기존과 동일하게 `CONFIG.SPREADSHEET`
+ *   사용). SAL을 전용 외부 스프레드시트로 분리(`docs/OpenItems.md` #38,
+ *   `MASTER_010_SALSync.js`)하며 `writeSALRaw()`(IMPORT_005_RawWriter.js)가
+ *   외부 시트 기준으로 dedup해야 해서 추가.
  * v1.0.0 (2026-08-25)
  * - 최초 구현.
  * ==========================================================
@@ -52,11 +58,14 @@
  *
  * @param {string} sheetName
  * @param {Object[]} records   Raw에 쓸 예정인 정제된 레코드(Validator 통과분)
+ * @param {Spreadsheet} [targetSpreadsheet]  생략 시 CONFIG.SPREADSHEET —
+ *   외부 스프레드시트 기준으로 비교해야 할 때만 명시(SAL_Raw 등, 2026-09-02 추가)
  * @return {{ kept: Object[], skipped: Object[] }}
  */
 function filterOutExactDuplicateRawRecords_(
   sheetName,
-  records
+  records,
+  targetSpreadsheet
 ){
 
   if(records.length === 0){
@@ -64,7 +73,7 @@ function filterOutExactDuplicateRawRecords_(
   }
 
   const ss =
-    CONFIG.SPREADSHEET;
+    targetSpreadsheet || CONFIG.SPREADSHEET;
 
   const sheet =
     ss.getSheetByName(

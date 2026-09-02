@@ -6,6 +6,7 @@
  * Responsibility
  * MTA_Master(터치 단위, IC Booked/Completed/Won/Revenue 포함)에서
  * Lead ID별 대표값을 뽑아 Leads_OPS의 Funnel 필드(SYNC_COLUMNS)로 역동기화.
+ * 2026-09-02부터는 "#Touches"(터치 횟수) 하나만 관리 — 아래 v1.10.0 참고.
  *
  * WHY (설계 배경)
  * SAL 판별(Lead Record Type)이 "이번 주 IC Booked Date 존재 여부"와
@@ -19,9 +20,17 @@
  * Salesforce 쪽 상태가 바뀌어도 MTA_Master 기반으로는 영원히 반영이 안 됨
  * (터치와 무관하게 진행되는 세일즈 내부 프로세스가 원인). ICFunnel_Raw +
  * `syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`)를 이 3개 필드
- * 전용으로 재도입 — 이 파일은 이제 `Revenue`/`Sales Accepted Date`
- * 2개만 계속 관리(둘 다 이미 별개 메커니즘으로 해결된 필드라 이 구조적
- * 문제와 무관, `docs/OpenItems.md` #32 참고).
+ * 전용으로 재도입 — 이 파일은 `Revenue`만 계속 관리.
+ *
+ * WHY (2026-09-01 재정정 — Sales Accepted Date도 ICFunnel_Raw로 이관)
+ * `Sales Accepted Date`도 같은 Lead 레벨 스냅샷 지연 문제를 겪음이
+ * 확인됨(SAL 8월 갭 305 vs 243 조사, `docs/OpenItems.md` #32,
+ * `TEMPQA_045_AugustSALSalesforceLeadTrace.js`) — IC 3개 필드와 동일한
+ * 이유로 `MASTER_009_ICFunnelSync.js`(`CONFIG.IC_FUNNEL.COLUMNS.
+ * SALES_ACCEPTED_DATE`, "New (Not Contacted) Date Time" 필드)로 이관,
+ * 이 파일은 이제 `Revenue`만 관리(computeMTAFunnelByLeadId_() 자체는
+ * salesAcceptedDate를 계속 반환하지만 이 파일 안에서 더 이상 안 쓰임 —
+ * 아래 v1.7.0 changelog와 동일 원칙, 불필요한 변경 범위 확장 방지).
  *
  * WHY (2026-08-28 — Lead Priority 추가)
  * `Lead Priority`도 같은 Lead 레벨 스냅샷 문제를 겪음이 확인됨(New P1 8월
@@ -29,15 +38,48 @@
  * 동기화하므로, `applyPriorityDowngradeGuard_()`로 "더 높은 Priority만
  * 채택"해 두 파이프라인이 순서 무관하게 안전하도록 함.
  *
+ * WHY (2026-09-02 재정정 — Revenue/Lead Priority도 이 파일에서 제외,
+ * "MTA = 터치 지표만")
+ * Leads_OPS 필드 소유권을 리포트별로 완전히 재편(사용자 확정) — Revenue가
+ * 지금까지 이 파일(터치 기반)로만 동기화돼 Search_OPS가 SAL과 동일한
+ * "터치 없으면 갱신 안 됨" 문제를 겪고 있었음이 확인됨(SAL 8월 갭 조사
+ * 중 발견). Revenue는 `MASTER_011_RevenueSync.js`(Deal Tracker 외부시트,
+ * Email 매칭)로, Lead Priority는 New Leads(Leads_Master)+IC Funnel
+ * 다운그레이드 가드 조합으로 이관. 대신 이 파일은 MTA_Master 고유의
+ * 값(터치 "개수" 자체, 다른 리포트에 없음)인 `#Touches`를 신규로 관리.
+ *
  * Must NOT
  * - Leads_OPS의 다른 컬럼(Salesforce 기본 정보, Marketing 관리 컬럼) 건드리지 않음
- * - IC Booked Date / IC Completed Date / Opportunity Won Date를 쓰지 않음
- *   (2026-08-26부터 `MASTER_009_ICFunnelSync.js`의 전담 필드)
+ * - IC Booked Date / IC Completed Date / Opportunity Won Date / Sales
+ *   Accepted Date / Revenue / Lead Priority를 쓰지 않음(각각
+ *   `MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`/
+ *   `MASTER_011_RevenueSync.js`/Leads_Master의 전담 필드)
  *
  * Version
- * v1.8.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-09-02)
+ * - **"Revenue"/"Lead Priority" sync를 이 파일에서 완전히 제거, "#Touches"
+ *   신규 추가** — Leads_OPS 필드 소유권 재편 2단계(사용자 확정, 위 WHY
+ *   참고). `computeMTAFunnelByLeadId_()` 반환값에 `touchCount`(그룹의
+ *   `rows.length`) 추가 — 별도 함수로 안 빼고 기존 그룹핑에 얹음.
+ *   `syncMTAFunnelToOPS_()`의 syncFieldMap을 `{"#Touches": "touchCount"}`
+ *   하나로 축소, 이제 안 쓰는 `applyPriorityDowngradeGuard_()` 호출도 제거
+ *   (IC Funnel 쪽 가드는 그대로 유지 — 사용자 확정). `Revenue`는
+ *   `MASTER_011_RevenueSync.js`(신규)로 이관. `testComputeMTAFunnelByLeadId()`
+ *   touchCount 검증 추가.
+ * v1.9.0 (2026-09-01)
+ * - **"Sales Accepted Date"를 syncFieldMap에서 제거** — SAL 8월 갭(305 vs
+ *   243) 조사 결과, 이 필드도 IC Booked/Completed/Won Date와 같은 Lead
+ *   레벨 스냅샷 지연(62건 갭 중 49건의 원인)을 겪음이 확인돼
+ *   `MASTER_009_ICFunnelSync.js`(`CONFIG.IC_FUNNEL.COLUMNS.
+ *   SALES_ACCEPTED_DATE`)로 이관. 이 파일은 이제 `Revenue`만 관리.
+ *   `computeMTAFunnelByLeadId_()` 자체(대표 터치 계산 로직)는 변경 없음 —
+ *   반환 객체에 salesAcceptedDate가 남아있어도 이 파일 안에서 더 이상
+ *   안 쓰일 뿐 무해(IC 3개 필드 이관 때와 동일 원칙, 다른 소비처 없음
+ *   확인). 상세: `docs/OpenItems.md` #32, `TEMPQA_045_
+ *   AugustSALSalesforceLeadTrace.js`.
  * v1.8.0 (2026-08-28)
  * - **"Lead Priority" sync 대상 추가** — `docs/OpenItems.md` New P1 8월
  *   갭(279 vs 267) 조사 결과, 갭의 대부분(10/13건)이 Leads_Master의
@@ -129,7 +171,12 @@
  * mtaRecords : Object[]  (MTA_Master 전체 레코드)
  *
  * OUTPUT
- * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate, revenue, salesAcceptedDate } }
+ * Object  { [leadId]: { icBookedDate, icCompletedDate, wonDate, revenue, salesAcceptedDate, touchCount } }
+ *         (touchCount = 이 Lead ID의 MTA_Master 터치 행 개수 — 2026-09-02
+ *         추가, "#Touches" sync 대상. IC Booked/Completed/Won/Revenue/
+ *         Sales Accepted Date와 달리 "대표 터치 하나의 값"이 아니라 그룹
+ *         전체의 rows.length — 이 함수가 이미 Lead ID별로 그룹핑해두므로
+ *         여기 얹는 게 자연스러움, 별도 함수로 안 뺌.)
  *
  * TEST
  * 같은 Lead ID 2개 터치, IC Booked Date가 서로 다르면
@@ -215,7 +262,8 @@ function computeMTAFunnelByLeadId_(mtaRecords){
       wonDate: latestRow["Opportunity Won Date"],
       revenue: latestRow["Revenue"],
       salesAcceptedDate: latestRow["Sales Accepted Date"],
-      leadPriority: latestRow["Lead Priority"]
+      leadPriority: latestRow["Lead Priority"],
+      touchCount: rows.length
     };
 
   });
@@ -276,7 +324,9 @@ function testComputeMTAFunnelByLeadId(){
     result["L1"].salesAcceptedDate.getTime() === new Date(2026, 4, 20).getTime() &&
     result["L1"].icCompletedDate.getTime() === new Date(2026, 6, 5).getTime() &&
     result["L1"].leadPriority === "Priority 1" &&
-    result["L2"].icBookedDate === null;
+    result["L1"].touchCount === 2 &&
+    result["L2"].icBookedDate === null &&
+    result["L2"].touchCount === 1;
 
   Logger.log("Keys: " + Object.keys(result).length + " (expected 2)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
@@ -541,10 +591,12 @@ function syncMTAFunnelToOPS_(){
   // Sync 실행 — 컬럼별 배치 읽기/쓰기(성능 최적화, 2026-08-18 v1.6.0)
   //----------------------------------------------------------
 
+  // 2026-09-02 — Leads_OPS 필드 소유권 재편(사용자 확정): MTA는 이제
+  // "터치 지표만" 관리. Revenue는 MASTER_011_RevenueSync.js(Deal Tracker
+  // 외부시트, Email 매칭)로, Lead Priority는 New Leads(Master)+IC Funnel
+  // 다운그레이드 가드 조합으로 이관 — 두 필드 다 여기서 제외.
   const syncFieldMap = {
-    "Revenue": "revenue",
-    "Sales Accepted Date": "salesAcceptedDate",
-    "Lead Priority": "leadPriority"
+    "#Touches": "touchCount"
   };
 
   const syncColumns = Object.keys(syncFieldMap)
@@ -567,20 +619,8 @@ function syncMTAFunnelToOPS_(){
       .getValues();
   });
 
-  //----------------------------------------------------------
-  // Lead Priority — ICFunnel_Raw sync와 순서 무관하게 다운그레이드
-  // 방지(UTIL_001_TransformHelper.js applyPriorityDowngradeGuard_(),
-  // docs/OpenItems.md New P1 8월 갭 조사 참고)
-  //----------------------------------------------------------
-
-  const guardedFunnelByLeadId = existingColumnValues["Lead Priority"]
-    ? applyPriorityDowngradeGuard_(
-        leadIds, funnelByLeadId, leadIdToRow, OPS.ROWS.DATA_START, existingColumnValues["Lead Priority"]
-      )
-    : funnelByLeadId;
-
   const syncResult = computeMTASyncColumnUpdates_(
-    leadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+    leadIds, funnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
   );
 
   syncColumns.forEach(function(col){
