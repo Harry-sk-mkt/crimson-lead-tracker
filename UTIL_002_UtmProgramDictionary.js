@@ -53,9 +53,39 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-04)
+ * - **증분 등록(Incremental Update) 전환(성능 개선,
+ *   docs/exec-plans/active/2026-09-03-performance-optimization.md #4)** —
+ *   `periodicRefreshDictionaries_()`(12시간마다 자동 실행)가 매번
+ *   Leads_Master+MTA_Master 전체(12만 행+)를 재스캔하던 것을, 신규
+ *   `refreshUtmProgramDictionaryIncremental_()`/`refreshProgramSegmentDictionaryIncremental_()`
+ *   (이번에 새로 추가된 Master 행만 `readRawSheetFrom_()`로 읽어 기존 캐시의
+ *   소스별 카운트에 증분)로 교체. 신규 `CONFIG.PROPERTIES.
+ *   UTM_PROGRAM_DICT_LEADS_LAST_ROW`/`_MTA_LAST_ROW`,
+ *   `PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW`/`_MTA_LAST_ROW`(딕셔너리별 독립
+ *   체크포인트, CORE_001_Config.js v1.62.0) — Master는 Raw와 달리 완전동일
+ *   중복행 자동삭제로 행 수가 줄 수 있어 `computeDictionaryRefreshWindow_()`가
+ *   감소를 감지하면 그 소스만 안전하게 처음부터 다시 채굴(`needsFreshCounts`).
+ *   두 소스(MTA/Leads)의 카운트 breakdown을 캐시 시트의 hidden 6/7번째 컬럼
+ *   ("MTA Counts JSON"/"Leads Counts JSON", `writeDictionaryCacheSheet_()`
+ *   신규 공용 writer)에 소스별로 **분리 보존** — 한쪽 소스만 재채굴이 필요할
+ *   때 다른 쪽의 누적 카운트를 잃지 않기 위함(합쳐서 저장하면 역산 불가).
+ *   `aggregateUtmProgramCounts_()`/`aggregateProgramSegmentCounts_()`에 optional
+ *   `seedCounts` 파라미터 추가(생략 시 기존과 100% 동일 — 기존 테스트 무변경
+ *   통과). 기존 수동 전체 재구축(`runRefreshUtmProgramDictionary()`/
+ *   `runRefreshProgramSegmentDictionary()`)은 함수명/시그니처/가시적 출력
+ *   무변경으로 그대로 유지("필요하면 언제든 처음부터 다시 채굴" 안전장치) —
+ *   단, 같은 캐시 시트를 공유하므로 이 함수들도 hidden JSON 컬럼을 함께
+ *   쓰고 체크포인트를 현재 시점으로 리셋하도록 내부만 갱신(가시적 동작
+ *   불변). 신규 순수 함수 6개 + 각각 테스트: `computeDictionaryRefreshWindow_()`,
+ *   `mergeCountsObjects_()`, `safeParseCountsJson_()`,
+ *   `extractUtmProgramPairsFromRecords_()`, `extractProgramSegmentPairsFromRecords_()`.
+ *   `getBusinessSegment()`/`resolveBusinessSegment_()` 등 소비 측 로직은 전혀
+ *   변경 없음 — 캐시 시트의 최종 winner/matchCount/totalCount/distinctCount
+ *   4개 핵심 컬럼 의미와 위치(0~4)는 그대로라 회귀 없음.
  * v1.8.0 (2026-08-28)
  * - `UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS`에 2건 추가 —
  *   `TEMPQA_039_TrafficUtmDictionaryAudit.js`로 "tofu"/"traffic" 포함
@@ -309,6 +339,10 @@ function readLeadsMasterUtmProgramPairs_(){
  *
  * INPUT
  * pairs : Array<{utm, program}>  readMtaMasterUtmProgramPairs_() 참고
+ * seedCounts : Object  (optional, 2026-09-04 추가) 이 카운트에 증분 — 생략 시
+ *   빈 객체에서 새로 시작(기존 동작과 100% 동일). 입력 객체는 변경하지 않음
+ *   (순수 함수 유지 — 증분 등록, docs/exec-plans/active/
+ *   2026-09-03-performance-optimization.md #4 참고).
  *
  * OUTPUT
  * Object  { utmKeyLower: { "프로그램명": count, ... }, ... }
@@ -317,9 +351,13 @@ function readLeadsMasterUtmProgramPairs_(){
  * testAggregateUtmProgramCounts() 참고
  * ==========================================================
  */
-function aggregateUtmProgramCounts_(pairs){
+function aggregateUtmProgramCounts_(pairs, seedCounts){
 
   const counts = {};
+
+  Object.keys(seedCounts || {}).forEach(function(utmKey){
+    counts[utmKey] = Object.assign({}, seedCounts[utmKey]);
+  });
 
   (pairs || []).forEach(function(pair){
 
@@ -362,8 +400,21 @@ function testAggregateUtmProgramCounts(){
     result["kr_core_other-campaign"]["EV-2026-08-KOR-Seminar"] === 1 &&
     Object.keys(result).length === 2;
 
+  // seedCounts 증분(2026-09-04) — 기존 키는 증분, 신규 키는 추가, 입력 불변
+  const seedCounts = { "kr_core_other-campaign": { "EV-2026-08-KOR-Seminar": 5 } };
+
+  const incremental = aggregateUtmProgramCounts_(
+    [{ utm: "kr_core_other-campaign", program: "EV-2026-08-KOR-Seminar" }, { utm: "new-utm", program: "New Program" }],
+    seedCounts
+  );
+
+  const incrementalPass =
+    incremental["kr_core_other-campaign"]["EV-2026-08-KOR-Seminar"] === 6 &&
+    incremental["new-utm"]["New Program"] === 1 &&
+    seedCounts["kr_core_other-campaign"]["EV-2026-08-KOR-Seminar"] === 5; // 입력 불변 확인
+
   Logger.log("Result: " + JSON.stringify(result, null, 2));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+  Logger.log(pass && incrementalPass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -455,6 +506,430 @@ function testResolveUtmProgramDictionaryEntries(){
 
 /**
  * ==========================================================
+ * Incremental Dictionary Refresh — Shared Helpers
+ * (2026-09-04 신규, docs/exec-plans/active/2026-09-03-performance-optimization.md #4)
+ *
+ * WHY
+ * `refreshUtmProgramDictionary_()`/`refreshProgramSegmentDictionary_()`(아래)가
+ * 12시간마다 Leads_Master+MTA_Master 전체(12만 행+)를 매번 다시 훑어 딕셔너리를
+ * 처음부터 재구축하던 것을, "이번에 새로 추가된 행만 채굴해 기존 캐시의
+ * 카운트에 증분"하는 방식으로 바꾸기 위한 공용 순수 함수/캐시 파싱 헬퍼.
+ * `periodicRefreshDictionaries_()`만 이 증분 경로로 전환하고, 수동 전체
+ * 재구축(`runRefreshUtmProgramDictionary()`/`runRefreshProgramSegmentDictionary()`)은
+ * 그대로 남겨 "필요하면 언제든 처음부터 다시 채굴" 안전장치로 유지한다
+ * (Backward Compatibility — 함수명/시그니처/기존 수동 실행 결과 불변).
+ *
+ * 두 소스(Leads_Master/MTA_Master)의 카운트를 하나로 합쳐 저장하지 않고
+ * **소스별로 따로** 캐시 시트의 hidden JSON 컬럼에 보존하는 이유: 두 소스 중
+ * 하나만 "Master 행 수 감소"(중복행 자동삭제)를 겪어 그 소스만 처음부터
+ * 다시 채굴해야 하는 상황에서, 합쳐진 카운트에서 그 소스의 과거 기여분만
+ * 골라 빼는 건 불가능(원본 breakdown이 없으면 역산 불가) — 소스별로 완전히
+ * 독립된 카운트를 유지해야 한쪽만 재채굴해도 다른 쪽 누적 카운트를 그대로
+ * 보존한 채 안전하게 합칠 수 있다(`mergeCountsObjects_()`).
+ * ==========================================================
+ */
+
+/**
+ * ==========================================================
+ * Compute Dictionary Refresh Window (순수 함수)
+ *
+ * WHY
+ * Master는 Raw와 달리 완전동일 중복행 자동삭제(runAutoDeleteExactDuplicateLeadRows()
+ * 등)로 행 수가 줄어들 수 있다 — 단순히 "마지막 처리 행 수 이후부터 읽기"만
+ * 하면, 삭제로 인해 뒤 행들의 위치가 앞으로 밀리면서 일부 행이 영원히
+ * 재처리 안 되거나(스킵) 반대로 이미 카운트된 행이 다른 위치에서 다시
+ * 잡혀 중복 집계될 위험이 있다. 현재 총 행 수가 마지막 처리 행 수보다
+ * **줄었으면** 그 소스는 안전하게 처음(0)부터 다시 채굴하고
+ * (`needsFreshCounts: true` — 이 경우 기존 캐시 카운트와 병합하지 않고
+ * 새로 읽은 전체 pair만으로 카운트를 새로 시작해야 함, 그렇지 않으면 위치가
+ * 밀린 행이 기존 카운트에 다시 더해져 이중 집계됨), 줄지 않았으면 마지막
+ * 처리 행 수 이후만 읽어 기존 캐시 카운트에 증분한다.
+ *
+ * INPUT
+ * lastProcessedCount : number  마지막으로 처리한 데이터 행 수(0-based 개수)
+ * currentTotalRows : number  현재 데이터 행 수(헤더 제외)
+ *
+ * OUTPUT
+ * { startIndex: number, numRows: number, needsFreshCounts: boolean }
+ *
+ * TEST
+ * testComputeDictionaryRefreshWindow() 참고
+ * ==========================================================
+ */
+function computeDictionaryRefreshWindow_(lastProcessedCount, currentTotalRows){
+
+  const decreased = currentTotalRows < lastProcessedCount;
+  const startIndex = decreased ? 0 : lastProcessedCount;
+
+  return {
+    startIndex: startIndex,
+    numRows: Math.max(0, currentTotalRows - startIndex),
+    needsFreshCounts: startIndex === 0
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeDictionaryRefreshWindow_()
+ * ==========================================================
+ */
+function testComputeDictionaryRefreshWindow(){
+
+  const bootstrap = computeDictionaryRefreshWindow_(0, 100);
+  const bootstrapOk =
+    bootstrap.startIndex === 0 && bootstrap.numRows === 100 && bootstrap.needsFreshCounts === true;
+
+  const incremental = computeDictionaryRefreshWindow_(100, 130);
+  const incrementalOk =
+    incremental.startIndex === 100 && incremental.numRows === 30 && incremental.needsFreshCounts === false;
+
+  const noChange = computeDictionaryRefreshWindow_(100, 100);
+  const noChangeOk =
+    noChange.startIndex === 100 && noChange.numRows === 0 && noChange.needsFreshCounts === false;
+
+  // Master 행 수 감소(중복행 자동삭제) — 처음부터 다시, 기존 캐시 카운트와 병합 금지
+  const decreased = computeDictionaryRefreshWindow_(130, 90);
+  const decreasedOk =
+    decreased.startIndex === 0 && decreased.numRows === 90 && decreased.needsFreshCounts === true;
+
+  const pass = bootstrapOk && incrementalOk && noChangeOk && decreasedOk;
+
+  Logger.log(
+    "testComputeDictionaryRefreshWindow: " + (pass ? "PASS" : "FAIL") +
+    "\n  bootstrap=" + JSON.stringify(bootstrap) +
+    "\n  incremental=" + JSON.stringify(incremental) +
+    "\n  noChange=" + JSON.stringify(noChange) +
+    "\n  decreased=" + JSON.stringify(decreased)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge Counts Objects (순수 함수)
+ *
+ * WHY
+ * Leads_Master 소스 카운트와 MTA_Master 소스 카운트를 최종 다수결 계산
+ * (resolveUtmProgramDictionaryEntries_()/resolveProgramSegmentDictionaryEntries_())
+ * 직전에 하나로 합친다. 두 입력 모두 변경하지 않음(순수 함수).
+ *
+ * INPUT
+ * a, b : Object  { key: { candidate: count, ... }, ... }
+ *
+ * OUTPUT
+ * Object  (a와 b의 카운트를 key/candidate별로 합산)
+ *
+ * TEST
+ * testMergeCountsObjects() 참고
+ * ==========================================================
+ */
+function mergeCountsObjects_(a, b){
+
+  const merged = {};
+
+  Object.keys(a || {}).forEach(function(key){
+    merged[key] = Object.assign({}, a[key]);
+  });
+
+  Object.keys(b || {}).forEach(function(key){
+
+    if(!merged[key]) merged[key] = {};
+
+    Object.keys(b[key]).forEach(function(candidate){
+      merged[key][candidate] = (merged[key][candidate] || 0) + b[key][candidate];
+    });
+
+  });
+
+  return merged;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeCountsObjects_()
+ * ==========================================================
+ */
+function testMergeCountsObjects(){
+
+  const a = { k1: { "P1": 3 }, k2: { "P2": 1 } };
+  const b = { k1: { "P1": 2, "P3": 1 }, k3: { "P4": 5 } };
+
+  const result = mergeCountsObjects_(a, b);
+
+  const pass =
+    result.k1["P1"] === 5 &&
+    result.k1["P3"] === 1 &&
+    result.k2["P2"] === 1 &&
+    result.k3["P4"] === 5 &&
+    a.k1["P1"] === 3 && // 입력 불변 확인
+    b.k1["P1"] === 2;
+
+  Logger.log("testMergeCountsObjects: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(result));
+
+}
+
+
+/**
+ * ==========================================================
+ * Safe Parse Counts JSON (순수 함수)
+ *
+ * WHY
+ * 캐시 시트의 hidden JSON 컬럼 값을 파싱한다 — 이 컬럼이 아직 없던(2026-09-04
+ * 이전) 구형 캐시 시트를 읽을 때는 빈 값/undefined가 오므로 안전하게 빈
+ * 객체로 처리(마이그레이션 안전 — 이 경우 어차피 체크포인트도 0이라
+ * needsFreshCounts=true가 되어 이 값 자체가 안 쓰임).
+ *
+ * TEST
+ * testSafeParseCountsJson() 참고
+ * ==========================================================
+ */
+function safeParseCountsJson_(raw){
+
+  if(!raw) return {};
+
+  try{
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch(e){
+    return {};
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — safeParseCountsJson_()
+ * ==========================================================
+ */
+function testSafeParseCountsJson(){
+
+  const pass =
+    JSON.stringify(safeParseCountsJson_('{"A":1}')) === '{"A":1}' &&
+    JSON.stringify(safeParseCountsJson_("")) === "{}" &&
+    JSON.stringify(safeParseCountsJson_(undefined)) === "{}" &&
+    JSON.stringify(safeParseCountsJson_("not json")) === "{}";
+
+  Logger.log("testSafeParseCountsJson: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
+/**
+ * ==========================================================
+ * Extract UTM/Program Pairs From Records (순수 함수)
+ *
+ * WHY
+ * `readRawSheetFrom_()`(MASTER_005_DataReader.js, Leads/MTA Raw 전용이 아니라
+ * 시트 이름만 받는 범용 함수라 Leads_Master/MTA_Master에도 그대로 재사용
+ * 가능)가 반환하는 헤더 매핑된 레코드에서 UTM/Program 쌍만 뽑는다 —
+ * readMtaMasterUtmProgramPairs_()/readLeadsMasterUtmProgramPairs_()(전체
+ * 스캔용, 그대로 유지)의 매핑 로직과 동일하되 테이블마다 다른 필드명을
+ * 인자로 받아 재사용.
+ *
+ * TEST
+ * testExtractUtmProgramPairsFromRecords() 참고
+ * ==========================================================
+ */
+function extractUtmProgramPairsFromRecords_(records, utmField, programField){
+
+  return (records || [])
+    .map(function(record){
+      return {
+        utm: String(record[utmField] || "").trim(),
+        program: String(record[programField] || "").trim()
+      };
+    })
+    .filter(function(pair){ return !!pair.utm && !!pair.program; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — extractUtmProgramPairsFromRecords_()
+ * ==========================================================
+ */
+function testExtractUtmProgramPairsFromRecords(){
+
+  const records = [
+    { "MKT UTM Campaign": "utm-1", "Lead Source Detail": "Program A" },
+    { "MKT UTM Campaign": "", "Lead Source Detail": "Program B" }, // utm 없음 — 제외
+    { "MKT UTM Campaign": "utm-2", "Lead Source Detail": "" }      // program 없음 — 제외
+  ];
+
+  const result = extractUtmProgramPairsFromRecords_(records, "MKT UTM Campaign", "Lead Source Detail");
+
+  const pass =
+    result.length === 1 &&
+    result[0].utm === "utm-1" &&
+    result[0].program === "Program A";
+
+  Logger.log("testExtractUtmProgramPairsFromRecords: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
+/**
+ * ==========================================================
+ * Extract Program/Segment Pairs From Records (순수 함수)
+ *
+ * TEST
+ * testExtractProgramSegmentPairsFromRecords() 참고
+ * ==========================================================
+ */
+function extractProgramSegmentPairsFromRecords_(records, programField, segmentField){
+
+  return (records || [])
+    .map(function(record){
+      return {
+        program: String(record[programField] || "").trim(),
+        segment: String(record[segmentField] || "").trim()
+      };
+    })
+    .filter(function(pair){ return !!pair.program && !!pair.segment; });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — extractProgramSegmentPairsFromRecords_()
+ * ==========================================================
+ */
+function testExtractProgramSegmentPairsFromRecords(){
+
+  const records = [
+    { "Lead Source Detail": "Program A", "Business Segment": "Search" },
+    { "Lead Source Detail": "", "Business Segment": "Search" },       // program 없음 — 제외
+    { "Lead Source Detail": "Program B", "Business Segment": "" }     // segment 없음 — 제외
+  ];
+
+  const result = extractProgramSegmentPairsFromRecords_(records, "Lead Source Detail", "Business Segment");
+
+  const pass =
+    result.length === 1 &&
+    result[0].program === "Program A" &&
+    result[0].segment === "Search";
+
+  Logger.log("testExtractProgramSegmentPairsFromRecords: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Dictionary Cache Counts By Source (IO 래퍼)
+ *
+ * WHY
+ * 캐시 시트(6/7번째 hidden JSON 컬럼, 아래 refresh 함수들이 기록)에서
+ * 소스별(MTA/Leads) 카운트 breakdown을 읽는다. 구형(2026-09-04 이전, JSON
+ * 컬럼 없음) 시트를 읽으면 모든 값이 빈 객체로 반환됨(안전 — 그 경우
+ * 체크포인트도 항상 0이라 needsFreshCounts=true가 되어 이 반환값 자체가
+ * 안 쓰임).
+ *
+ * @param {string} sheetName
+ * @param {number} mtaJsonColIndex   0-based
+ * @param {number} leadsJsonColIndex 0-based
+ * @return {{ mtaCounts: Object, leadsCounts: Object }}
+ * ==========================================================
+ */
+function readDictionaryCacheCountsBySource_(sheetName, mtaJsonColIndex, leadsJsonColIndex){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+
+  const mtaCounts = {};
+  const leadsCounts = {};
+
+  if(!sheet) return { mtaCounts: mtaCounts, leadsCounts: leadsCounts };
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < 2 || lastCol <= Math.max(mtaJsonColIndex, leadsJsonColIndex)){
+    return { mtaCounts: mtaCounts, leadsCounts: leadsCounts };
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  values.forEach(function(row){
+
+    const key = String(row[0] || "").trim().toLowerCase();
+
+    if(!key) return;
+
+    mtaCounts[key] = safeParseCountsJson_(row[mtaJsonColIndex]);
+    leadsCounts[key] = safeParseCountsJson_(row[leadsJsonColIndex]);
+
+  });
+
+  return { mtaCounts: mtaCounts, leadsCounts: leadsCounts };
+
+}
+
+
+/**
+ * ==========================================================
+ * Write Dictionary Cache Sheet (IO 래퍼)
+ *
+ * WHY
+ * refresh(전체/증분) 양쪽이 공유하는 시트 쓰기 로직 — 두 경로가 각자
+ * 따로 쓰다 포맷이 어긋나는 걸 방지(예: hidden JSON 컬럼을 한쪽만 쓰는
+ * 사고). headers는 항상 core 5컬럼 + "MTA Counts JSON" + "Leads Counts JSON"
+ * 7컬럼.
+ *
+ * @param {string} sheetName
+ * @param {Array} coreHeaders  5개(예: UTM_PROGRAM_DICT_HEADERS)
+ * @param {Array<Array>} coreRows  entries를 5컬럼 배열로 매핑한 것(entry 순서와
+ *   mtaCounts/leadsCounts 조회용 key 배열이 1:1 대응해야 함)
+ * @param {Array<string>} keysLower  coreRows와 같은 순서의 key(소문자)
+ * @param {Object} mtaCounts
+ * @param {Object} leadsCounts
+ * ==========================================================
+ */
+function writeDictionaryCacheSheet_(sheetName, coreHeaders, coreRows, keysLower, mtaCounts, leadsCounts){
+
+  const headers = coreHeaders.concat(["MTA Counts JSON", "Leads Counts JSON"]);
+
+  const rows = coreRows.map(function(coreRow, index){
+    const key = keysLower[index];
+    return coreRow.concat([
+      JSON.stringify(mtaCounts[key] || {}),
+      JSON.stringify(leadsCounts[key] || {})
+    ]);
+  });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(sheetName);
+
+  if(!sheet){
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  if(rows.length > 0){
+    sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
  * Refresh UTM Program Dictionary (IO 래퍼 — 수동 실행 전용)
  *
  * WHY
@@ -462,48 +937,48 @@ function testResolveUtmProgramDictionaryEntries(){
  * 재작성한다(refreshAdSpendCache_()/refreshSearchEngine_()과 동일한 전체
  * 재빌드 관행 — clearContents→재작성→hideSheet→flush). MTA_Master 전체
  * 스캔(8만 행+)이라 무거움 — 리드 유입 파이프라인(매 append)에는 얹지 않고,
- * 수동(`runRefreshUtmProgramDictionary()`) 또는 별도의 주기적 시간 트리거
- * (`periodicRefreshDictionaries_()`, 2026-08-26 추가)로만 호출.
+ * 수동(`runRefreshUtmProgramDictionary()`)으로만 호출(2026-09-04부터 주기적
+ * 시간 트리거는 `refreshUtmProgramDictionaryIncremental_()`로 전환 — 아래
+ * 참고, 이 함수는 "필요하면 언제든 처음부터 전부 다시 채굴" 안전장치로 유지).
+ * 이 함수도 hidden JSON 컬럼을 함께 쓰고 증분 체크포인트를 현재 시점으로
+ * 리셋해, 수동 전체 재구축 이후에도 다음 증분 실행이 일관된 상태에서
+ * 이어지도록 한다(두 경로가 같은 캐시 시트를 공유하므로 필수).
  * ==========================================================
  */
 function refreshUtmProgramDictionary_(){
 
-  const pairs = readMtaMasterUtmProgramPairs_().concat(readLeadsMasterUtmProgramPairs_());
-  const counts = aggregateUtmProgramCounts_(pairs);
+  const mtaCounts = aggregateUtmProgramCounts_(readMtaMasterUtmProgramPairs_());
+  const leadsCounts = aggregateUtmProgramCounts_(readLeadsMasterUtmProgramPairs_());
+
+  const counts = mergeCountsObjects_(mtaCounts, leadsCounts);
   const entries = resolveUtmProgramDictionaryEntries_(counts);
 
-  const rows = entries.map(function(e){
+  const coreRows = entries.map(function(e){
     return [e.utm, e.program, e.matchCount, e.totalCount, e.distinctProgramCount];
   });
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const keysLower = entries.map(function(e){ return e.utm; });
 
-  let sheet = ss.getSheetByName(CONFIG.UTM_PROGRAM_DICT.SHEET);
+  writeDictionaryCacheSheet_(
+    CONFIG.UTM_PROGRAM_DICT.SHEET, UTM_PROGRAM_DICT_HEADERS, coreRows, keysLower, mtaCounts, leadsCounts
+  );
 
-  if(!sheet){
-    sheet = ss.insertSheet(CONFIG.UTM_PROGRAM_DICT.SHEET);
-  }
-
-  sheet.clearContents();
-
-  sheet.getRange(1, 1, 1, UTM_PROGRAM_DICT_HEADERS.length)
-    .setValues([UTM_PROGRAM_DICT_HEADERS]);
-
-  if(rows.length > 0){
-    sheet.getRange(2, 1, rows.length, UTM_PROGRAM_DICT_HEADERS.length)
-      .setValues(rows);
-  }
-
-  sheet.hideSheet();
-
-  SpreadsheetApp.flush();
+  // 전체 재구축 이후 증분 체크포인트를 현재 시점으로 리셋 — 다음 증분 실행
+  // (periodicRefreshDictionaries_() → refreshUtmProgramDictionaryIncremental_())이
+  // 이 전체 재구축 이전 시점으로 되돌아가 이중 채굴하지 않도록 함.
+  const utmProps = {};
+  utmProps[CONFIG.PROPERTIES.UTM_PROGRAM_DICT_LEADS_LAST_ROW] =
+    String(getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_MASTER));
+  utmProps[CONFIG.PROPERTIES.UTM_PROGRAM_DICT_MTA_LAST_ROW] =
+    String(getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_MASTER));
+  PropertiesService.getScriptProperties().setProperties(utmProps);
 
   _utmProgramDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
 
   const ambiguousCount = entries.filter(function(e){ return e.distinctProgramCount > 1; }).length;
 
   Logger.log(
-    "UTM_Program_Dictionary 갱신 완료: " + rows.length + "개 UTM 키(모호한 키 " +
+    "UTM_Program_Dictionary 갱신 완료: " + coreRows.length + "개 UTM 키(모호한 키 " +
     ambiguousCount + "개 — Distinct Program Count > 1)."
   );
 
@@ -1088,6 +1563,8 @@ function readMtaMasterProgramSegmentPairs_(){
  *
  * INPUT
  * pairs : Array<{program, segment}>
+ * seedCounts : Object  (optional, 2026-09-04 추가) aggregateUtmProgramCounts_()와
+ *   동일 — 이 카운트에 증분, 생략 시 기존과 동일, 입력 불변.
  *
  * OUTPUT
  * Object  { programKeyLower: { "Segment명": count, ... }, ... }
@@ -1096,9 +1573,13 @@ function readMtaMasterProgramSegmentPairs_(){
  * testAggregateProgramSegmentCounts() 참고
  * ==========================================================
  */
-function aggregateProgramSegmentCounts_(pairs){
+function aggregateProgramSegmentCounts_(pairs, seedCounts){
 
   const counts = {};
+
+  Object.keys(seedCounts || {}).forEach(function(programKey){
+    counts[programKey] = Object.assign({}, seedCounts[programKey]);
+  });
 
   (pairs || []).forEach(function(pair){
 
@@ -1141,8 +1622,21 @@ function testAggregateProgramSegmentCounts(){
     result["2025-07-kor-bofu-core b"]["BOFU"] === 1 &&
     Object.keys(result).length === 2;
 
+  // seedCounts 증분(2026-09-04)
+  const seedCounts = { "2025-07-kor-bofu-core b": { "BOFU": 9 } };
+
+  const incremental = aggregateProgramSegmentCounts_(
+    [{ program: "2025-07-KOR-BOFU-Core B", segment: "BOFU" }, { program: "New Program", segment: "Search" }],
+    seedCounts
+  );
+
+  const incrementalPass =
+    incremental["2025-07-kor-bofu-core b"]["BOFU"] === 10 &&
+    incremental["new program"]["Search"] === 1 &&
+    seedCounts["2025-07-kor-bofu-core b"]["BOFU"] === 9; // 입력 불변 확인
+
   Logger.log("Result: " + JSON.stringify(result, null, 2));
-  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+  Logger.log(pass && incrementalPass ? "✅ PASS" : "❌ FAIL");
 
 }
 
@@ -1237,56 +1731,51 @@ function testResolveProgramSegmentDictionaryEntries(){
 
 /**
  * ==========================================================
- * Refresh Program Segment Dictionary (IO 래퍼 — 수동/주기 트리거 전용,
+ * Refresh Program Segment Dictionary (IO 래퍼 — 수동 실행 전용,
  * 2026-08-26 신규)
  *
  * WHY
  * Leads_Master + MTA_Master 전체를 훑어 Program→Business Segment 딕셔너리를
  * 다시 채굴하고 캐시 시트를 통째로 재작성한다. refreshUtmProgramDictionary_()
- * 와 완전히 동일한 패턴(clearContents→재작성→hideSheet→flush) — 무거운
- * 전체 스캔이라 리드 유입 파이프라인에는 얹지 않고, 수동
- * (`runRefreshProgramSegmentDictionary()`) 또는 주기적 시간 트리거
- * (`periodicRefreshDictionaries_()`)로만 호출.
+ * 와 완전히 동일한 패턴 — 무거운 전체 스캔이라 리드 유입 파이프라인에는
+ * 얹지 않고, 수동(`runRefreshProgramSegmentDictionary()`)으로만 호출
+ * (2026-09-04부터 주기적 시간 트리거는 `refreshProgramSegmentDictionaryIncremental_()`
+ * 로 전환 — 이 함수는 "필요하면 언제든 처음부터 전부 다시 채굴" 안전장치로 유지,
+ * refreshUtmProgramDictionary_()와 동일 이유로 hidden JSON 컬럼도 함께 쓰고
+ * 체크포인트도 리셋).
  * ==========================================================
  */
 function refreshProgramSegmentDictionary_(){
 
-  const pairs = readMtaMasterProgramSegmentPairs_().concat(readLeadsMasterProgramSegmentPairs_());
-  const counts = aggregateProgramSegmentCounts_(pairs);
+  const mtaCounts = aggregateProgramSegmentCounts_(readMtaMasterProgramSegmentPairs_());
+  const leadsCounts = aggregateProgramSegmentCounts_(readLeadsMasterProgramSegmentPairs_());
+
+  const counts = mergeCountsObjects_(mtaCounts, leadsCounts);
   const entries = resolveProgramSegmentDictionaryEntries_(counts);
 
-  const rows = entries.map(function(e){
+  const coreRows = entries.map(function(e){
     return [e.program, e.segment, e.matchCount, e.totalCount, e.distinctSegmentCount];
   });
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const keysLower = entries.map(function(e){ return e.program; });
 
-  let sheet = ss.getSheetByName(CONFIG.PROGRAM_SEGMENT_DICT.SHEET);
+  writeDictionaryCacheSheet_(
+    CONFIG.PROGRAM_SEGMENT_DICT.SHEET, PROGRAM_SEGMENT_DICT_HEADERS, coreRows, keysLower, mtaCounts, leadsCounts
+  );
 
-  if(!sheet){
-    sheet = ss.insertSheet(CONFIG.PROGRAM_SEGMENT_DICT.SHEET);
-  }
-
-  sheet.clearContents();
-
-  sheet.getRange(1, 1, 1, PROGRAM_SEGMENT_DICT_HEADERS.length)
-    .setValues([PROGRAM_SEGMENT_DICT_HEADERS]);
-
-  if(rows.length > 0){
-    sheet.getRange(2, 1, rows.length, PROGRAM_SEGMENT_DICT_HEADERS.length)
-      .setValues(rows);
-  }
-
-  sheet.hideSheet();
-
-  SpreadsheetApp.flush();
+  const segProps = {};
+  segProps[CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW] =
+    String(getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_MASTER));
+  segProps[CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_MTA_LAST_ROW] =
+    String(getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_MASTER));
+  PropertiesService.getScriptProperties().setProperties(segProps);
 
   _programSegmentDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
 
   const ambiguousCount = entries.filter(function(e){ return e.distinctSegmentCount > 1; }).length;
 
   Logger.log(
-    "Program_Segment_Dictionary 갱신 완료: " + rows.length + "개 Program 키(모호한 키 " +
+    "Program_Segment_Dictionary 갱신 완료: " + coreRows.length + "개 Program 키(모호한 키 " +
     ambiguousCount + "개 — Distinct Segment Count > 1)."
   );
 
@@ -1301,6 +1790,149 @@ function refreshProgramSegmentDictionary_(){
 function runRefreshProgramSegmentDictionary(){
 
   refreshProgramSegmentDictionary_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh UTM Program Dictionary — Incremental (IO 래퍼,
+ * 2026-09-04 신규 — docs/exec-plans/active/2026-09-03-performance-optimization.md #4)
+ *
+ * WHY
+ * `periodicRefreshDictionaries_()`(12시간마다 자동 실행)가 그동안 매번
+ * `refreshUtmProgramDictionary_()`(Leads_Master+MTA_Master 전체 재스캔)를
+ * 불렀는데, 이제 이 함수로 교체 — 각 소스의 마지막 처리 행 수 이후만
+ * `readRawSheetFrom_()`(MASTER_005_DataReader.js, 시트 이름만 받는 범용 함수)로
+ * 읽어 캐시 시트에 저장된 소스별 카운트(`readDictionaryCacheCountsBySource_()`)에
+ * 증분한다. `computeDictionaryRefreshWindow_()`가 Master 행 수 감소(중복행
+ * 자동삭제)를 감지하면 그 소스만 안전하게 처음부터 다시 채굴.
+ * ==========================================================
+ */
+function refreshUtmProgramDictionaryIncremental_(){
+
+  const leadsTotal = getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_MASTER);
+  const mtaTotal = getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_MASTER);
+
+  const props = PropertiesService.getScriptProperties();
+
+  const leadsLastProcessed =
+    Number(props.getProperty(CONFIG.PROPERTIES.UTM_PROGRAM_DICT_LEADS_LAST_ROW)) || 0;
+  const mtaLastProcessed =
+    Number(props.getProperty(CONFIG.PROPERTIES.UTM_PROGRAM_DICT_MTA_LAST_ROW)) || 0;
+
+  const leadsWindow = computeDictionaryRefreshWindow_(leadsLastProcessed, leadsTotal);
+  const mtaWindow = computeDictionaryRefreshWindow_(mtaLastProcessed, mtaTotal);
+
+  const cached = readDictionaryCacheCountsBySource_(CONFIG.UTM_PROGRAM_DICT.SHEET, 5, 6);
+
+  const leadsNewRecords =
+    leadsWindow.numRows > 0 ? readRawSheetFrom_(CONFIG.SHEETS.LEADS_MASTER, leadsWindow.startIndex) : [];
+  const mtaNewRecords =
+    mtaWindow.numRows > 0 ? readRawSheetFrom_(CONFIG.SHEETS.MTA_MASTER, mtaWindow.startIndex) : [];
+
+  const leadsNewPairs =
+    extractUtmProgramPairsFromRecords_(leadsNewRecords, "First MKT UTM Campaign", "First Touch Detail");
+  const mtaNewPairs =
+    extractUtmProgramPairsFromRecords_(mtaNewRecords, "MKT UTM Campaign", "Lead Source Detail");
+
+  const leadsCounts =
+    aggregateUtmProgramCounts_(leadsNewPairs, leadsWindow.needsFreshCounts ? {} : cached.leadsCounts);
+  const mtaCounts =
+    aggregateUtmProgramCounts_(mtaNewPairs, mtaWindow.needsFreshCounts ? {} : cached.mtaCounts);
+
+  const counts = mergeCountsObjects_(mtaCounts, leadsCounts);
+  const entries = resolveUtmProgramDictionaryEntries_(counts);
+
+  const coreRows = entries.map(function(e){
+    return [e.utm, e.program, e.matchCount, e.totalCount, e.distinctProgramCount];
+  });
+
+  const keysLower = entries.map(function(e){ return e.utm; });
+
+  writeDictionaryCacheSheet_(
+    CONFIG.UTM_PROGRAM_DICT.SHEET, UTM_PROGRAM_DICT_HEADERS, coreRows, keysLower, mtaCounts, leadsCounts
+  );
+
+  const utmProps = {};
+  utmProps[CONFIG.PROPERTIES.UTM_PROGRAM_DICT_LEADS_LAST_ROW] = String(leadsTotal);
+  utmProps[CONFIG.PROPERTIES.UTM_PROGRAM_DICT_MTA_LAST_ROW] = String(mtaTotal);
+  props.setProperties(utmProps);
+
+  _utmProgramDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
+
+  Logger.log(
+    "UTM_Program_Dictionary 증분 갱신 완료: Leads 신규 " + leadsNewRecords.length +
+    "행 / MTA 신규 " + mtaNewRecords.length + "행 반영(전체 재채굴 아님), 총 " +
+    coreRows.length + "개 UTM 키."
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh Program Segment Dictionary — Incremental (IO 래퍼,
+ * 2026-09-04 신규) — refreshUtmProgramDictionaryIncremental_()와 동일 원칙
+ * ==========================================================
+ */
+function refreshProgramSegmentDictionaryIncremental_(){
+
+  const leadsTotal = getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_MASTER);
+  const mtaTotal = getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_MASTER);
+
+  const props = PropertiesService.getScriptProperties();
+
+  const leadsLastProcessed =
+    Number(props.getProperty(CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW)) || 0;
+  const mtaLastProcessed =
+    Number(props.getProperty(CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_MTA_LAST_ROW)) || 0;
+
+  const leadsWindow = computeDictionaryRefreshWindow_(leadsLastProcessed, leadsTotal);
+  const mtaWindow = computeDictionaryRefreshWindow_(mtaLastProcessed, mtaTotal);
+
+  const cached = readDictionaryCacheCountsBySource_(CONFIG.PROGRAM_SEGMENT_DICT.SHEET, 5, 6);
+
+  const leadsNewRecords =
+    leadsWindow.numRows > 0 ? readRawSheetFrom_(CONFIG.SHEETS.LEADS_MASTER, leadsWindow.startIndex) : [];
+  const mtaNewRecords =
+    mtaWindow.numRows > 0 ? readRawSheetFrom_(CONFIG.SHEETS.MTA_MASTER, mtaWindow.startIndex) : [];
+
+  const leadsNewPairs =
+    extractProgramSegmentPairsFromRecords_(leadsNewRecords, "First Touch Detail", "Business Segment");
+  const mtaNewPairs =
+    extractProgramSegmentPairsFromRecords_(mtaNewRecords, "Lead Source Detail", "Business Segment");
+
+  const leadsCounts =
+    aggregateProgramSegmentCounts_(leadsNewPairs, leadsWindow.needsFreshCounts ? {} : cached.leadsCounts);
+  const mtaCounts =
+    aggregateProgramSegmentCounts_(mtaNewPairs, mtaWindow.needsFreshCounts ? {} : cached.mtaCounts);
+
+  const counts = mergeCountsObjects_(mtaCounts, leadsCounts);
+  const entries = resolveProgramSegmentDictionaryEntries_(counts);
+
+  const coreRows = entries.map(function(e){
+    return [e.program, e.segment, e.matchCount, e.totalCount, e.distinctSegmentCount];
+  });
+
+  const keysLower = entries.map(function(e){ return e.program; });
+
+  writeDictionaryCacheSheet_(
+    CONFIG.PROGRAM_SEGMENT_DICT.SHEET, PROGRAM_SEGMENT_DICT_HEADERS, coreRows, keysLower, mtaCounts, leadsCounts
+  );
+
+  const segProps = {};
+  segProps[CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW] = String(leadsTotal);
+  segProps[CONFIG.PROPERTIES.PROGRAM_SEGMENT_DICT_MTA_LAST_ROW] = String(mtaTotal);
+  props.setProperties(segProps);
+
+  _programSegmentDictCache = null; // 메모이제이션 캐시 무효화 — 다음 읽기가 새 값 반영
+
+  Logger.log(
+    "Program_Segment_Dictionary 증분 갱신 완료: Leads 신규 " + leadsNewRecords.length +
+    "행 / MTA 신규 " + mtaNewRecords.length + "행 반영(전체 재채굴 아님), 총 " +
+    coreRows.length + "개 Program 키."
+  );
 
 }
 
@@ -1588,12 +2220,21 @@ function resolveBusinessSegment_(campaign, detail, leadSource, category){
  * 코드에도 반영). `AD_004_SpendCache.js`의 `periodicRefreshAdSpendCache_()`
  * 와 동일한 "트리거가 직접 호출하는 핸들러" 역할 — 리드 유입 파이프라인과는
  * 완전히 독립된 스케줄로 동작.
+ *
+ * **2026-09-04부터 증분 버전 호출로 전환**(성능 개선,
+ * docs/exec-plans/active/2026-09-03-performance-optimization.md #4) — 매번
+ * Leads_Master+MTA_Master 전체(12만 행+)를 재스캔하던 `refreshUtmProgramDictionary_()`/
+ * `refreshProgramSegmentDictionary_()` 대신 `refreshUtmProgramDictionaryIncremental_()`/
+ * `refreshProgramSegmentDictionaryIncremental_()`(이번에 새로 추가된 Master
+ * 행만 읽어 기존 캐시 카운트에 증분) 호출. 전체 재구축이 필요하면
+ * `runRefreshUtmProgramDictionary()`/`runRefreshProgramSegmentDictionary()`를
+ * 수동으로 직접 Run.
  * ==========================================================
  */
 function periodicRefreshDictionaries_(){
 
-  refreshUtmProgramDictionary_();
-  refreshProgramSegmentDictionary_();
+  refreshUtmProgramDictionaryIncremental_();
+  refreshProgramSegmentDictionaryIncremental_();
 
 }
 

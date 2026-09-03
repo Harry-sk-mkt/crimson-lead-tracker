@@ -10,9 +10,16 @@
  * 10 Master Build
  *
  * Version
- * v2.2.0
+ * v2.3.0
  *
  * Change Log
+ * v2.3.0 (2026-09-04)
+ * - **청크 읽기 전환(성능/안전장치, docs/exec-plans/active/
+ *   2026-09-03-performance-optimization.md #5)**: `readRawSheet()`(전체
+ *   스캔)의 `getDataRange().getValues()` 단일 호출을 `getRangeValuesChunked_()`
+ *   (UTIL_003_SheetChunkIO.js 신규)로 교체 — 결과 100% 동일, 대용량 대비
+ *   안전장치. `getRawSheetDataRowCount_()`/`readRawSheetFrom_()`(이미 신규
+ *   행 수에만 비례하는 targeted 읽기)는 대상 밖(변경 없음).
  * v2.2.0 (2026-09-03)
  * - **Master_DB Raw 이관 2단계(사용자 확정, `docs/exec-plans/active/
  *   2026-09-03-master-db-raw-migration.md`)**: `readRawSheet()`/
@@ -157,8 +164,13 @@ function readRawSheet(
 
   }
 
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  // 2026-09-04 — 청크 단위 읽기(UTIL_003_SheetChunkIO.js)로 교체, 결과는
+  // getDataRange().getValues()와 100% 동일(exec-plan #5, 대용량 대비 안전장치).
   const values =
-    sheet.getDataRange().getValues();
+    (lastRow === 0 || lastCol === 0) ? [] : getRangeValuesChunked_(sheet, 1, 1, lastRow, lastCol);
 
   if(values.length <= 1){
 

@@ -56,9 +56,20 @@
  *   `MASTER_011_RevenueSync.js`/Leads_Master의 전담 필드)
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-09-04)
+ * - **`computeDirectUpdateRowWindow_()` 신규(순수 함수, 성능 개선
+ *   docs/exec-plans/active/2026-09-03-performance-optimization.md #3)** —
+ *   대상 Lead ID들의 Leads_OPS 행 번호 중 최소~최대 연속 구간만 계산.
+ *   `MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`가 "이번 배치만
+ *   Direct Update"로 전환하며 `computeMTASyncColumnUpdates_()`에 넘길
+ *   비교 범위를 좁히는 데 재사용(`computeMTASyncColumnUpdates_()` 자체는
+ *   무변경 — `dataStartRow`만 이 함수의 `startRow`로 교체하면 기존 rowOffset
+ *   계산 로직 그대로 호환). 이 파일(MTA Sync)은 `#Touches`가 Lead당 전체
+ *   터치 수를 세는 집계라 매번 MTA_Master 전체 스캔이 필요해 이번 변경
+ *   범위 밖(변경 없음).
  * v1.10.0 (2026-09-02)
  * - **"Revenue"/"Lead Priority" sync를 이 파일에서 완전히 제거, "#Touches"
  *   신규 추가** — Leads_OPS 필드 소유권 재편 2단계(사용자 확정, 위 WHY
@@ -507,6 +518,113 @@ function testComputeMTASyncColumnUpdates(){
   Logger.log(
     "testComputeMTASyncColumnUpdates: " + (pass ? "PASS" : "FAIL") +
     " result=" + JSON.stringify(result)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Direct Update Row Window (순수 함수)
+ *
+ * WHY (docs/exec-plans/active/2026-09-03-performance-optimization.md #3)
+ * `syncICFunnelToOPS_()`/`syncSALToOPS_()`(Lead 단위 최신 스냅샷 동기화)가
+ * "이번에 새로 Import된 배치"의 Lead ID만 갱신 대상으로 좁힌 뒤에도,
+ * `computeMTASyncColumnUpdates_()`에 넘길 `existingColumnValues`를 여전히
+ * Leads_OPS 전체 컬럼(3만5천+ 행)으로 읽으면 I/O 절감 효과가 없음 — 실제
+ * 갱신 대상 Lead ID들의 OPS 행 번호 중 최소~최대만 아우르는 연속 구간
+ * (bounding window)만 계산해, 그 구간만 읽고/쓰도록 한다(리드 하나당 개별
+ * setValue() 호출은 과거 실측으로 이미 978.95초 성능 사고를 낸 방식이라
+ * 재사용 안 함 — 파일 헤더 "배치 읽기/쓰기 재사용" 참고, 이 함수는 여전히
+ * 컬럼 전체를 한 번에 읽고/쓰는 배치 방식을 유지하되 범위만 좁힘).
+ *
+ * `computeMTASyncColumnUpdates_()`는 `rowOffset = sheetRow - dataStartRow`로
+ * 인덱싱하므로, 여기서 구한 `startRow`를 그대로 `dataStartRow`로 넘기면
+ * 별도 수정 없이 그대로 재사용 가능.
+ *
+ * INPUT
+ * targetLeadIds : string[]  (이번 배치의 Lead ID)
+ * leadIdToRow : Object  { [leadId]: rowNumber }
+ *
+ * OUTPUT
+ * { startRow: number, numRows: number } | null  (OPS에 존재하는 대상이
+ *   하나도 없으면 null)
+ *
+ * TEST
+ * testComputeDirectUpdateRowWindow() 참고
+ * ==========================================================
+ */
+function computeDirectUpdateRowWindow_(targetLeadIds, leadIdToRow){
+
+  let minRow = null;
+  let maxRow = null;
+
+  targetLeadIds.forEach(function(leadId){
+
+    const row = leadIdToRow[leadId];
+
+    if(row === undefined){
+      return;
+    }
+
+    if(minRow === null || row < minRow){
+      minRow = row;
+    }
+
+    if(maxRow === null || row > maxRow){
+      maxRow = row;
+    }
+
+  });
+
+  if(minRow === null){
+    return null;
+  }
+
+  return {
+    startRow: minRow,
+    numRows: maxRow - minRow + 1
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeDirectUpdateRowWindow_()
+ * ==========================================================
+ */
+function testComputeDirectUpdateRowWindow(){
+
+  const leadIdToRow = { L1: 50, L2: 12000, L3: 8000, L4: 30000 };
+
+  const case1 =
+    computeDirectUpdateRowWindow_(["L2", "L3"], leadIdToRow);
+
+  const case1Ok =
+    case1.startRow === 8000 &&
+    case1.numRows === 4001; // 8000~12000 포함
+
+  const case2 =
+    computeDirectUpdateRowWindow_(["L9"], leadIdToRow); // OPS에 없는 Lead ID뿐
+
+  const case2Ok =
+    case2 === null;
+
+  const case3 =
+    computeDirectUpdateRowWindow_(["L1"], leadIdToRow); // 단일 행
+
+  const case3Ok =
+    case3.startRow === 50 &&
+    case3.numRows === 1;
+
+  const ok = case1Ok && case2Ok && case3Ok;
+
+  Logger.log(
+    "testComputeDirectUpdateRowWindow: " + (ok ? "PASS" : "FAIL") +
+    "\n  case1=" + JSON.stringify(case1) +
+    "\n  case2=" + JSON.stringify(case2) +
+    "\n  case3=" + JSON.stringify(case3)
   );
 
 }

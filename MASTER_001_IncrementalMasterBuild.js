@@ -10,9 +10,16 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.11.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-09-04)
+ * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #1)**:
+ *   `appendNewLeads()`/`appendNewMTA()`의 `sortSheetByDate()` 호출 제거 — Master는
+ *   실무자가 직접 보지 않는 중간 처리 레이어(Leads_OPS만 확인)이므로, 증분
+ *   append 후 매번 전체 시트(Leads_Master 3.7만+/MTA_Master 8.7만+ 행)를 재정렬하던
+ *   비용을 없애고 순수 Append-only로 전환. `IMPORT_007_SheetSorter.js`(`sortSheetByDate()`)
+ *   호출부가 이제 하나도 안 남아 파일 자체 삭제.
  * v1.11.0 (2026-09-03)
  * - **Master_DB Raw 이관 2단계** — `appendNewLeads()`/`appendNewMTA()`의
  *   `getRawSheetDataRowCount_()`/`readRawSheetFrom_()` 호출에
@@ -157,11 +164,6 @@ function appendNewLeads(silent){
     newMaster
   );
 
-  sortSheetByDate(
-    CONFIG.SHEETS.LEADS_MASTER,
-    "Create Date"
-  );
-
   PropertiesService
     .getScriptProperties()
     .setProperty(
@@ -296,11 +298,6 @@ function appendNewMTA(silent){
     newMaster,
     [],              // textColumns 없음 (Master는 Date 객체 그대로 유지)
     ["Revenue"]       // ← 숫자 서식 강제 (날짜로 자동 오인식 방지)
-  );
-
-  sortSheetByDate(
-    CONFIG.SHEETS.MTA_MASTER,
-    "MTA Created Date"
   );
 
   PropertiesService

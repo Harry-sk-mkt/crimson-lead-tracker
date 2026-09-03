@@ -12,9 +12,8 @@
 | `03_Validator.js` | 필수 필드 검증 (`CONFIG.REQUIRED_FIELDS`), 검증 요약(Summary) 생성 |
 | `04_RawWriter.js` | Raw 시트에 **Append** (Leads_Raw / MTA_Raw 전용) |
 | `05_SheetWriter.js` | 범용 Sheet Writer — `writeSheetRecords()`(Full Overwrite, Rebuild 전용) + `appendSheetRecords()`(Append) |
-| `06_SheetSorter.js` | Date 컬럼 기준 정렬 (Master 전용, Incremental Append 후 사용) |
-| `07_IncrementalMasterBuild.js` | `appendNewLeads()` / `appendNewMTA()` — Raw 신규분만 Transform → Master Append |
-| `10_MasterBuild.js` | `rebuildLeadsMaster()` / `rebuildMTAMaster()` — Full Rebuild (복구용, 메뉴 미노출) |
+| `07_IncrementalMasterBuild.js` | `appendNewLeads()` / `appendNewMTA()` — Raw 신규분만 Transform → Master Append (2026-09-04부터 Append-only, 정렬 없음) |
+| `10_MasterBuild.js` | `rebuildLeadsMaster()` / `rebuildMTAMaster()` — Full Rebuild (복구용, 메뉴 미노출, 2026-09-04부터 Append-only, 정렬 없음) |
 | `11_DataReader.js` | Raw 시트 → Object Array 읽기 |
 | `12_LeadTransformer.js` | Leads_Raw → Leads_Master 변환 로직 |
 | `13_MTATransformer.js` | MTA_Raw → MTA_Master 변환 로직 |

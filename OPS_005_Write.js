@@ -7,9 +7,14 @@
  * Write merged Leads_OPS data into sheet
  *
  * Version
- * v2.2
+ * v2.3
  *
  * Change Log
+ * v2.3 (2026-09-04)
+ * - **청크 쓰기 전환(성능/안전장치, docs/exec-plans/active/
+ *   2026-09-03-performance-optimization.md #5)**: 데이터 영역 `setValues()`
+ *   단일 호출을 `setRangeValuesChunked_()`(UTIL_003_SheetChunkIO.js 신규)로
+ *   교체 — 최종 시트 상태 100% 동일, 대용량 대비 안전장치.
  * v2.2 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `23_OPS_Write.js` → 신규 `OPS_005_Write.js`, 코드 내용 변경 없음.
  * v2.1 (2026-07-20)
@@ -55,14 +60,16 @@ function writeOPS(rows) {
 
   if (rows && rows.length > 0) {
 
-    sheet
-      .getRange(
-        OPS.ROWS.DATA_START,
-        1,
-        rows.length,
-        OPS.HEADER.length
-      )
-      .setValues(rows);
+    // 2026-09-04 — 청크 단위 쓰기(UTIL_003_SheetChunkIO.js)로 교체, 최종
+    // 시트 상태는 단일 setValues()와 100% 동일(exec-plan #5, 대용량 대비
+    // 안전장치).
+    setRangeValuesChunked_(
+      sheet,
+      OPS.ROWS.DATA_START,
+      1,
+      rows,
+      OPS.HEADER.length
+    );
 
   }
 

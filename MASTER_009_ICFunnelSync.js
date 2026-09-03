@@ -46,9 +46,27 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-04)
+ * - **Batch Direct Update 전환(성능 개선,
+ *   docs/exec-plans/active/2026-09-03-performance-optimization.md #3)**:
+ *   `syncICFunnelToOPS_()`가 매번 ICFunnel_Raw 전체(4만+ 행)를 `sheetToObjects()`로
+ *   읽어 전체 Lead ID의 "최신 스냅샷"을 재계산하던 것을, `CONFIG.PROPERTIES.
+ *   ICFUNNEL_LAST_ROW` 체크포인트(`getRawSheetDataRowCount_()`/
+ *   `readRawSheetFrom_()`, LEADS_LAST_ROW/MTA_LAST_ROW와 동일 관례)로 "이번에
+ *   새로 Import된 배치"만 읽도록 변경 — Raw는 Append-only라 새 배치에 등장하는
+ *   Lead ID는 항상 과거 어떤 레코드보다 최신이므로 결과는 동일, 처리량만 배치
+ *   크기(수십~수백 건)에 비례. Leads_OPS 쓰기도 `computeDirectUpdateRowWindow_()`
+ *   (MASTER_003_MTAFunnelSync.js v1.11.0, 신규 공용 순수 함수)로 대상 Lead ID들의
+ *   행 번호 최소~최대 연속 구간만 읽고/쓰도록 변경(전체 3만5천+ 행 컬럼 전체
+ *   read/write → 그 구간만) — `computeMTASyncColumnUpdates_()`/
+ *   `applyPriorityDowngradeGuard_()`는 `dataStartRow`만 이 구간의 시작행으로
+ *   바꿔 그대로 재사용(둘 다 무변경). 매 배치 로그에 "Compared window" 행 추가 —
+ *   실 Import로 절감 효과 확인용. 새 배치가 0건이거나 대상 Lead ID가 Leads_OPS에
+ *   하나도 없으면 컬럼 read/write와 Engine refresh 자체를 스킵(단, 카운터는
+ *   Raw 진행률 기준이라 항상 갱신).
  * v1.8.0 (2026-09-03)
  * - **Master_DB Raw 이관 2단계** — `openICFunnelRawExternalSpreadsheet_()`
  *   신규(`openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)와 동일 패턴).
@@ -357,7 +375,14 @@ function syncICFunnelToOPS_(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   //----------------------------------------------------------
-  // Read ICFunnel_Raw (전용 외부 스프레드시트, 2026-09-03부터)
+  // Read ICFunnel_Raw — 이번에 새로 Import된 배치만(2026-09-04부터,
+  // docs/exec-plans/active/2026-09-03-performance-optimization.md #3)
+  //
+  // Lead 단위 "최신 스냅샷"만 의미 있는 리포트라, 새 배치에 등장하는
+  // Lead ID는 그 배치의 레코드가 항상 과거 어떤 레코드보다도 최신(Raw는
+  // Append-only, 시간순 누적) — 과거 전체를 다시 훑어 "최신"을 재확인할
+  // 필요가 없음. 배치에 없는 Lead ID는 이번에 상태 변화가 없다는 뜻이므로
+  // 그대로 둔다(기존 OPS 값이 여전히 최신).
   //----------------------------------------------------------
 
   const externalFile = openICFunnelRawExternalSpreadsheet_();
@@ -370,16 +395,43 @@ function syncICFunnelToOPS_(){
     );
   }
 
-  const rawRecords = sheetToObjects(rawSheet);
+  const lastProcessed =
+    Number(
+      PropertiesService
+        .getScriptProperties()
+        .getProperty(CONFIG.PROPERTIES.ICFUNNEL_LAST_ROW)
+    ) || 0;
 
-  const latestByLeadId = pickLatestICFunnelRecords_(rawRecords);
+  const totalRaw =
+    getRawSheetDataRowCount_(CONFIG.IC_FUNNEL.SHEET, externalFile);
+
+  const newRaw =
+    readRawSheetFrom_(CONFIG.IC_FUNNEL.SHEET, lastProcessed, externalFile);
+
+  Logger.log(
+    "ICFunnel_Raw Records : " + totalRaw +
+    " / Already Processed : " + lastProcessed +
+    " / New : " + newRaw.length
+  );
+
+  if(newRaw.length === 0){
+
+    Logger.log("No new IC Funnel records to sync.");
+    Logger.log("======================================");
+    Logger.log("IC Funnel Sync Completed (no-op)");
+    Logger.log("======================================");
+
+    return;
+
+  }
+
+  const latestByLeadId = pickLatestICFunnelRecords_(newRaw);
 
   const funnelByLeadId = computeICFunnelByLeadId_(latestByLeadId);
 
   const leadIds = Object.keys(funnelByLeadId);
 
-  Logger.log("ICFunnel_Raw Records : " + rawRecords.length);
-  Logger.log("Unique Lead IDs (latest only) : " + leadIds.length);
+  Logger.log("Unique Lead IDs (this batch, latest only) : " + leadIds.length);
 
   //----------------------------------------------------------
   // Read Leads_OPS — Lead ID → Row 매핑
@@ -423,9 +475,32 @@ function syncICFunnelToOPS_(){
   });
 
   //----------------------------------------------------------
-  // Sync 실행 — 컬럼별 배치 읽기/쓰기
-  // (computeMTASyncColumnUpdates_()는 범용 순수 함수, MASTER_003 참고)
+  // Sync 실행 — Direct Update(2026-09-04부터, exec-plan #3): 이번 배치
+  // Lead ID들의 Leads_OPS 행 범위(연속 구간, computeDirectUpdateRowWindow_())
+  // 만 읽고/쓴다. Leads_OPS 전체 컬럼을 매번 통째로 읽던 것 대신
+  // — computeMTASyncColumnUpdates_()(범용 순수 함수, MASTER_003 참고)는
+  // dataStartRow만 이 window의 startRow로 바꾸면 그대로 재사용 가능.
   //----------------------------------------------------------
+
+  const window = computeDirectUpdateRowWindow_(leadIds, leadIdToRow);
+
+  if(!window){
+
+    PropertiesService
+      .getScriptProperties()
+      .setProperty(
+        CONFIG.PROPERTIES.ICFUNNEL_LAST_ROW,
+        String(totalRaw)
+      );
+
+    Logger.log("이번 배치의 Lead ID가 Leads_OPS에 하나도 없음 — sync할 대상 없음.");
+    Logger.log("======================================");
+    Logger.log("IC Funnel Sync Completed (no matching OPS rows)");
+    Logger.log("======================================");
+
+    return;
+
+  }
 
   // 2026-09-02 — "Opportunity Won Date"는 MASTER_011_RevenueSync.js(Deal
   // Tracker 기반, Email 매칭)로 이관돼 여기서 제외(IC Funnel = booked/complete
@@ -448,13 +523,11 @@ function syncICFunnelToOPS_(){
     })
     .filter(function(col){ return col.colIndex !== undefined; });
 
-  const numRows = lastRow - OPS.ROWS.DATA_START + 1;
-
   const existingColumnValues = {};
 
   syncColumns.forEach(function(col){
     existingColumnValues[col.opsFieldName] = opsSheet
-      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
       .getValues();
   });
 
@@ -466,12 +539,12 @@ function syncICFunnelToOPS_(){
 
   const guardedFunnelByLeadId = existingColumnValues["Lead Priority"]
     ? applyPriorityDowngradeGuard_(
-        leadIds, funnelByLeadId, leadIdToRow, OPS.ROWS.DATA_START, existingColumnValues["Lead Priority"]
+        leadIds, funnelByLeadId, leadIdToRow, window.startRow, existingColumnValues["Lead Priority"]
       )
     : funnelByLeadId;
 
   const syncResult = computeMTASyncColumnUpdates_(
-    leadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+    leadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, window.startRow, existingColumnValues
   );
 
   syncColumns.forEach(function(col){
@@ -479,7 +552,7 @@ function syncICFunnelToOPS_(){
     if(!syncResult.columnChanged[col.opsFieldName]) return;
 
     opsSheet
-      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
       .setValues(syncResult.columnValues[col.opsFieldName]);
 
   });
@@ -487,12 +560,20 @@ function syncICFunnelToOPS_(){
   const updated = syncResult.updated;
   const notFoundInOPS = syncResult.notFoundInOPS;
 
+  PropertiesService
+    .getScriptProperties()
+    .setProperty(
+      CONFIG.PROPERTIES.ICFUNNEL_LAST_ROW,
+      String(totalRaw)
+    );
+
   const seconds = ((new Date() - start) / 1000).toFixed(2);
 
   Logger.log("");
   Logger.log("========== IC FUNNEL SYNC SUMMARY ==========");
   Logger.log("Updated in Leads_OPS : " + updated);
   Logger.log("Not found in Leads_OPS : " + notFoundInOPS);
+  Logger.log("Compared window : " + window.numRows + " rows (of " + (lastRow - OPS.ROWS.DATA_START + 1) + " total OPS rows)");
   Logger.log("Time : " + seconds + "s");
   Logger.log("=============================================");
 

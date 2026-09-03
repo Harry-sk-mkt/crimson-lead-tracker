@@ -10,9 +10,17 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.4.0
+ * v4.5.0
  *
  * Change Log
+ * v4.5.0 (2026-09-04)
+ * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #1)**:
+ *   `rebuildLeadsMaster()`/`rebuildMTAMaster()`의 `sortSheetByDate()` 호출 제거 —
+ *   MASTER_001_IncrementalMasterBuild.js v1.12.0과 동일 원칙(Master는 실무자가
+ *   직접 보지 않는 중간 처리 레이어, Append-only로 통일). Full Rebuild는 Raw를
+ *   1:1로 그대로 옮기므로 Raw 자체가 여러 export 배치의 append 순서를 그대로
+ *   반영 — 배치 간 겹치는 날짜가 있으면 Master가 완전한 날짜순은 아닐 수 있음(허용된
+ *   트레이드오프, 위 exec-plan 참고).
  * v4.4.0 (2026-08-20)
  * - rebuildLeadsMaster()/rebuildMTAMaster() 둘 다에 완전 동일 중복 행
  *   자동 삭제(runAutoDeleteExactDuplicateLeadRows()/
@@ -75,11 +83,6 @@ function rebuildLeadsMaster(showAlert = true) {
   );
 
   writeLeadMaster(master);
-
-  sortSheetByDate(
-    CONFIG.SHEETS.LEADS_MASTER,
-    "Create Date"
-  );
 
   //----------------------------------------------------------
   // Raw는 1:1로 그대로 옮기므로(중복 제거 없음), Raw에 쌓인 완전 동일
@@ -176,11 +179,6 @@ function rebuildMTAMaster(showAlert = true) {
   );
 
   writeMTAMaster(master);
-
-  sortSheetByDate(
-    CONFIG.SHEETS.MTA_MASTER,
-    "MTA Created Date"
-  );
 
   //----------------------------------------------------------
   // Raw는 1:1로 그대로 옮기므로(중복 제거 없음), Raw에 쌓인 완전 동일

@@ -41,9 +41,19 @@
  *   오래 안 닫히는 문제 방지)
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-09-04)
+ * - **Batch Direct Update 전환(성능 개선,
+ *   docs/exec-plans/active/2026-09-03-performance-optimization.md #3)** —
+ *   `MASTER_009_ICFunnelSync.js` v1.9.0과 동일 원칙/구현 패턴. `syncSALToOPS_()`가
+ *   매번 SAL_Raw 전체를 읽던 것을 `CONFIG.PROPERTIES.SAL_LAST_ROW` 체크포인트로
+ *   "이번에 새로 Import된 배치"만 읽도록 변경, Leads_OPS 쓰기도
+ *   `computeDirectUpdateRowWindow_()`(MASTER_003_MTAFunnelSync.js v1.11.0)로
+ *   대상 Lead ID들의 행 범위(연속 구간)만 읽고/쓰도록 변경 —
+ *   `computeMTASyncColumnUpdates_()`/`computeSALDeltaLeads_()`는 `dataStartRow`만
+ *   이 구간의 시작행으로 바꿔 그대로 재사용(둘 다 무변경).
  * v1.2.0 (2026-09-03)
  * - **"SAL Segment" 신규 — 이벤트 기준(Per-Touch) 독립 분류(사용자 설계
  *   확정)**: ACQ_REP은 NewP1_REP과 달리 코호트가 아니라 "그 달 어떤 채널의
@@ -290,7 +300,10 @@ function syncSALToOPS_(){
   Logger.log("======================================");
 
   //----------------------------------------------------------
-  // Read SAL_Raw (외부 스프레드시트)
+  // Read SAL_Raw — 이번에 새로 Import된 배치만(2026-09-04부터,
+  // docs/exec-plans/active/2026-09-03-performance-optimization.md #3,
+  // MASTER_009_ICFunnelSync.js v1.9.0과 동일 원칙 — Raw Append-only라
+  // 새 배치의 Lead ID는 항상 과거 어떤 레코드보다 최신)
   //----------------------------------------------------------
 
   const externalFile = openSALExternalSpreadsheet_();
@@ -303,16 +316,43 @@ function syncSALToOPS_(){
     );
   }
 
-  const rawRecords = sheetToObjects(rawSheet);
+  const lastProcessed =
+    Number(
+      PropertiesService
+        .getScriptProperties()
+        .getProperty(CONFIG.PROPERTIES.SAL_LAST_ROW)
+    ) || 0;
 
-  const latestByLeadId = pickLatestSALRecords_(rawRecords);
+  const totalRaw =
+    getRawSheetDataRowCount_(CONFIG.SAL.SHEET, externalFile);
+
+  const newRaw =
+    readRawSheetFrom_(CONFIG.SAL.SHEET, lastProcessed, externalFile);
+
+  Logger.log(
+    "SAL_Raw Records : " + totalRaw +
+    " / Already Processed : " + lastProcessed +
+    " / New : " + newRaw.length
+  );
+
+  if(newRaw.length === 0){
+
+    Logger.log("No new SAL records to sync.");
+    Logger.log("======================================");
+    Logger.log("SAL Sync Completed (no-op)");
+    Logger.log("======================================");
+
+    return;
+
+  }
+
+  const latestByLeadId = pickLatestSALRecords_(newRaw);
 
   const salByLeadId = computeSALByLeadId_(latestByLeadId);
 
   const leadIds = Object.keys(salByLeadId);
 
-  Logger.log("SAL_Raw Records : " + rawRecords.length);
-  Logger.log("Unique Lead IDs (latest only) : " + leadIds.length);
+  Logger.log("Unique Lead IDs (this batch, latest only) : " + leadIds.length);
 
   //----------------------------------------------------------
   // Read Leads_OPS — Lead ID → Row 매핑
@@ -357,9 +397,32 @@ function syncSALToOPS_(){
   });
 
   //----------------------------------------------------------
-  // Sync 실행 — 컬럼별 배치 읽기/쓰기
-  // (computeMTASyncColumnUpdates_()는 범용 순수 함수, MASTER_003 참고)
+  // Sync 실행 — Direct Update(2026-09-04부터, exec-plan #3): 이번 배치
+  // Lead ID들의 Leads_OPS 행 범위(연속 구간, computeDirectUpdateRowWindow_()
+  // — MASTER_003_MTAFunnelSync.js 신규 공용 함수)만 읽고/쓴다.
+  // computeMTASyncColumnUpdates_()는 dataStartRow만 이 window의 startRow로
+  // 바꾸면 그대로 재사용 가능(무변경).
   //----------------------------------------------------------
+
+  const window = computeDirectUpdateRowWindow_(leadIds, leadIdToRow);
+
+  if(!window){
+
+    PropertiesService
+      .getScriptProperties()
+      .setProperty(
+        CONFIG.PROPERTIES.SAL_LAST_ROW,
+        String(totalRaw)
+      );
+
+    Logger.log("이번 배치의 Lead ID가 Leads_OPS에 하나도 없음 — sync할 대상 없음.");
+    Logger.log("======================================");
+    Logger.log("SAL Sync Completed (no matching OPS rows)");
+    Logger.log("======================================");
+
+    return;
+
+  }
 
   const syncFieldMap = {
     "Sales Accepted Date": "salesAcceptedDate",
@@ -376,13 +439,11 @@ function syncSALToOPS_(){
     })
     .filter(function(col){ return col.colIndex !== undefined; });
 
-  const numRows = lastRow - OPS.ROWS.DATA_START + 1;
-
   const existingColumnValues = {};
 
   syncColumns.forEach(function(col){
     existingColumnValues[col.opsFieldName] = opsSheet
-      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
       .getValues();
   });
 
@@ -400,17 +461,17 @@ function syncSALToOPS_(){
   const priorityOverrideCol = headerMap["Priority Override"];
 
   const priorityValues = priorityCol !== undefined
-    ? opsSheet.getRange(OPS.ROWS.DATA_START, priorityCol + 1, numRows, 1).getValues()
+    ? opsSheet.getRange(window.startRow, priorityCol + 1, window.numRows, 1).getValues()
     : null;
 
   const priorityOverrideValues = priorityOverrideCol !== undefined
-    ? opsSheet.getRange(OPS.ROWS.DATA_START, priorityOverrideCol + 1, numRows, 1).getValues()
+    ? opsSheet.getRange(window.startRow, priorityOverrideCol + 1, window.numRows, 1).getValues()
     : null;
 
   const deltaLeads = computeSALDeltaLeads_(
     leadIds,
     leadIdToRow,
-    OPS.ROWS.DATA_START,
+    window.startRow,
     existingColumnValues["Sales Accepted Date"],
     salByLeadId,
     priorityValues,
@@ -418,7 +479,7 @@ function syncSALToOPS_(){
   );
 
   const syncResult = computeMTASyncColumnUpdates_(
-    leadIds, salByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
+    leadIds, salByLeadId, leadIdToRow, syncColumns, window.startRow, existingColumnValues
   );
 
   syncColumns.forEach(function(col){
@@ -426,7 +487,7 @@ function syncSALToOPS_(){
     if(!syncResult.columnChanged[col.opsFieldName]) return;
 
     opsSheet
-      .getRange(OPS.ROWS.DATA_START, col.colIndex + 1, numRows, 1)
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
       .setValues(syncResult.columnValues[col.opsFieldName]);
 
   });
@@ -434,12 +495,20 @@ function syncSALToOPS_(){
   const updated = syncResult.updated;
   const notFoundInOPS = syncResult.notFoundInOPS;
 
+  PropertiesService
+    .getScriptProperties()
+    .setProperty(
+      CONFIG.PROPERTIES.SAL_LAST_ROW,
+      String(totalRaw)
+    );
+
   const seconds = ((new Date() - start) / 1000).toFixed(2);
 
   Logger.log("");
   Logger.log("========== SAL SYNC SUMMARY ==========");
   Logger.log("Updated in Leads_OPS : " + updated);
   Logger.log("Not found in Leads_OPS : " + notFoundInOPS);
+  Logger.log("Compared window : " + window.numRows + " rows (of " + (lastRow - OPS.ROWS.DATA_START + 1) + " total OPS rows)");
   Logger.log("Time : " + seconds + "s");
   Logger.log("=======================================");
 

@@ -9,9 +9,22 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.60.0
+ * v1.62.0
  *
  * Change Log
+ * v1.62.0 (2026-09-04)
+ * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #4)**:
+ *   `PROPERTIES.UTM_PROGRAM_DICT_LEADS_LAST_ROW`/`_MTA_LAST_ROW`,
+ *   `PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW`/`_MTA_LAST_ROW` 신규(딕셔너리별 독립
+ *   체크포인트 4개) — `periodicRefreshDictionaries_()`(UTIL_002_UtmProgramDictionary.js)가
+ *   12시간마다 Leads_Master/MTA_Master 전체(12만 행+)를 재스캔하던 것을 "이번에
+ *   새로 추가된 행만 채굴해 기존 카운트에 증분"으로 전환하며 필요해진 체크포인트.
+ * v1.61.0 (2026-09-04)
+ * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #3)**:
+ *   `PROPERTIES.ICFUNNEL_LAST_ROW`/`SAL_LAST_ROW` 신규 — `syncICFunnelToOPS_()`/
+ *   `syncSALToOPS_()`가 매번 Raw 전체를 재스캔하던 것을 "이번에 새로 Import된
+ *   배치만 처리"로 전환하며 필요해진 증분 처리 체크포인트(LEADS_LAST_ROW/
+ *   MTA_LAST_ROW와 동일 관례).
  * v1.60.0 (2026-09-03)
  * - **SAL Segment — 이벤트 기준(Per-Touch) Business Segment 신규 도입
  *   (사용자 설계 확정)**: ACQ_REP은 코호트 리포트(NewP1_REP)와 달리 "그 달에
@@ -734,7 +747,29 @@ const CONFIG = {
     // 2026-08-06 추가 — DealTracker_Engine 증분 동기화 체크포인트
     // (appendNewDealTrackerRows_(), 90_TargetEngine.js). LEADS_LAST_ROW/
     // MTA_LAST_ROW와 동일 관례: 이미 처리한 "데이터 행 개수"(헤더 제외, 0-based).
-    DEAL_TRACKER_LAST_ROW: "DEAL_TRACKER_LAST_PROCESSED_ROW"
+    DEAL_TRACKER_LAST_ROW: "DEAL_TRACKER_LAST_PROCESSED_ROW",
+
+    // 2026-09-04 추가(docs/exec-plans/active/2026-09-03-performance-optimization.md #3) —
+    // syncICFunnelToOPS_()/syncSALToOPS_()를 "매번 Raw 전체 재스캔"에서 "이번에
+    // 새로 Import된 배치만 처리"로 전환하며 신규. LEADS_LAST_ROW/MTA_LAST_ROW와
+    // 동일 관례(이미 처리한 데이터 행 개수, 헤더 제외 0-based).
+    ICFUNNEL_LAST_ROW: "ICFUNNEL_LAST_PROCESSED_ROW",
+    SAL_LAST_ROW: "SAL_LAST_PROCESSED_ROW",
+
+    // 2026-09-04 추가(docs/exec-plans/active/2026-09-03-performance-optimization.md #4) —
+    // periodicRefreshDictionaries_()의 증분 채굴 체크포인트(UTIL_002_UtmProgramDictionary.js).
+    // LEADS_LAST_ROW/MTA_LAST_ROW와 달리 Raw가 아니라 **Master**(Leads_Master/
+    // MTA_Master) 행 수를 추적 — Master는 중복행 자동삭제로 행 수가 줄어들 수
+    // 있어(runAutoDeleteExactDuplicateLeadRows() 등) computeDictionaryRefreshWindow_()가
+    // 감소를 감지하면 안전하게 그 소스만 처음부터 다시 채굴한다. UTM_Program_
+    // Dictionary/Program_Segment_Dictionary는 독립된 수동 전체 재구축 진입점을
+    // 각각 갖고 있어(runRefreshUtmProgramDictionary()/runRefreshProgramSegmentDictionary())
+    // 체크포인트도 딕셔너리별로 완전히 분리(공유 시 한쪽만 수동 재구축될 때
+    // 다른 쪽 진행률과 어긋날 위험).
+    UTM_PROGRAM_DICT_LEADS_LAST_ROW: "UTM_PROGRAM_DICT_LEADS_LAST_PROCESSED_ROW",
+    UTM_PROGRAM_DICT_MTA_LAST_ROW: "UTM_PROGRAM_DICT_MTA_LAST_PROCESSED_ROW",
+    PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW: "PROGRAM_SEGMENT_DICT_LEADS_LAST_PROCESSED_ROW",
+    PROGRAM_SEGMENT_DICT_MTA_LAST_ROW: "PROGRAM_SEGMENT_DICT_MTA_LAST_PROCESSED_ROW"
 
   },
 

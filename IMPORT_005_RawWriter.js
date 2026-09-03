@@ -12,9 +12,18 @@
  * 00 Import
  *
  * Version
- * v4.3.0
+ * v4.4.0
  *
  * Change Log
+ * v4.4.0 (2026-09-04)
+ * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #2)**:
+ *   `writeLeadRaw()`/`writeMTARaw()`가 `filterOutExactDuplicateRawRecords_()`
+ *   (IMPORT_008_RawDeduplicator.js v1.2.0)에 4번째 인자로 각각
+ *   `"Create Date"`/`"Multi Touch Attribution: Created Date"`(REQUIRED_FIELDS라
+ *   항상 값이 있어 안전) 전달 — Raw 전체(수만~8만+ 행) 대신 신규 배치와 날짜가
+ *   겹치는 구간만 읽어 dedup 비교. `writeICFunnelRaw()`/`writeSALRaw()`는 필수
+ *   날짜 필드가 없어(REQUIRED_FIELDS에 "Lead ID"만 있음) 그대로 미전달(기존
+ *   전체 스캔 유지, No Assumptions).
  * v4.3.0 (2026-09-03)
  * - **Master_DB Raw 이관 2단계** — `writeLeadRaw()`/`writeMTARaw()`/
  *   `writeICFunnelRaw()` 모두 `writeSALRaw()`와 동일하게 전용 외부
@@ -68,7 +77,8 @@ function writeLeadRaw(records){
     filterOutExactDuplicateRawRecords_(
       CONFIG.SHEETS.LEADS_RAW,
       records,
-      externalFile
+      externalFile,
+      "Create Date"
     );
 
   appendSheetRecords(
@@ -103,7 +113,8 @@ function writeMTARaw(records){
     filterOutExactDuplicateRawRecords_(
       CONFIG.SHEETS.MTA_RAW,
       records,
-      externalFile
+      externalFile,
+      "Multi Touch Attribution: Created Date"
     );
 
   appendSheetRecords(

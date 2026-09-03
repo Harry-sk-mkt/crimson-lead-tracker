@@ -14,9 +14,15 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.8.0
+ * v1.8.1
  *
  * Change Log
+ * v1.8.1 (2026-09-04)
+ * - 코드 변경 없음. `runAutoDeleteExactDuplicateTouchRows()`/
+ *   `runAutoDeleteExactDuplicateLeadRows()` 헤더 주석의 "매 append마다
+ *   sortSheetByDate()로 재정렬되므로 정렬 부작용 없음" 서술이,
+ *   `docs/exec-plans/active/2026-09-03-performance-optimization.md` #1로
+ *   그 재정렬 자체가 제거되면서 stale해져 갱신(카운터 무관 결론은 그대로 유효).
  * v1.8.0 (2026-09-03)
  * - `checkUnprotectedDateLikeRawColumns_()`가 메인 스프레드시트 대신
  *   Leads_Raw/MTA_Raw 전용 외부 스프레드시트(`openLeadsRawExternalSpreadsheet_()`/
@@ -1834,9 +1840,10 @@ function testFindExactDuplicateTouchRowsToDeleteTieBreak_() {
  * 검출 로직(findExactDuplicateTouchRows_(), 2026-07-24)은 보고만 하고
  * 자동 삭제는 보류돼 있었음. MTA_LAST_ROW 카운터는 MTA_Raw 처리 진행률만
  * 추적할 뿐 MTA_Master 행 위치와 무관하고(07_IncrementalMasterBuild.js
- * appendNewMTA() 참고), MTA_Master는 매 append마다 어차피 날짜순으로
- * 재정렬되므로(sortSheetByDate) 삭제로 인한 카운터/정렬 영향은 없음을
- * 확인(2026-07-28) — 이번에 자동 삭제까지 구현.
+ * appendNewMTA() 참고) 삭제로 인한 카운터 영향은 없음을 확인(2026-07-28) —
+ * 이번에 자동 삭제까지 구현. (2026-09-04 갱신: 당시엔 MTA_Master가 매 append마다
+ * sortSheetByDate()로 재정렬돼 정렬 영향도 없었으나, 성능 개선으로 그 재정렬 자체가
+ * 제거됨 — 카운터 무관 결론은 그대로 유효, 정렬 관련 서술만 무효화됨)
  *
  * 삭제 대상이 아닌(가장 진행된) 행만 남기므로 IC Booked/Completed/Won/
  * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에
@@ -2155,9 +2162,11 @@ function testGroupConsecutiveDescendingRows() {
  * Lead ID가 Leads_Master에 중복 append됨(2026-07-28 신규 설계, 사용자
  * 요청). LEADS_LAST_ROW 카운터는 Leads_Raw 처리 진행률만 추적할 뿐
  * Leads_Master 행 위치와 무관하고(07_IncrementalMasterBuild.js
- * appendNewLeads() 참고), Leads_Master는 매 append마다 어차피
- * sortSheetByDate()로 재정렬되므로 삭제로 인한 카운터/정렬 부작용
- * 없음 — MTA_Master와 동일 구조(2026-07-28 검증 완료 사례 참고).
+ * appendNewLeads() 참고) 삭제로 인한 카운터 부작용 없음 — MTA_Master와
+ * 동일 구조(2026-07-28 검증 완료 사례 참고). (2026-09-04 갱신: 당시엔
+ * Leads_Master가 매 append마다 sortSheetByDate()로 재정렬돼 정렬 부작용도
+ * 없었으나, 성능 개선으로 그 재정렬 자체가 제거됨 — 카운터 무관 결론은
+ * 그대로 유효, 정렬 관련 서술만 무효화됨)
  *
  * 삭제 대상이 아닌(가장 진행된) 행만 남기므로 IC Booked/Completed/Won/
  * Revenue 진행 정보 손실은 최소화됨. 실행 전 무엇이 삭제될지 Logger에

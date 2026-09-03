@@ -34,9 +34,27 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.16.0
+ * v1.17.0
  *
  * Change Log
+ * v1.17.0 (2026-09-04)
+ * - **버그 수정 — 진행 중인(아직 안 끝난) 주가 미래 요일 지출을 조작해
+ *   부풀려짐(사용자 리포트)**: Target_REP Content 2026-08-31주가 New P1=9/
+ *   CPNP1=$709.64로 표시됐는데(⇒ Spend $6,386.76), 사용자가 Campaigns 2.0
+ *   원본에서 확인한 실제 값은 $2,737.18 — TEMPQA_046으로 조사한 결과 27개
+ *   Meta 캠페인 전부 `reportStart~End=2026-08-31~2026-09-02`(월~수 3일치,
+ *   export 시점이 그 주 도중이라 그때까지만 데이터가 있었을 뿐)인데
+ *   `prorateSingleWeekMetaSpend_()`가 "export 범위가 좁아서 생긴 결측"으로
+ *   오판해 3일치 실측($2,737.18)을 7/3배로 부풀림(정확히 $6,386.75 재현
+ *   확인). 이 함수는 "과거에 실제로 있었는데 export만 안 담긴 지출"과 "그
+ *   주가 아직 안 끝나 아직 발생하지 않은 지출"을 구분하지 못했던 것 —
+ *   신규 optional `now` 파라미터(생략 시 실제 현재 시각) 추가, 그 주
+ *   일요일이 아직 지나지 않았으면(다음 주 월요일이 아직 안 됐으면) 어떤
+ *   경우든 보정하지 않고 원본 값 그대로 반환하도록 최상단에 가드 추가.
+ *   과거에 완결된 주의 기존 보정 동작(Case A/B/C)은 무변경 — `now`가
+ *   실제 그 주보다 한참 뒤인 한 항상 이 가드를 통과함. `testProrateSingleWeekMetaSpend()`
+ *   에 Case D(진행 중인 주 재현) 추가 + 기존 A/B/C도 명시적 `now` 인자로
+ *   결정론적으로 전환.
  * v1.16.0 (2026-08-25)
  * - **버그 수정 — v1.15.0의 일수 보정이 이중 집계로 이어지던 문제.**
  *   v1.14.0에서 `isMetaRowWeekPrecise_()`가 화~일(6일) 부분 export를 "정밀
@@ -993,10 +1011,22 @@ function computeMetaRowWeeklySpend_(record){
  * 0인 것 → 보정하면 실제보다 부풀림, 하지 않음. reportEnd/campaignEnd 쪽도
  * 동일 논리(대칭).
  *
+ * **진행 중인(아직 안 끝난) 주는 보정하지 않는다(2026-09-04 버그 수정, 사용자
+ * 리포트)**: 이 함수가 "export 범위가 좁아서 생긴 결측"(과거, 실제로 지출이
+ * 있었는데 export만 안 담김 — 보정 타당)과 "그 주가 아직 안 끝나서 생긴
+ * 결측"(미래, 아직 지출 자체가 발생하지 않음 — 보정하면 안 일어난 지출을
+ * 조작하는 것)을 구분하지 못해, 진행 중인 주까지 나머지 요일을 지금까지의
+ * 평균으로 부풀리고 있었음(실측: Target_REP Content 2026-08-31주, 월~수
+ * 3일치 실제 $2,737.18을 7/3배 하여 $6,386.75로 표시 — 사용자가 Campaigns
+ * 2.0 원본과 대조해 발견). 그 주 일요일(weekSunday)이 아직 지나지 않았으면
+ * (= 다음 주 월요일이 아직 안 됐으면) 보정 없이 원본 값을 그대로 반환 — 그
+ * 주가 끝난 뒤 재갱신되면 그때 정상적으로 최종값이 채워진다.
+ *
  * INPUT
  * record : Object  {spent, reportStart, reportEnd, campaignStart, campaignEnd}
  * effectiveStart, effectiveEnd : Date  호출부가 이미 계산한 교집합
  * weekMonday : Date  그 주(유일하게 걸치는 주)의 월요일
+ * now : Date  (optional) 기준 "오늘" — 생략 시 실제 현재 시각(테스트에서만 명시 주입)
  *
  * OUTPUT
  * number  보정된(또는 원본 그대로인) 그 주 Spent
@@ -1005,11 +1035,18 @@ function computeMetaRowWeeklySpend_(record){
  * testProrateSingleWeekMetaSpend() 참고
  * ==========================================================
  */
-function prorateSingleWeekMetaSpend_(record, effectiveStart, effectiveEnd, weekMonday){
+function prorateSingleWeekMetaSpend_(record, effectiveStart, effectiveEnd, weekMonday, now){
 
   const spent = Number(record.spent) || 0;
 
   const weekSunday = addDaysToDate_(weekMonday, 6);
+
+  const currentTime = (now instanceof Date && !isNaN(now.getTime())) ? now : new Date();
+  const nextMonday = addDaysToDate_(weekMonday, 7);
+
+  if(currentTime.getTime() < nextMonday.getTime()){
+    return spent;
+  }
 
   const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
   const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
@@ -1048,9 +1085,10 @@ function prorateSingleWeekMetaSpend_(record, effectiveStart, effectiveEnd, weekM
 function testProrateSingleWeekMetaSpend(){
 
   const weekMonday = new Date(2026, 7, 17); // 2026-08-17
+  const pastNow = new Date(2026, 7, 30);    // 이 주(8/17~8/23)가 이미 끝난 뒤 시점 — A/B/C는 전부 "완료된 과거 주" 케이스
 
   // Case A — 사용자 실측 케이스: 캠페인은 그 주 이전부터(8/5) 활성, export만
-  // 화(8/18)~일(8/23) 6일치 → report-limited, 7/6로 보정돼야 함.
+  // 화(8/18)~일(8/23) 6일치 → report-limited, 7/6로 보정돼야 함(과거 주라 보정 타당).
   const reportLimitedRecord = {
     spent: 8897.07,
     reportStart: new Date(2026, 7, 18),
@@ -1060,7 +1098,7 @@ function testProrateSingleWeekMetaSpend(){
   };
 
   const proratedA = prorateSingleWeekMetaSpend_(
-    reportLimitedRecord, new Date(2026, 7, 18), new Date(2026, 7, 23), weekMonday
+    reportLimitedRecord, new Date(2026, 7, 18), new Date(2026, 7, 23), weekMonday, pastNow
   );
 
   const expectedA = 8897.07 * (7 / 6);
@@ -1076,7 +1114,7 @@ function testProrateSingleWeekMetaSpend(){
   };
 
   const proratedB = prorateSingleWeekMetaSpend_(
-    campaignLimitedRecord, new Date(2026, 7, 19), new Date(2026, 7, 23), weekMonday
+    campaignLimitedRecord, new Date(2026, 7, 19), new Date(2026, 7, 23), weekMonday, pastNow
   );
 
   // Case C — 7일 전체 커버(기존 정상 정밀 export) → 변화 없음.
@@ -1089,19 +1127,39 @@ function testProrateSingleWeekMetaSpend(){
   };
 
   const proratedC = prorateSingleWeekMetaSpend_(
-    fullWeekRecord, new Date(2026, 7, 17), new Date(2026, 7, 23), weekMonday
+    fullWeekRecord, new Date(2026, 7, 17), new Date(2026, 7, 23), weekMonday, pastNow
+  );
+
+  // Case D — 2026-09-04 버그 수정(사용자 리포트): 진행 중인(아직 안 끝난) 주는
+  // report-limited로 보여도 보정하면 안 됨(미래 요일을 조작하게 됨) — 원본 그대로.
+  // 실측 재현: Content 2026-08-31주, 월~수(3일) $2,737.18을 7/3로 부풀려
+  // $6,386.75가 되던 버그.
+  const inProgressWeekMonday = new Date(2026, 7, 31); // 2026-08-31
+  const inProgressRecord = {
+    spent: 2737.18,
+    reportStart: new Date(2026, 7, 31),
+    reportEnd: new Date(2026, 8, 2), // 2026-09-02(수)
+    campaignStart: new Date(2024, 7, 14),
+    campaignEnd: new Date(2026, 8, 30)
+  };
+
+  const proratedD = prorateSingleWeekMetaSpend_(
+    inProgressRecord, new Date(2026, 7, 31), new Date(2026, 8, 2), inProgressWeekMonday,
+    new Date(2026, 8, 4) // "오늘" = 2026-09-04(금), 그 주 일요일(9/6) 아직 안 지남
   );
 
   const pass =
     Math.abs(proratedA - expectedA) < 1e-9 &&
     proratedB === 500 &&
-    proratedC === 1000;
+    proratedC === 1000 &&
+    proratedD === 2737.18;
 
   Logger.log(
     "A(report-limited, 6일→7일 보정)=" + proratedA.toFixed(2) + " (expected " + expectedA.toFixed(2) + ")"
   );
   Logger.log("B(campaign-limited, 보정 안 함)=" + proratedB + " (expected 500, 원본 그대로)");
   Logger.log("C(7일 전체 커버, 변화 없음)=" + proratedC + " (expected 1000)");
+  Logger.log("D(진행 중인 주, 보정 안 함)=" + proratedD + " (expected 2737.18, 원본 그대로)");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }

@@ -7,9 +7,18 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.2.4
+ * v3.3.0
  *
  * Change Log
+ * v3.3.0 (2026-09-04)
+ * - **청크 읽기 전환(성능/안전장치, docs/exec-plans/active/
+ *   2026-09-03-performance-optimization.md #5)**: `sheetToObjects()`의
+ *   `getDataRange().getValues()`(단일 호출) 대신 `getRangeValuesChunked_()`
+ *   (UTIL_003_SheetChunkIO.js 신규)로 청크 단위 읽기 — 결과는 100% 동일,
+ *   대용량(수만~수십만 행) 시트가 계속 커져도 Apps Script 6분 실행 제한/
+ *   응답 크기 제한에 덜 취약해짐. **병합(mergeOPS()) 로직 자체는 무변경**
+ *   (사용자 확정 — 이메일 중복 처리를 증분화하는 건 Leads_OPS 전체 리포트가
+ *   참조하는 핵심 로직이라 별도 검증 없이는 범위 밖으로 유지).
  * v3.2.4 (2026-08-09)
  * - 중복 이메일 스킵할 때마다 찍던 `Logger.log("[mergeOPS] Duplicate
  *   skipped...")` 제거(사용자 요청 — 대량 중복 발생 시 실행 로그가 수백 줄로
@@ -588,13 +597,18 @@ function readOPS() {
  */
 function sheetToObjects(sheet) {
 
-  const values = sheet.getDataRange().getValues();
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
 
-  if (values.length <= 1) {
+  if (lastRow <= 1 || lastCol === 0) {
 
     return [];
 
   }
+
+  // 2026-09-04 — 청크 단위 읽기(UTIL_003_SheetChunkIO.js)로 교체, 결과는
+  // getDataRange().getValues()와 100% 동일(exec-plan #5, 대용량 대비 안전장치).
+  const values = getRangeValuesChunked_(sheet, 1, 1, lastRow, lastCol);
 
   const headers = values[0];
 

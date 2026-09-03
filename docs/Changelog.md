@@ -1,3 +1,40 @@
+# Changelog — 2026-09-04
+
+## 파이프라인 성능 최적화 exec-plan 5개 항목 구현 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)
+
+전날 수립한 5대 개선 항목 전부 코드 작성 완료, 순수 함수 단위 테스트 전부 PASS(실 Import
+검증은 다음 세션):
+
+1. **Master 정렬 제거** — `appendNewLeads()`/`appendNewMTA()`/`rebuildLeadsMaster()`/
+   `rebuildMTAMaster()`의 `sortSheetByDate()` 호출 전부 제거, Master를 순수 Append-only로
+   전환. 호출부가 없어진 `sortSheetByDate()`와 그 파일 `IMPORT_007_SheetSorter.js` 삭제.
+2. **RawDeduplicator 동적 윈도우** — Leads/MTA Raw 완전동일 중복 검사 시 Raw 전체 대신,
+   신규 배치의 날짜 값과 일치하는 기존 행의 연속 구간만 읽도록 변경(`IMPORT_008_RawDeduplicator.js`)
+   — 정렬 순서와 무관하게 항상 정확(날짜도 포함한 전체 필드 일치가 판정 기준이라는 성질 이용).
+3. **IC Funnel/SAL Sync Batch Direct Update** — 매번 Raw 전체를 재스캔하던 두 Sync를
+   "이번 배치만" 처리로 전환(`ICFUNNEL_LAST_ROW`/`SAL_LAST_ROW` 체크포인트 신규), Leads_OPS
+   쓰기도 대상 Lead들의 행 범위(연속 구간, 신규 공용 `computeDirectUpdateRowWindow_()`)만
+   읽고/쓰도록 변경.
+4. **UTM/Program-Segment Dictionary 증분 등록** — 12시간마다 Leads_Master+MTA_Master
+   전체(12.4만 행)를 재스캔하던 `periodicRefreshDictionaries_()`를, 신규 Master 행만 채굴해
+   기존 캐시 카운트에 증분하는 방식으로 전환. Master 행 감소(중복 자동삭제) 시 안전하게
+   재채굴하는 로직 포함, 소스별(MTA/Leads) 카운트를 캐시 시트 hidden 컬럼에 분리 보존.
+5. **청크(Chunk) 처리** — `UTIL_003_SheetChunkIO.js` 신규, `OPS_004_Merge.js`/
+   `OPS_005_Write.js`/`MASTER_005_DataReader.js`/`MASTER_012_RawExternalMigration.js`의
+   대용량 단일 `getValues()`/`setValues()` 호출을 청크 단위로 분할(결과 100% 동일, Apps
+   Script 6분 실행 제한 대비 안전장치). **Leads_OPS 중복 이메일 병합 로직의 증분화는
+   보류** — 사용자 확인: 핵심 테이블이라 실수 시 파급이 커서 별도 검증 없이는 범위 밖.
+
+## 버그 수정 — Target_REP 진행 중인 주 Meta 지출 부풀림 (사용자 리포트)
+
+Target_REP Content 세그먼트 2026-08-31주가 New P1=9/CPNP1=$709.64(⇒ Spend $6,386.76)로
+표시됐는데 Campaigns 2.0 원본은 $2,737.18 — `TEMPQA_046_TargetRepContentWeekSpendDiagnostic.js`
+로 조사한 결과, `prorateSingleWeekMetaSpend_()`(AD_002_Meta.js)가 "export 범위가 좁아서
+생긴 결측"(과거, 보정 타당)과 "그 주가 아직 안 끝나서 생긴 결측"(미래, 보정하면 안 됨)을
+구분 못해 진행 중인 주(월~수 3일치 실측)를 7/3배로 부풀리고 있었음(정확히 재현 확인). 그
+주 일요일이 아직 지나지 않았으면 보정하지 않고 원본 값 그대로 반환하도록 가드 추가 —
+`Ad_Spend_Cache_Weekly` 재계산 + Target_REP 재생성으로 사용자 확인 완료.
+
 # Changelog — 2026-09-03
 
 ## 파이프라인 성능 및 구조 비효율 개선 계획 수립 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)

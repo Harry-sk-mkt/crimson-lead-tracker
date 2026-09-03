@@ -25,9 +25,15 @@
  *   명시적 에러로 중단한다("No Assumptions").
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-04)
+ * - **청크 쓰기 전환(성능/안전장치, docs/exec-plans/active/
+ *   2026-09-03-performance-optimization.md #5)**:
+ *   `writeFullRawSnapshotToExternalSheet_()`의 데이터 영역 `setValues()`
+ *   단일 호출을 `setRangeValuesChunked_()`(UTIL_003_SheetChunkIO.js 신규)로
+ *   교체 — 최종 시트 상태 100% 동일, 향후 더 큰 규모 재실행 시 대비.
  * v1.0.0 (2026-09-03)
  * - 최초 구현.
  * ==========================================================
@@ -141,7 +147,9 @@ function writeFullRawSnapshotToExternalSheet_(externalFile, requiredSheetName, r
     });
   });
 
-  sheet.getRange(2, 1, values.length, headers.length).setValues(values);
+  // 2026-09-04 — 청크 단위 쓰기(UTIL_003_SheetChunkIO.js)로 교체, 최종 시트
+  // 상태는 단일 setValues()와 100% 동일(exec-plan #5, 대용량 대비 안전장치).
+  setRangeValuesChunked_(sheet, 2, 1, values, headers.length);
 
   SpreadsheetApp.flush();
 
