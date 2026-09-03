@@ -41,9 +41,30 @@
  *   오래 안 닫히는 문제 방지)
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-09-03)
+ * - **"SAL Segment" 신규 — 이벤트 기준(Per-Touch) 독립 분류(사용자 설계
+ *   확정)**: ACQ_REP은 NewP1_REP과 달리 코호트가 아니라 "그 달 어떤 채널의
+ *   액션에서 퍼널이 이어졌는지"를 보는 리포트라, SAL도 Lead 생성 시점 First
+ *   Touch로 고정된 Leads_OPS의 "Business Segment"를 재사용하면 안 된다는
+ *   지적(대화 중 확인) — 같은 리드가 New Leads에서는 Search, SAL에서는
+ *   BOFU로 잡히는 게 코호트가 아닌 이 리포트에선 올바른 동작. SAL_Raw
+ *   자체의 "Last MKT UTM Campaign"/"Last Touch Detail"(`CONFIG.SAL.COLUMNS`
+ *   신규 — `parseCsv()`가 CSV 헤더를 전부 record 키로 만들어 이미 SAL_Raw에
+ *   저장되고 있던 값)로 `resolveBusinessSegment_()`를 호출해
+ *   `computeSALByLeadId_()`에서 `salSegment` 신규 계산, Leads_OPS의 새
+ *   "SAL Segment" 컬럼(`OPS_001_Config.js` v2.7)에 별도 기록
+ *   (`syncSALToOPS_()` syncFieldMap 추가). `computeSALDeltaLeads_()`의
+ *   `segment`도 이제 `salByLeadId[leadId].salSegment`에서 옴 — Leads_OPS
+ *   Segment 컬럼 읽기 자체가 불필요해져 인자(`segmentValues`)에서 제거.
+ *   `ACQREP_001_Report.js`(`computeOPSAggregates_()`)의 SAL/salWeekly/
+ *   salP1Weekly 버킷도 새 "SAL Segment" 컬럼을 읽도록 동시 반영 — 그래야
+ *   다음 Leads/MTA Import의 `refreshACQSummary_()`(전체 재계산)가 이 델타
+ *   결과를 도로 First Touch 값으로 덮어쓰지 않음. New Leads/New P1/IC
+ *   Booked/IC Complete는 기존 "Business Segment"(First Touch) 그대로 유지
+ *   (변경 없음).
  * v1.1.0 (2026-09-03)
  * - **엔진 refresh 낭비 제거(`docs/OpenItems.md` #44,
  *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
@@ -165,17 +186,31 @@ function testPickLatestSALRecords(){
  * Plain Text 보호될 것으로 예상됨(`CONFIG.RAW_DATE_COLUMNS.SAL`) —
  * 반드시 parseDate(value, "DMY")로 명시 파싱한다.
  *
+ * salSegment(2026-09-03 신규) — ACQ_REP은 코호트가 아니라 "그 달 어떤
+ * 액션에서 퍼널이 이어졌는지"를 보는 이벤트 기준 리포트라, SAL도 Lead
+ * 생성 시점 First Touch로 고정된 Leads_OPS의 기존 "Business Segment"를
+ * 재사용하면 안 되고 SAL 이벤트 자체의 터치로 독립적으로 분류해야 한다
+ * (사용자 설계 확정, 대화 중 확인 — 같은 리드가 New Leads에서는 Search,
+ * SAL에서는 BOFU로 잡히는 것이 코호트가 아닌 이 리포트에선 올바른 동작).
+ * `resolveBusinessSegment_(campaign, detail, leadSource, category)`를
+ * 그대로 재사용하되, 이 SAL 리포트엔 leadSource/category에 대응하는
+ * 필드가 없어 ""로 전달한다 — 함수 내부 로직 대부분이 campaign/detail
+ * 문자열 매칭이라 leadSource/category 없이도 대부분 분류 가능(다만
+ * campaign이 "_contact"/"consult" 계열이면 leadSource 신호가 없어
+ * 항상 "BOFU"로 fallback — 기존 프로젝트 전역에 이미 있는 동일한 fallback
+ * 규칙, `docs/BusinessSegmentClassification.md` #14 참고).
+ *
  * INPUT
  * latestByLeadId : Object  (pickLatestSALRecords_() 출력)
  *
  * OUTPUT
- * Object  { [leadId]: { salesAcceptedDate } }
+ * Object  { [leadId]: { salesAcceptedDate, salSegment } }
  *         (computeMTASyncColumnUpdates_()가 기대하는 funnelByLeadId 형태와
  *         동일 — syncColumns의 funnelKey로 조회됨)
  *
  * TEST
  * testComputeSALByLeadId() 참고 — day-first 파싱이 실제로 month/day를
- * 뒤바꾸지 않는지 확인.
+ * 뒤바꾸지 않는지, salSegment가 campaign/detail로 정상 분류되는지 확인.
  * ==========================================================
  */
 function computeSALByLeadId_(latestByLeadId){
@@ -189,7 +224,13 @@ function computeSALByLeadId_(latestByLeadId){
     const record = latestByLeadId[leadId];
 
     result[leadId] = {
-      salesAcceptedDate: parseDate(record[cols.SALES_ACCEPTED_DATE], "DMY")
+      salesAcceptedDate: parseDate(record[cols.SALES_ACCEPTED_DATE], "DMY"),
+      salSegment: resolveBusinessSegment_(
+        record[cols.LAST_MKT_UTM_CAMPAIGN],
+        record[cols.LAST_TOUCH_DETAIL],
+        "",
+        ""
+      )
     };
 
   });
@@ -213,6 +254,8 @@ function testComputeSALByLeadId(){
   latestByLeadId["L1"] = (function(){
     const r = {};
     r[cols.SALES_ACCEPTED_DATE] = "3/8/2026, 9:00 am";  // 8월 3일 (day-first)
+    r[cols.LAST_MKT_UTM_CAMPAIGN] = "kr_core_2025-07-19_stanford-analysis-ebook";
+    r[cols.LAST_TOUCH_DETAIL] = "";
     return r;
   })();
 
@@ -221,11 +264,13 @@ function testComputeSALByLeadId(){
   const pass =
     result["L1"].salesAcceptedDate instanceof Date &&
     result["L1"].salesAcceptedDate.getMonth() === 7 &&  // August = index 7
-    result["L1"].salesAcceptedDate.getDate() === 3;
+    result["L1"].salesAcceptedDate.getDate() === 3 &&
+    result["L1"].salSegment === "Content";  // campaign에 "ebook" 포함
 
   Logger.log(
     "testComputeSALByLeadId: " + (pass ? "PASS" : "FAIL") +
-    " salesAcceptedDate=" + result["L1"].salesAcceptedDate
+    " salesAcceptedDate=" + result["L1"].salesAcceptedDate +
+    " salSegment=" + result["L1"].salSegment
   );
 
 }
@@ -317,7 +362,8 @@ function syncSALToOPS_(){
   //----------------------------------------------------------
 
   const syncFieldMap = {
-    "Sales Accepted Date": "salesAcceptedDate"
+    "Sales Accepted Date": "salesAcceptedDate",
+    "SAL Segment": "salSegment"
   };
 
   const syncColumns = Object.keys(syncFieldMap)
@@ -341,18 +387,17 @@ function syncSALToOPS_(){
   });
 
   //----------------------------------------------------------
-  // ACQ_Summary 델타 갱신용 — Business Segment/Lead Priority 조회
+  // ACQ_Summary 델타 갱신용 — Lead Priority 조회
   // (2026-09-03, refreshACQSummarySALDelta_() 참고. 이번 리드들의 old/new
-  // Sales Accepted Date는 이미 위에서 읽었으니 추가 스캔 없이 재사용)
+  // Sales Accepted Date는 이미 위에서 읽었으니 추가 스캔 없이 재사용. Segment는
+  // 더 이상 Leads_OPS를 읽지 않음 — salByLeadId[leadId].salSegment(SAL 이벤트
+  // 자체의 터치로 독립 분류된 값, computeSALByLeadId_ 참고)를 그대로 씀 —
+  // Leads_OPS의 기존 "Business Segment"는 Lead 생성 시점 First Touch로 고정된
+  // 값이라 이벤트 기준 리포트인 ACQ_REP의 SAL 취지와 다름(사용자 설계 확정).
   //----------------------------------------------------------
 
-  const segmentCol = headerMap["Business Segment"];
   const priorityCol = headerMap["Lead Priority"];
   const priorityOverrideCol = headerMap["Priority Override"];
-
-  const segmentValues = segmentCol !== undefined
-    ? opsSheet.getRange(OPS.ROWS.DATA_START, segmentCol + 1, numRows, 1).getValues()
-    : null;
 
   const priorityValues = priorityCol !== undefined
     ? opsSheet.getRange(OPS.ROWS.DATA_START, priorityCol + 1, numRows, 1).getValues()
@@ -368,7 +413,6 @@ function syncSALToOPS_(){
     OPS.ROWS.DATA_START,
     existingColumnValues["Sales Accepted Date"],
     salByLeadId,
-    segmentValues,
     priorityValues,
     priorityOverrideValues
   );
@@ -415,13 +459,20 @@ function syncSALToOPS_(){
  * 추가 Leads_OPS 스캔이 없다. 값이 같으면(변화 없음) 목록에서 제외해 델타
  * 계산량을 최소화.
  *
+ * segment(2026-09-03 변경) — 더 이상 Leads_OPS의 "Business Segment" 컬럼을
+ * 읽지 않는다. `salByLeadId[leadId].salSegment`(SAL_Raw 자체의 Last MKT UTM
+ * Campaign/Last Touch Detail로 `computeSALByLeadId_()`가 독립 분류한 값)를
+ * 그대로 씀 — ACQ_REP은 이벤트 기준 리포트라 SAL도 SAL 이벤트 자체의 터치로
+ * 분류해야 한다는 설계 확정(사용자 확인). 이 변경으로 Leads_OPS Segment 컬럼
+ * 읽기 자체가 불필요해져 인자에서 제거.
+ *
  * INPUT
  * leadIds : string[]  (SAL_Raw 전체 Lead ID)
  * leadIdToRow : Object  { [leadId]: rowNumber }
  * dataStartRow : number
  * existingSalesAcceptedValues : Array[]  (Sales Accepted Date 컬럼, 변경 전 값)
- * salByLeadId : Object  { [leadId]: { salesAcceptedDate } }
- * segmentValues/priorityValues/priorityOverrideValues : Array[] | null
+ * salByLeadId : Object  { [leadId]: { salesAcceptedDate, salSegment } }
+ * priorityValues/priorityOverrideValues : Array[] | null
  *   (해당 컬럼이 Leads_OPS에 없으면 null — 방어적으로 빈 문자열 처리)
  *
  * OUTPUT
@@ -434,7 +485,7 @@ function syncSALToOPS_(){
 function computeSALDeltaLeads_(
   leadIds, leadIdToRow, dataStartRow,
   existingSalesAcceptedValues, salByLeadId,
-  segmentValues, priorityValues, priorityOverrideValues
+  priorityValues, priorityOverrideValues
 ){
 
   const deltaLeads = [];
@@ -456,7 +507,7 @@ function computeSALDeltaLeads_(
     if(oldValid && oldDate.getTime() === newDate.getTime()) return;  // 변화 없음
 
     deltaLeads.push({
-      segment: segmentValues ? (segmentValues[rowIndex][0] || "") : "",
+      segment: salByLeadId[leadId].salSegment || "",
       priority: priorityValues ? (priorityValues[rowIndex][0] || "") : "",
       priorityOverride: priorityOverrideValues ? (priorityOverrideValues[rowIndex][0] || "") : "",
       oldDate: oldValid ? oldDate : null,
@@ -487,24 +538,23 @@ function testComputeSALDeltaLeads(){
   ];
 
   const salByLeadId = {
-    "L1": { salesAcceptedDate: new Date(2026, 7, 15) },   // 신규
-    "L2": { salesAcceptedDate: new Date(2026, 6, 1) },    // 변화 없음
-    "L3": { salesAcceptedDate: new Date(2026, 7, 1) }     // Leads_OPS에 없는 리드
+    "L1": { salesAcceptedDate: new Date(2026, 7, 15), salSegment: "Content" },   // 신규
+    "L2": { salesAcceptedDate: new Date(2026, 6, 1), salSegment: "BOFU" },       // 변화 없음
+    "L3": { salesAcceptedDate: new Date(2026, 7, 1), salSegment: "Search" }      // Leads_OPS에 없는 리드
   };
 
-  const segmentValues = [["Events"], ["Contact"]];
   const priorityValues = [["Priority 1"], [""]];
   const priorityOverrideValues = [[""], [""]];
 
   const result = computeSALDeltaLeads_(
     leadIds, leadIdToRow, 2,
     existingSalesAcceptedValues, salByLeadId,
-    segmentValues, priorityValues, priorityOverrideValues
+    priorityValues, priorityOverrideValues
   );
 
   const pass =
     result.length === 1 &&                      // L2(변화 없음)/L3(OPS에 없음) 제외, L1만 남음
-    result[0].segment === "Events" &&
+    result[0].segment === "Content" &&           // salByLeadId.salSegment(SAL 이벤트 자체 분류)에서 옴 — Leads_OPS Segment 아님
     result[0].oldDate === null &&
     result[0].newDate.getTime() === new Date(2026, 7, 15).getTime();
 

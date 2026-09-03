@@ -7,9 +7,16 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.6
+ * v2.7
  *
  * Change Log
+ * v2.7 (2026-09-03)
+ * - **"SAL Segment" 신규 컬럼**(HEADER + SYNC_COLUMNS) — ACQ_REP은 코호트가
+ *   아니라 이벤트 기준 리포트라, SAL도 Lead 생성 시점 First Touch로 고정된
+ *   기존 "Business Segment"를 재사용하지 않고 SAL 이벤트 자체의 터치
+ *   (Last MKT UTM Campaign/Last Touch Detail)로 별도 분류해야 한다는 설계
+ *   확정(대화 중 확인) — `syncSALToOPS_()`(`MASTER_010_SALSync.js` v1.2.0)가
+ *   소유. "Sales Accepted Date" 바로 뒤에 배치.
  * v2.6 (2026-09-02)
  * - **"#Touches" 신규 컬럼**(HEADER + SYNC_COLUMNS) — Leads_OPS 필드
  *   소유권 재편(사용자 확정): MTA는 이제 "터치 지표만" 관리(Revenue/Lead
@@ -121,9 +128,12 @@ const OPS = {
     → syncICFunnelToOPS_()  (MASTER_009_ICFunnelSync.js, ICFunnel_Raw 기반,
       터치 무관 Lead 레벨 최신 상태 — Opportunity Won Date는 2026-09-02부터
       이 함수 소유가 아님, 아래 참고)
-  - "Sales Accepted Date"
+  - "Sales Accepted Date" / "SAL Segment"
     → syncSALToOPS_()  (MASTER_010_SALSync.js, SAL_Raw 전용 외부시트 기반 —
-      2026-09-02부터 IC Funnel에서 분리, docs/OpenItems.md #38)
+      2026-09-02부터 IC Funnel에서 분리, docs/OpenItems.md #38. "SAL Segment"는
+      2026-09-03 신규 — 기존 "Business Segment"(First Touch 고정값)와 별개로,
+      SAL 이벤트 자체의 터치(Last MKT UTM Campaign/Last Touch Detail)로
+      독립 분류한 값)
   - "#Touches"
     → syncMTAFunnelToOPS_() (MASTER_003_MTAFunnelSync.js, MTA_Master 기반 —
       2026-09-02부터 "터치 지표만" 관리, Revenue/Lead Priority는 제외됨)
@@ -141,6 +151,7 @@ const OPS = {
     "Opportunity Won Date",
     "Revenue",
     "Sales Accepted Date",
+    "SAL Segment",
     "#Touches"
 
   ],
@@ -230,6 +241,7 @@ const OPS = {
     "#Touches",
 
     "Sales Accepted Date",
+    "SAL Segment",
 
     "IC Booked Date",
 

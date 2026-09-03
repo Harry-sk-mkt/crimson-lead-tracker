@@ -9,9 +9,22 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.59.0
+ * v1.60.0
  *
  * Change Log
+ * v1.60.0 (2026-09-03)
+ * - **SAL Segment — 이벤트 기준(Per-Touch) Business Segment 신규 도입
+ *   (사용자 설계 확정)**: ACQ_REP은 코호트 리포트(NewP1_REP)와 달리 "그 달에
+ *   어떤 채널의 액션에서 퍼널이 이어졌는지"를 보는 이벤트 기준 리포트라,
+ *   SAL도 Leads_OPS의 기존 "Business Segment"(Lead 생성 시점 First Touch로
+ *   고정된 값)를 재사용하면 안 되고 SAL 이벤트 자체의 터치로 별도 분류해야
+ *   한다는 지적(대화 중 확인) — `CONFIG.SAL.COLUMNS`에 `LAST_MKT_UTM_CAMPAIGN`
+ *   ("Last MKT UTM Campaign")/`LAST_TOUCH_DETAIL`("Last Touch Detail") 추가.
+ *   `parseCsv()`가 CSV 헤더를 전부 record 키로 만들어 이미 SAL_Raw에 저장되고
+ *   있던 값을 그대로 소비(신규 REQUIRED_FIELDS 아님 — 없어도 import 자체는
+ *   통과, `resolveBusinessSegment_()`가 leadSource/category 없이도 campaign/
+ *   detail만으로 대부분 분류 가능). `MASTER_010_SALSync.js`/`OPS_001_Config.js`
+ *   (신규 "SAL Segment" 컬럼)/`ACQREP_001_Report.js` 동시 반영.
  * v1.59.0 (2026-09-03)
  * - **Revenue 파이프라인 트리거 재설계(`docs/OpenItems.md` #47,
  *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
@@ -592,7 +605,13 @@ const CONFIG = {
       // 향후 docs/OpenItems.md #10(SAL에서 Lead Status="Nurturing" 제외)
       // 구현 시 사용 예정 — 지금은 sync 대상 아님(computeSALByLeadId_ 참고).
       LEAD_STATUS: "Lead Status",
-      SALES_ACCEPTED_DATE: "New (Not Contacted) Date Time"
+      SALES_ACCEPTED_DATE: "New (Not Contacted) Date Time",
+      // 2026-09-03 추가 — SAL Segment(이벤트 기준 Business Segment) 계산용.
+      // resolveBusinessSegment_(campaign, detail, leadSource, category) 중
+      // campaign/detail만 채움 — 이 SAL 리포트엔 leadSource/category에 대응하는
+      // 필드가 없어 "" 전달(그래도 대부분 분류 가능, computeSALByLeadId_ 참고).
+      LAST_MKT_UTM_CAMPAIGN: "Last MKT UTM Campaign",
+      LAST_TOUCH_DETAIL: "Last Touch Detail"
     }
 
   },

@@ -17,9 +17,21 @@
  * 20 Reporting
  *
  * Version
- * v1.19.1
+ * v1.19.2
  *
  * Change Log
+ * v1.19.2 (2026-09-03)
+ * - **SAL Segment 분리(사용자 설계 확정)**: `computeOPSAggregates_()`의 SAL/
+ *   salWeekly/salP1Weekly 버킷이 이제 새 "SAL Segment" 컬럼(Leads_OPS,
+ *   `MASTER_010_SALSync.js` v1.2.0이 SAL_Raw의 Last MKT UTM Campaign/Last
+ *   Touch Detail로 독립 분류해 기록)을 읽음 — 기존 "Business Segment"(First
+ *   Touch 고정값)는 New Leads/New P1/IC Booked/IC Complete만 계속 사용.
+ *   ACQ_REP은 코호트가 아니라 이벤트 기준 리포트(위 Responsibility 참고)라
+ *   같은 리드가 New Leads에서는 Search, SAL에서는 BOFU로 잡히는 게 의도된
+ *   동작. `refreshACQSummarySALDelta_()`(SAL Sync 델타 경로)가 이미 같은
+ *   값을 쓰고 있었으므로, 이 변경으로 Leads/MTA Import의 `refreshACQSummary_()`
+ *   (전체 재계산)가 그 델타 결과를 도로 First Touch 값으로 덮어쓰는 불일치가
+ *   해소됨.
  * v1.19.1 (2026-09-03)
  * - **회귀 수정 — 주 단위 집계 추가 후 `refreshACQSummary_()`가 24.7s → 122.5s로
  *   5배 느려짐(사용자 실측)**. 원인: v1.19.0에서 추가한 weekKey 계산이 3만6천+행
@@ -1202,6 +1214,13 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
 
   const createDateCol = headers.indexOf("Create Date");
   const segmentCol = headers.indexOf("Business Segment");
+  // 2026-09-03 — SAL 전용 이벤트 기준 Segment(사용자 설계 확정, MASTER_010_SALSync.js
+  // v1.2.0 참고). New Leads/New P1/IC Booked/IC Complete는 계속 "Business Segment"
+  // (First Touch 고정값, 코호트 일관성) 사용, SAL만 이 컬럼(SAL 이벤트 자체의 터치로
+  // 독립 분류) 사용 — ACQ_REP은 코호트가 아니라 "그 달 어떤 액션에서 퍼널이
+  // 이어졌는지"를 보는 이벤트 기준 리포트라 같은 리드가 New Leads와 SAL에서
+  // 서로 다른 Segment로 잡히는 게 의도된 동작.
+  const salSegmentCol = headers.indexOf("SAL Segment");
   const priorityCol = headers.indexOf("Lead Priority");
   const priorityOverrideCol = headers.indexOf("Priority Override");
   const salesAcceptedCol = headers.indexOf("Sales Accepted Date");
@@ -1255,17 +1274,21 @@ function computeOPSAggregates_(rangeStart, rangeEndExclusive){
 
     //------------------------------------------------------
     // SAL — Sales Accepted Date 자체가 속한 달 (이벤트 기준)
+    // Segment는 "SAL Segment"(SAL 이벤트 자체의 터치로 독립 분류, 위 참고) —
+    // New Leads/New P1이 쓰는 First Touch 고정값 segment와 다름(의도된 동작).
     //------------------------------------------------------
 
     const salesAcceptedVal = row[salesAcceptedCol];
 
     if(salesAcceptedVal instanceof Date && !isNaN(salesAcceptedVal.getTime()) && inRange(salesAcceptedVal)){
 
-      const key = keyFor(salesAcceptedVal, segment);
+      const salSegment = (salSegmentCol !== -1 ? row[salSegmentCol] : "") || "Other";
+
+      const key = keyFor(salesAcceptedVal, salSegment);
 
       result.sal[key] = (result.sal[key] || 0) + 1;
 
-      const weekKey = formatWeekKeyDate_(getMondayOfWeek_(salesAcceptedVal)) + "|" + segment;
+      const weekKey = formatWeekKeyDate_(getMondayOfWeek_(salesAcceptedVal)) + "|" + salSegment;
 
       result.salWeekly[weekKey] = (result.salWeekly[weekKey] || 0) + 1;
 
