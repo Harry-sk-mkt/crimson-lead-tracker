@@ -118,6 +118,18 @@ Tracker`처럼 `SpreadsheetApp.openById()`로 별도 시트를 읽고/쓴다(코
 - 최종적으로 Target_Engine Block 0의 수동 Spent 입력을 이 파이프라인 결과로 대체할지, 별도
   참고 지표로만 둘지
 
+**아키텍처 방향(사용자 확정, 2026-09-03) — API 호출은 트리거, 리포트 레이어는 캐시만 읽음**:
+각 광고 플랫폼(Meta/Naver SA/Google Ads 등) API 호출은 캠페인 지출 DB(Master_DB 폴더,
+`docs/exec-plans/active/2026-09-03-master-db-raw-migration.md`에 기록된 폴더) 쪽 백그라운드
+트리거가 담당하고, 그 결과를 캐시 시트에 적재한다. New P1/CPNP1 등 실제 리포트 레이어(Target_REP
+등)는 API를 직접 호출하지 않고 이 캐시만 읽는다 — `AD_004_SpendCache.js`의 Meta/Naver Ad Spend
+캐시(`ACQ.SPEND_CACHE_SHEET` 계열) 및 `ACQ_Summary`/`ACQ_Summary_Weekly`와 동일한 기존 패턴
+재사용. 이 패턴이 필요한 이유도 기존과 동일 — ACQ_REP/Target_REP의 Generate 체크박스가 Simple
+Trigger(`onEdit()`)로 실행되는데, Simple Trigger는 권한이 제한적이라 외부 리소스를
+`openById()`/API 호출로 직접 여는 게 실패함(실측 확인 이력, CORE_001_Config.js ACQ 캐시 관련
+주석 참고) — 설치형 트리거(백그라운드, Full Authorization)만 이 호출을 할 수 있음. 착수 시점의
+구체적 트리거 배선(어느 파이프라인 tail에 편입할지)/캐시 시트 구조는 착수 시 확정.
+
 **(폐기됨) 원래 소스 — 참고용 보존**: 외부 Google Sheet(`1QDB_9MiD6eTeNlnC8YMWXbyncSwgDOTZT-A-KItlu6A`),
 `Monthly{채널}` 탭(`MonthlyMeta` gid `1546305708` 확인, `MonthlyNSA`/`MonthlyGFA` 등 존재 추정).
 `MonthlyMeta` 확인된 구조: 월별(2023-01~) 1행=1개월, `allCvR/Clicks/Results/Spent/CPL/Rev/ROAS`
@@ -160,6 +172,32 @@ P1 Target(구 코호트 딜의 이번 FY 전환분)은 이 확장에서 제외 �
 영역이라 New P1(리드 생성 카운트) 목표와 성격이 다르다는 사용자 판단(2026-07-30). 상세:
 `docs/ACQReportDesign.md`/`docs/NewP1ReportDesign.md`, `docs/exec-plans/active/
 2026-07-30-acq-newp1-target-columns.md`(또는 completed/로 이동됐을 수 있음).
+
+### Master_DB — Import되는 모든 원본 문서를 외부 폴더로 이관 (2026-09-03 방향 확정, 착수 전)
+
+**배경**: SAL_Raw를 전용 외부 스프레드시트로 분리(2026-09-02, `docs/OpenItems.md` #38)한
+이후, 메인 스프레드시트 용량 문제(오픈 속도 저하)가 SAL 하나만의 문제가 아니라는 판단으로
+사용자가 범위를 전면 확대 — **Leads_Raw/MTA_Raw도 같은 패턴(전용 외부 스프레드시트 +
+`SpreadsheetApp.openById()`)으로 이관하고, 최종적으로는 Import되는 모든 원본 문서(캠페인
+지출 Raw, Deal Tracker 포함)를 메인 스프레드시트가 아니라 별도 관리하는 "Master_DB" 폴더
+안 스프레드시트들로 옮긴다**(사용자 확정, 2026-09-03).
+
+**진행 상태**: 방향만 확정, 착수는 다음 세션 이후로 보류(2026-09-03 사용자 결정) — 지금은
+이 문서에 기록만, 임의로 코드 작업 시작하지 말 것.
+
+**미정(착수 시 확인 필요)**:
+- Master_DB 폴더/스프레드시트가 이미 존재하는지, 새로 만들어야 하는지(SAL_Raw 때처럼 ID
+  공유 필요)
+- Leads_Raw/MTA_Raw 이관 시 `openById()` 호출 빈도 — SAL_Raw는 Lead 단위 소량이라
+  `openSALExternalSpreadsheet_()` 비용이 작았지만, Leads/MTA는 매 Import마다 3만~8만+행을
+  다루는 훨씬 큰 스케일이라 같은 패턴이 그대로 통할지(쓰기 성능, Apps Script 외부 스프레드시트
+  quota) 검증 필요
+- 이관 범위·순서 — Leads_Raw/MTA_Raw부터 먼저 할지, 캠페인 지출/Deal Tracker까지 한 번에
+  설계할지
+- 기존 `MASTER_004_MasterBuild.js`/`MASTER_005_DataReader.js`/`IMPORT_005_RawWriter.js`/
+  `IMPORT_006_SheetWriter.js` 등 Raw 읽기·쓰기 관련 함수 전반이 영향받음 — SAL_Raw 이관 때
+  이미 `targetSpreadsheet` optional 파라미터로 하위호환 유지한 전례(`IMPORT_006_SheetWriter.js`/
+  `IMPORT_008_RawDeduplicator.js`) 재사용 가능한지 확인
 
 ## 진행 중 (exec-plans/active/에 대응 문서 있음)
 

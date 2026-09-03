@@ -46,9 +46,16 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-09-03)
+ * - **Master_DB Raw 이관 2단계** — `openICFunnelRawExternalSpreadsheet_()`
+ *   신규(`openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)와 동일 패턴).
+ *   `syncICFunnelToOPS_()`/`runAddICFunnelRawSalesAcceptedDateColumn()` 둘 다
+ *   메인 스프레드시트 대신 이 opener로 연 전용 외부 스프레드시트의
+ *   ICFunnel_Raw를 읽도록 변경(마이그레이션 완료·검증됨,
+ *   `docs/exec-plans/active/2026-09-03-master-db-raw-migration.md` 참고).
  * v1.7.0 (2026-09-02)
  * - **"Opportunity Won Date" sync 제거** — Leads_OPS 필드 소유권 재편
  *   2단계(사용자 확정) — IC Funnel은 이제 IC Booked/Completed 정보만
@@ -128,6 +135,32 @@
  * - 최초 구현. `docs/OpenItems.md` #32.
  * ==========================================================
  */
+
+
+/**
+ * ==========================================================
+ * Open ICFunnel Raw External Spreadsheet (IO 래퍼)
+ *
+ * WHY
+ * `openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)와 동일 원칙 —
+ * CONFIG.IC_FUNNEL.EXTERNAL.SPREADSHEET_ID가 비어있으면 추측으로 진행하지
+ * 않고 명시적 에러로 실패한다("No Assumptions" 원칙).
+ * ==========================================================
+ */
+function openICFunnelRawExternalSpreadsheet_(){
+
+  const spreadsheetId = CONFIG.IC_FUNNEL.EXTERNAL.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "CONFIG.IC_FUNNEL.EXTERNAL.SPREADSHEET_ID가 비어있습니다 — 외부 " +
+      "스프레드시트 ID를 CORE_001_Config.js에 채워넣어야 합니다."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
 
 
 /**
@@ -324,10 +357,12 @@ function syncICFunnelToOPS_(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   //----------------------------------------------------------
-  // Read ICFunnel_Raw
+  // Read ICFunnel_Raw (전용 외부 스프레드시트, 2026-09-03부터)
   //----------------------------------------------------------
 
-  const rawSheet = ss.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
+  const externalFile = openICFunnelRawExternalSpreadsheet_();
+
+  const rawSheet = externalFile.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
 
   if(!rawSheet){
     throw new Error(
@@ -520,8 +555,8 @@ function runSyncICFunnelToOPS(){
  */
 function runAddICFunnelRawSalesAcceptedDateColumn(){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
+  const externalFile = openICFunnelRawExternalSpreadsheet_();
+  const sheet = externalFile.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
 
   if(!sheet){
     Logger.log(CONFIG.IC_FUNNEL.SHEET + " 시트가 없습니다.");

@@ -50,9 +50,19 @@
  *   트리거로 비동기", `MASTER_002_PipelineAsync.js` 참고).
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-03)
+ * - **엔진 refresh 낭비 제거(`docs/OpenItems.md` #44,
+ *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
+ *   `refreshACQSummary_()`/`refreshNewP1Engine_()`(Leads_OPS/MTA_Master 전체
+ *   재스캔) → 이미 존재하던 `refreshACQSummaryRevenueOnly_()`/
+ *   `refreshNewP1EngineRevenueOnly_()`(Deal Tracker만 병합)로 교체.
+ *   Events/BOFU/Content Engine 호출 제거 — 이 셋은 #Deals/Revenue를 Deal
+ *   Tracker에서 직접 읽어(2트랙 아키텍처) Leads_OPS Revenue와 무관,
+ *   `refreshTargetActuals_()`도 Revenue 미참조 확인돼 함께 제거. Search_Engine만
+ *   유지(Leads_OPS Opportunity Won Date/Revenue를 직접 읽는 유일한 예외).
  * v1.0.0 (2026-09-02)
  * - 최초 구현. `docs/OpenItems.md` 참고.
  * ==========================================================
@@ -283,14 +293,17 @@ function syncRevenueToOPS_(){
   Logger.log("Time : " + seconds + "s");
   Logger.log("===========================================");
 
-  refreshACQSummary_();
-  refreshNewP1Engine_();
+  refreshACQSummaryRevenueOnly_();
+  refreshNewP1EngineRevenueOnly_();
 
-  refreshEventsEngine_();
-  refreshBOFUEngine_();
+  // Events/BOFU/Content Engine은 #Deals/Revenue를 Deal Tracker에서 직접 읽어
+  // (2트랙 아키텍처, 2026-07-28) Leads_OPS Revenue와 무관 — Revenue Sync가
+  // 뭘 바꾸든 이 셋의 결과는 안 바뀌므로 호출 자체를 생략(2026-09-03,
+  // docs/OpenItems.md #44 계열). refreshTargetActuals_()도 Actual P1/CPNP1만
+  // 갱신하고 Revenue를 안 읽어 동일하게 생략. Search_Engine만 예외적으로
+  // Leads_OPS의 Opportunity Won Date/Revenue를 직접 읽어(UTM 그레인 문제로
+  // 2트랙 전환 예외) 계속 갱신 필요.
   refreshSearchEngine_();
-  refreshContentEngine_();
-  refreshTargetActuals_();
 
 }
 

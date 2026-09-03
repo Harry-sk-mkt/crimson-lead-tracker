@@ -9,9 +9,27 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.57.0
+ * v1.59.0
  *
  * Change Log
+ * v1.59.0 (2026-09-03)
+ * - **Revenue 파이프라인 트리거 재설계(`docs/OpenItems.md` #47,
+ *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
+ *   `PIPELINE.REVENUE_PERIODIC_REFRESH_INTERVAL_MS`(2시간) 신규 —
+ *   Leads/MTA/IC Funnel/SAL tail에 얹혀가던 방식을 폐기하고 독립 2시간
+ *   주기 트리거(`periodicRefreshRevenue_()`, MASTER_002_PipelineAsync.js)로
+ *   교체.
+ * v1.58.0 (2026-09-03)
+ * - **Master_DB Raw 이관 착수(사용자 확정, `docs/Roadmap.md` "Master_DB" 항목,
+ *   `docs/exec-plans/active/2026-09-03-master-db-raw-migration.md`)**:
+ *   `CONFIG.RAW_EXTERNAL.LEADS/MTA.SPREADSHEET_ID` 신규, `CONFIG.IC_FUNNEL.EXTERNAL.
+ *   SPREADSHEET_ID` 신규 — SAL_Raw와 동일 패턴(전용 외부 스프레드시트로 이관).
+ *   사용자가 Master_DB 폴더에 이미 만들어 공유한 스프레드시트 ID로 채움. **아직
+ *   해당 스프레드시트 안에 정확한 이름의 탭/헤더가 준비되지 않은 상태**라, 이
+ *   ID를 실제로 소비하는 reader/writer 전환은 마이그레이션 스크립트
+ *   (`MASTER_012_RawExternalMigration.js`)로 데이터 이전 완료 확인 후 별도
+ *   커밋에서 진행 예정 — 이번 커밋에서는 아직 어느 기존 함수도 이 값을
+ *   참조하지 않는다(안전하게 미리 채워만 둠).
  * v1.57.0 (2026-09-03)
  * - `CONFIG.ACQ.SUMMARY_WEEKLY_SHEET` 신규 — S&M_REP이 자체 전체 스캔 대신
  *   읽는 주 단위 ACQ Engine 캐시 시트 이름(`docs/OpenItems.md` #41 계열,
@@ -433,6 +451,34 @@ const CONFIG = {
   },
 
   /**
+   * RAW_EXTERNAL — Leads_Raw/MTA_Raw 전용 외부 스프레드시트(Master_DB 이관)
+   *
+   * 2026-09-03 신규 — `docs/Roadmap.md` "Master_DB" 항목,
+   * `docs/exec-plans/active/2026-09-03-master-db-raw-migration.md` 참고.
+   * `CONFIG.SAL.EXTERNAL`/`CONFIG.IC_FUNNEL.EXTERNAL`과 동일 패턴 — Leads/MTA는
+   * 기존에 전용 top-level 설정 블록이 없어 SHEETS 바로 옆에 별도 신설.
+   *
+   * ⚠️ SPREADSHEET_ID는 채워져 있지만, 그 안에 정확한 이름의 탭("Leads_Raw"/
+   * "MTA_Raw")과 헤더가 아직 준비되지 않은 상태(2026-09-03 확인) —
+   * `MASTER_012_RawExternalMigration.js`의 마이그레이션 함수로 기존 메인
+   * 스프레드시트 Raw 데이터를 이전 완료 확인 전까지는 어느 reader/writer도
+   * 이 값을 참조하지 않는다.
+   */
+  RAW_EXTERNAL: {
+
+    LEADS: {
+      // 2026-09-03 사용자 공유 — https://docs.google.com/spreadsheets/d/1wotKzNIo0xdSR5QOKN_dBW0K6BcNcCS8xci6UBjcBG8
+      SPREADSHEET_ID: "1wotKzNIo0xdSR5QOKN_dBW0K6BcNcCS8xci6UBjcBG8"
+    },
+
+    MTA: {
+      // 2026-09-03 사용자 공유 — https://docs.google.com/spreadsheets/d/1Rqa32BoXM6jetQX2rTA9kJ_Y9mpLNnURMsQAJ9KVcQg
+      SPREADSHEET_ID: "1Rqa32BoXM6jetQX2rTA9kJ_Y9mpLNnURMsQAJ9KVcQg"
+    }
+
+  },
+
+  /**
      * UTM_PROGRAM_DICT — UTM Campaign ↔ Marketo Program명 딕셔너리(2026-08-08 신규).
      * MTA_Master(MKT UTM Campaign / Lead Source Detail)에서 자동으로 채굴해
      * 같은 스프레드시트 안 숨김 시트에 캐시(17_UtmProgramDictionary.js).
@@ -480,6 +526,14 @@ const CONFIG = {
      * 확인 완료(추정 아님).
      */
   IC_FUNNEL: {
+
+    // 2026-09-03 추가 — Master_DB 이관(docs/Roadmap.md "Master_DB" 항목).
+    // SAL과 동일 원칙: 마이그레이션 완료 전까지는 이 값을 참조하는 코드가
+    // 없다(MASTER_012_RawExternalMigration.js 진행 상태 참고).
+    EXTERNAL: {
+      // 2026-09-03 사용자 공유 — https://docs.google.com/spreadsheets/d/1xp_jJf6STpk5cSUpPnA_wwPRfxOknAyBoafazsyGQVE
+      SPREADSHEET_ID: "1xp_jJf6STpk5cSUpPnA_wwPRfxOknAyBoafazsyGQVE"
+    },
 
     SHEET: "ICFunnel_Raw",
 
@@ -691,14 +745,22 @@ const CONFIG = {
       // buildPipelineStatusGrid_() 참고).
       SAL: "SAL",
 
-      // 2026-09-02 추가 — Revenue/Opportunity Won Date를 Deal Tracker(외부
-      // 시트)에서 Email 기준으로 역싱크(MASTER_011_RevenueSync.js). CSV
-      // Import가 없는 유일한 파이프라인 — Leads/MTA/IC Funnel/SAL 각
-      // 파이프라인 tail이 끝날 때마다 `enqueuePendingPipelineType_()`로
-      // 이 타입을 큐에 넣어 항상 뒤이어 자동 실행되게 함(사용자 요청 —
-      // "역싱크는 트리거로 비동기").
+      // 2026-09-02 추가, 2026-09-03 트리거 방식 변경 — Revenue/Opportunity
+      // Won Date를 Deal Tracker(외부 시트)에서 Email 기준으로 역싱크
+      // (MASTER_011_RevenueSync.js). CSV Import가 없는 유일한 파이프라인.
+      // ⚠️ 2026-09-02엔 Leads/MTA/IC Funnel/SAL 각 tail이 끝날 때마다
+      // 대기열에 편입되는 방식이었으나, Deal Tracker는 그 4개와 무관하게
+      // 바뀌어 진짜 변경 감지가 아니었음(사용자 지적) — 2026-09-03부터
+      // `periodicRefreshRevenue_()`(MASTER_002_PipelineAsync.js) 독립 2시간
+      // 주기 트리거로 교체(`REVENUE_PERIODIC_REFRESH_INTERVAL_MS` 참고).
+      // PIPELINE_LOCK 충돌 시엔 여전히 대기열에 편입(자동 재시도).
       REVENUE: "REVENUE"
     },
+
+    // 2026-09-03 추가 — periodicRefreshRevenue_()의 독립 주기(사용자 확정,
+    // docs/OpenItems.md #47). periodicRefreshAllReports_()(하루 2번 고정
+    // KST 시각)와 달리 이건 "몇 시간마다"라 고정 시각이 아닌 상대 간격 사용.
+    REVENUE_PERIODIC_REFRESH_INTERVAL_MS: 2 * 60 * 60 * 1000,
 
     TRIGGER_DELAY_MS: 1000,
 

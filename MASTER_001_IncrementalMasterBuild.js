@@ -10,9 +10,17 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-09-03)
+ * - **Master_DB Raw 이관 2단계** — `appendNewLeads()`/`appendNewMTA()`의
+ *   `getRawSheetDataRowCount_()`/`readRawSheetFrom_()` 호출에
+ *   `openLeadsRawExternalSpreadsheet_()`/`openMTARawExternalSpreadsheet_()`
+ *   (MASTER_005_DataReader.js v2.2.0 신규)로 연 전용 외부 스프레드시트를
+ *   명시 전달 — Leads_Raw/MTA_Raw가 메인 스프레드시트가 아닌 외부 스프레드시트
+ *   기준으로 "신규 행"을 판단하도록 전환. `docs/exec-plans/active/
+ *   2026-09-03-master-db-raw-migration.md` 참고.
  * v1.10.0 (2026-09-01)
  * - **락 충돌 자동 재시도(사용자 요청)**: `appendNewLeads()`/`appendNewMTA()`가
  *   `PIPELINE_LOCK` 충돌로 백그라운드를 건너뛸 때, 기존엔 "몇 분 후 사람이
@@ -113,11 +121,13 @@ function appendNewLeads(silent){
         .getProperty(propKey)
     ) || 0;
 
+  const leadsRawSpreadsheet = openLeadsRawExternalSpreadsheet_();
+
   const totalRaw =
-    getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_RAW);
+    getRawSheetDataRowCount_(CONFIG.SHEETS.LEADS_RAW, leadsRawSpreadsheet);
 
   const newRaw =
-    readRawSheetFrom_(CONFIG.SHEETS.LEADS_RAW, lastProcessed);
+    readRawSheetFrom_(CONFIG.SHEETS.LEADS_RAW, lastProcessed, leadsRawSpreadsheet);
 
   Logger.log(
     "Total Raw : " + totalRaw +
@@ -250,11 +260,13 @@ function appendNewMTA(silent){
     ) || 0;
 
 
+  const mtaRawSpreadsheet = openMTARawExternalSpreadsheet_();
+
   const totalRaw =
-    getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_RAW);
+    getRawSheetDataRowCount_(CONFIG.SHEETS.MTA_RAW, mtaRawSpreadsheet);
 
   const newRaw =
-    readRawSheetFrom_(CONFIG.SHEETS.MTA_RAW, lastProcessed);
+    readRawSheetFrom_(CONFIG.SHEETS.MTA_RAW, lastProcessed, mtaRawSpreadsheet);
 
   Logger.log(
     "Total Raw : " + totalRaw +

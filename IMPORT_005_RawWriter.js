@@ -12,9 +12,18 @@
  * 00 Import
  *
  * Version
- * v4.2.0
+ * v4.3.0
  *
  * Change Log
+ * v4.3.0 (2026-09-03)
+ * - **Master_DB Raw 이관 2단계** — `writeLeadRaw()`/`writeMTARaw()`/
+ *   `writeICFunnelRaw()` 모두 `writeSALRaw()`와 동일하게 전용 외부
+ *   스프레드시트(`openLeadsRawExternalSpreadsheet_()`/
+ *   `openMTARawExternalSpreadsheet_()`(MASTER_005_DataReader.js v2.2.0)/
+ *   `openICFunnelRawExternalSpreadsheet_()`(MASTER_009_ICFunnelSync.js
+ *   v1.8.0))를 열어 `filterOutExactDuplicateRawRecords_()`/
+ *   `appendSheetRecords()`에 명시 전달하도록 변경. `docs/exec-plans/active/
+ *   2026-09-03-master-db-raw-migration.md` 참고.
  * v4.2.0 (2026-09-02)
  * - writeSALRaw() 신규(`docs/OpenItems.md` #38, `MASTER_010_SALSync.js`) —
  *   SAL을 IC Funnel에서 분리해 전용 외부 스프레드시트(CONFIG.SAL.EXTERNAL.
@@ -53,16 +62,21 @@
  */
 function writeLeadRaw(records){
 
+  const externalFile = openLeadsRawExternalSpreadsheet_();
+
   const dedup =
     filterOutExactDuplicateRawRecords_(
       CONFIG.SHEETS.LEADS_RAW,
-      records
+      records,
+      externalFile
     );
 
   appendSheetRecords(
     CONFIG.SHEETS.LEADS_RAW,
     dedup.kept,
-    CONFIG.RAW_DATE_COLUMNS.LEADS
+    CONFIG.RAW_DATE_COLUMNS.LEADS,
+    [],
+    externalFile
   );
 
   return {
@@ -83,16 +97,21 @@ function writeLeadRaw(records){
  */
 function writeMTARaw(records){
 
+  const externalFile = openMTARawExternalSpreadsheet_();
+
   const dedup =
     filterOutExactDuplicateRawRecords_(
       CONFIG.SHEETS.MTA_RAW,
-      records
+      records,
+      externalFile
     );
 
   appendSheetRecords(
     CONFIG.SHEETS.MTA_RAW,
     dedup.kept,
-    CONFIG.RAW_DATE_COLUMNS.MTA
+    CONFIG.RAW_DATE_COLUMNS.MTA,
+    [],
+    externalFile
   );
 
   return {
@@ -112,16 +131,21 @@ function writeMTARaw(records){
  */
 function writeICFunnelRaw(records){
 
+  const externalFile = openICFunnelRawExternalSpreadsheet_();
+
   const dedup =
     filterOutExactDuplicateRawRecords_(
       CONFIG.IC_FUNNEL.SHEET,
-      records
+      records,
+      externalFile
     );
 
   appendSheetRecords(
     CONFIG.IC_FUNNEL.SHEET,
     dedup.kept,
-    CONFIG.RAW_DATE_COLUMNS.IC_FUNNEL
+    CONFIG.RAW_DATE_COLUMNS.IC_FUNNEL,
+    [],
+    externalFile
   );
 
   return {

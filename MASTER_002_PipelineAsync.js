@@ -22,9 +22,22 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.26.0
+ * v1.27.0
  *
  * Change Log
+ * v1.27.0 (2026-09-03)
+ * - **Revenue 파이프라인 트리거 재설계(`docs/OpenItems.md` #47,
+ *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
+ *   `scheduleNextRevenuePeriodicRefresh_()`/`periodicRefreshRevenue_()`/
+ *   `runInstallRevenuePeriodicRefreshTrigger()` 신규 —
+ *   `periodicRefreshAllReports_()`와 동일한 self-rescheduling 패턴으로 Revenue
+ *   Sync를 2시간마다 독립 실행(`CONFIG.PIPELINE.REVENUE_PERIODIC_REFRESH_
+ *   INTERVAL_MS`, CORE_001_Config.js v1.59.0). `runLeadsPipelineTail()`/
+ *   `runMTAPipelineTail()`/`runICFunnelPipelineTail()`/`runSALPipelineTail()`
+ *   끝에서 매번 `enqueuePendingPipelineType_(...REVENUE)`를 호출하던 6곳 전부
+ *   제거 — Deal Tracker는 이 4개 파이프라인과 무관하게 바뀌어 진짜 변경
+ *   감지가 아니었음(사용자 지적). `PIPELINE_LOCK` 충돌 시 대기열 편입은
+ *   유지(Leads_OPS 동시 쓰기 경합 방지).
  * v1.26.0 (2026-09-03)
  * - **단계별/리포트별/OPS별 실행시간 계측 추가(`docs/OpenItems.md` #42, exec-plan
  *   2026-09-02-pipeline-refresh-time-redesign)** — 실행시간 재실측을 "전체 합산이
@@ -1772,6 +1785,97 @@ function runInstallAllReportsPeriodicRefreshTrigger(){
 
 /**
  * ==========================================================
+ * Schedule Next Revenue Periodic Refresh (1회성 트리거 재예약)
+ *
+ * WHY (2026-09-03, docs/OpenItems.md #47)
+ * Revenue 역싱크(MASTER_011_RevenueSync.js)는 2026-09-02엔 Leads/MTA/IC
+ * Funnel/SAL 각 tail이 끝날 때마다 대기열에 편입되는 방식이었으나, 정작
+ * 소스인 Deal Tracker(외부 스프레드시트)는 이 4개 파이프라인과 무관하게
+ * 바뀌므로 진짜 변경 감지가 아니었음(사용자 지적) —
+ * `scheduleNextAllReportsRefresh_()`/`periodicRefreshAllReports_()`(하루 2번
+ * 강제 재계산)와 동일한 self-rescheduling 절대시각 1회성 트리거 패턴으로,
+ * `CONFIG.PIPELINE.REVENUE_PERIODIC_REFRESH_INTERVAL_MS`(2시간)마다 독립
+ * 실행하도록 재설계. 고정 KST 시각이 아니라 상대 간격이라
+ * `computeNextSeoulHourTimestamp_()` 대신 단순 `Date.now() + interval` 사용
+ * (타임존 보정 불필요 — 상대 간격은 DST 영향이 없음).
+ * ==========================================================
+ */
+function scheduleNextRevenuePeriodicRefresh_(){
+
+  deleteTriggersByHandlerName_("periodicRefreshRevenue_");
+
+  const nextMs = Date.now() + CONFIG.PIPELINE.REVENUE_PERIODIC_REFRESH_INTERVAL_MS;
+
+  ScriptApp.newTrigger("periodicRefreshRevenue_")
+    .timeBased()
+    .at(new Date(nextMs))
+    .create();
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " Revenue 주기적 Refresh 다음 실행 예약: " +
+    Utilities.formatDate(new Date(nextMs), CONFIG.DATE.DISPLAY_TIMEZONE, "yyyy-MM-dd HH:mm") + " KST"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Periodic Refresh Revenue (트리거 핸들러)
+ *
+ * WHY
+ * `periodicRefreshAllReports_()`(Report 시트만 재작성)와 달리 Revenue Sync는
+ * Leads_OPS 셀 자체에 값을 쓰므로, Leads/MTA/IC Funnel/SAL 중 하나가 마침
+ * 실행 중이면 `PIPELINE_LOCK`을 그대로 존중해 동시 쓰기 경합을 피한다 — 락
+ * 획득 실패 시 대기열에 편입(기존 `enqueuePendingPipelineType_()` 재사용,
+ * 그 실행이 끝날 때 `releasePipelineLockAndProcessQueue_()`가 자동으로
+ * 이어서 실행). 락 획득/미획득과 무관하게 매번 다음 2시간 주기를 재예약 —
+ * 대기열에만 의존하면 그사이 다른 파이프라인이 전혀 안 도는 조용한 기간에
+ * Revenue가 영원히 안 도는 사각지대가 생기기 때문.
+ * ==========================================================
+ */
+function periodicRefreshRevenue_(){
+
+  if(acquirePipelineLock_(CONFIG.PIPELINE.TYPES.REVENUE)){
+
+    runRevenuePipelineTail();
+
+  } else {
+
+    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " Revenue 주기적 Refresh — 다른 파이프라인 실행 중, 대기열에 편입."
+    );
+
+  }
+
+  scheduleNextRevenuePeriodicRefresh_();
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — periodicRefreshRevenue_() 트리거 설치(최초 1회 수동 실행 전용)
+ *
+ * WHY
+ * `runInstallAllReportsPeriodicRefreshTrigger()`와 동일 패턴 —
+ * `ScriptApp.newTrigger()`는 Full Authorization이 필요해 사람이 Apps Script
+ * 편집기에서 직접 한 번 Run 해야 한다. 이후로는 `periodicRefreshRevenue_()`가
+ * 매번 실행 끝에 스스로 다음 회차를 재예약하므로 재설치 불필요.
+ * ==========================================================
+ */
+function runInstallRevenuePeriodicRefreshTrigger(){
+
+  scheduleNextRevenuePeriodicRefresh_();
+
+}
+
+
+/**
+ * ==========================================================
  * Refresh OPS Sheets (Events_OPS / BOFU_OPS / Search_OPS / Content_OPS)
  *
  * WHY
@@ -2018,11 +2122,10 @@ function runLeadsPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
-    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
-    // SAL 각 tail이 끝날 때마다 대기열에 편입시켜 자동으로 뒤이어 실행
-    // (사용자 요청 "역싱크는 트리거로 비동기", MASTER_011_RevenueSync.js 참고).
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
-
+    // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail들에 얹혀가지 않음(2026-09-02
+    // 방식 폐기) — Deal Tracker는 Leads/MTA/IC Funnel/SAL Import와 무관하게
+    // 바뀌므로 진짜 변경 감지가 아니었음. 독립 2시간 주기 트리거
+    // (scheduleNextRevenuePeriodicRefresh_()/periodicRefreshRevenue_())로 대체.
     releasePipelineLockAndProcessQueue_();
 
   } catch(err){
@@ -2037,8 +2140,6 @@ function runLeadsPipelineTail(){
     PropertiesService
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
-
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
 
     releasePipelineLockAndProcessQueue_();
 
@@ -2136,11 +2237,10 @@ function runMTAPipelineTail(){
       .getScriptProperties()
       .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
-    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
-    // SAL 각 tail이 끝날 때마다 대기열에 편입시켜 자동으로 뒤이어 실행
-    // (사용자 요청 "역싱크는 트리거로 비동기", MASTER_011_RevenueSync.js 참고).
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
-
+    // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail들에 얹혀가지 않음(2026-09-02
+    // 방식 폐기) — Deal Tracker는 Leads/MTA/IC Funnel/SAL Import와 무관하게
+    // 바뀌므로 진짜 변경 감지가 아니었음. 독립 2시간 주기 트리거
+    // (scheduleNextRevenuePeriodicRefresh_()/periodicRefreshRevenue_())로 대체.
     releasePipelineLockAndProcessQueue_();
 
   } catch(err){
@@ -2155,8 +2255,6 @@ function runMTAPipelineTail(){
     PropertiesService
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
-
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
 
     releasePipelineLockAndProcessQueue_();
 
@@ -2262,11 +2360,8 @@ function runICFunnelPipelineTail(){
 
   } finally {
 
-    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
-    // SAL 각 tail이 끝날 때마다(성공/실패 무관) 대기열에 편입시켜 자동으로
-    // 뒤이어 실행(사용자 요청 "역싱크는 트리거로 비동기").
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
-
+    // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail에 얹혀가지 않음(2026-09-02
+    // 방식 폐기) — 독립 2시간 주기 트리거로 대체(위 runLeadsPipelineTail() 주석 참고).
     releasePipelineLockAndProcessQueue_();
 
   }
@@ -2349,11 +2444,8 @@ function runSALPipelineTail(){
 
   } finally {
 
-    // 2026-09-02 — Revenue 역싱크는 CSV Import가 없어 Leads/MTA/IC Funnel/
-    // SAL 각 tail이 끝날 때마다(성공/실패 무관) 대기열에 편입시켜 자동으로
-    // 뒤이어 실행(사용자 요청 "역싱크는 트리거로 비동기").
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
-
+    // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail에 얹혀가지 않음(2026-09-02
+    // 방식 폐기) — 독립 2시간 주기 트리거로 대체(위 runLeadsPipelineTail() 주석 참고).
     releasePipelineLockAndProcessQueue_();
 
   }

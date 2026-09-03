@@ -14,9 +14,17 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-09-03)
+ * - `checkUnprotectedDateLikeRawColumns_()`가 메인 스프레드시트 대신
+ *   Leads_Raw/MTA_Raw 전용 외부 스프레드시트(`openLeadsRawExternalSpreadsheet_()`/
+ *   `openMTARawExternalSpreadsheet_()`, MASTER_005_DataReader.js v2.2.0)를
+ *   열어 스캔하도록 수정 — Master_DB Raw 이관(2026-09-03) 이후 이 시트들이
+ *   메인 스프레드시트에 없어져 QA가 조용히 무력화되는 것을 방지(사전 코드
+ *   조사로 발견, `docs/exec-plans/active/2026-09-03-master-db-raw-migration.md`
+ *   참고). opener 실패 시에도 이슈로 기록만 하고 나머지 QA는 계속 진행.
  * v1.7.0 (2026-08-20)
  * - checkUnprotectedDateLikeRawColumns_() 추가, runOPSQA_()에 배선 —
  *   docs/OpenItems.md #26(Sales Accepted Date 오염 사고) 재발 방지.
@@ -703,14 +711,43 @@ function checkExactDuplicateTouchRows_(issues) {
  */
 function checkUnprotectedDateLikeRawColumns_(issues) {
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  //----------------------------------------------------------
+  // 2026-09-03 — Leads_Raw/MTA_Raw가 Master_DB 전용 외부 스프레드시트로
+  // 이관됨(docs/exec-plans/active/2026-09-03-master-db-raw-migration.md).
+  // 메인 스프레드시트만 스캔하면 이 QA가 시트를 못 찾아 조용히 스킵되어
+  // 무력화되므로, 각 타입의 실제 위치(외부 스프레드시트)를 열어서 스캔
+  // — opener 자체가 실패해도(SPREADSHEET_ID 미설정 등) 이 QA 항목만
+  // 스킵하고 나머지 체크는 계속 진행(독립 try/catch, 다른 체크들과 동일 원칙).
+  //----------------------------------------------------------
 
   const targets = [
-    { sheetName: CONFIG.SHEETS.LEADS_RAW, protectedList: CONFIG.RAW_DATE_COLUMNS.LEADS },
-    { sheetName: CONFIG.SHEETS.MTA_RAW, protectedList: CONFIG.RAW_DATE_COLUMNS.MTA }
+    {
+      sheetName: CONFIG.SHEETS.LEADS_RAW,
+      protectedList: CONFIG.RAW_DATE_COLUMNS.LEADS,
+      spreadsheet: openLeadsRawExternalSpreadsheet_
+    },
+    {
+      sheetName: CONFIG.SHEETS.MTA_RAW,
+      protectedList: CONFIG.RAW_DATE_COLUMNS.MTA,
+      spreadsheet: openMTARawExternalSpreadsheet_
+    }
   ];
 
   targets.forEach(function (target) {
+
+    let ss;
+
+    try {
+      ss = target.spreadsheet();
+    } catch (e) {
+      issues.push({
+        check: "Unprotected Date-like Raw Column",
+        leadId: "",
+        email: "",
+        detail: target.sheetName + " 외부 스프레드시트를 열 수 없어 이 체크를 건너뜀 : " + e.message
+      });
+      return;
+    }
 
     const sheet = ss.getSheetByName(target.sheetName);
     if (!sheet) return;

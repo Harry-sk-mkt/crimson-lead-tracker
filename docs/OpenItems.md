@@ -854,3 +854,50 @@
     `refreshACQSummary_()`(및 나머지 Engine들)를 "SAL 파생 부분만 부분 갱신" 가능하게
     쪼개야 하는데, 이건 그 자체로 별도 설계/구현 작업 — 오늘(#39 Revenue 매칭 실패 조사 중
     파생된 S&M_REP 성능 개선) 범위에는 포함하지 않기로 함. 임의로 처리하지 말 것.
+45. **Salesforce에서 추출해야 할 필드값을 리포트(Export 타입)별로 정리 — 사용자 요청, 미착수(TODO)**
+    (2026-09-03, Master_DB Raw 이관 세션 중 메모) — 지금은 각 Export 타입(New Leads/MTA/IC
+    Funnel/SAL)이 어떤 Salesforce 필드를 필요로 하는지가 `CORE_001_Config.js`의
+    `REQUIRED_FIELDS`/`RAW_DATE_COLUMNS`/각 Transformer(`MASTER_006_LeadTransformer.js`/
+    `MASTER_007_MTATransformer.js`)/`MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`
+    코드 여기저기에 흩어져 있어, "이 리포트를 만들려면 Salesforce에서 정확히 어떤 필드를
+    뽑아야 하는가"를 한눈에 보려면 코드를 전부 훑어야 함. 리포트별(New Leads Export/MTA
+    Export/IC Funnel Export/SAL Export)로 필요한 Salesforce 필드 목록을 정리하는 문서화
+    작업 — 어느 문서에 정리할지, 필드별로 "어느 다운스트림 리포트/컬럼이 이 필드를 쓰는지"까지
+    역추적해서 정리할지는 착수 시 확인. 임의로 처리하지 말 것.
+46. **자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인 tail이 느려짐 —
+    실측으로 발견, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 검증 세션 중 발견) —
+    `runICFunnelPipelineTail()` 실행이 19분 넘게 걸려 원인 조사 중 확인. `handleReportGenerateEdit`
+    (`ACQREP_001_Report.js`, ACQ_REP/NewP1_REP/S&M_REP의 Generate 체크박스 처리)와
+    `onFYReportEdit_`(`FYREP_002_Report.js`)는 **installable onEdit 트리거**로 등록돼 있는데,
+    installable onEdit은 Simple Trigger와 달리 사람이 직접 편집할 때뿐 아니라 **스크립트 자신이
+    같은 스프레드시트에 값을 쓸 때도 발동**한다 — 그래서 파이프라인 tail 안에서
+    `generateACQReport_()`/`generateNewP1Report_()`/`generateSMReport_()`/`generateFYReport_()`가
+    리포트 시트에 쓰기를 할 때마다 이 핸들러들이 반복 재발동됨(실측: `runICFunnelPipelineTail`
+    실행 중이던 11:13~11:22 사이 `onFYReportEdit_`/`handleReportGenerateEdit`가 10회 넘게
+    개별 실행으로 잡힘, 사용자가 그 시간에 시트를 전혀 건드리지 않았음을 확인). 각 재발동은
+    가드 조건(`row`/`col`이 정확히 Generate 체크박스 셀인지, `e.value === "TRUE"`인지)에서
+    대부분 조기 return하므로 무한루프나 중복 생성으로 이어지진 않는 것으로 보이지만, 같은
+    스프레드시트에 여러 실행이 동시에 몰리면서 Apps Script 락 경합을 유발해 그 tail의 Events/
+    BOFU/Content Engine 구간이 평소(MTA tail 기준 각 55~76초)보다 2~3배 느려짐(각 153~207초)이
+    실측 확인됨. **막힌 지점**: 정확한 근본 수정 방향(예: 리포트 쓰기를 이 트리거들이 감지 못하는
+    방식으로 바꿀지, 가드에 "이 실행이 같은 파이프라인 tail 안에서 발생했는지" 체크를 추가할지)은
+    미검토 — 이번 세션(Master_DB Raw 이관) 범위 밖이라 조사만 하고 수정하지 않음. 임의로
+    처리하지 말 것.
+47. **Revenue 파이프라인 — Leads/MTA/IC Funnel/SAL 완료에 얹혀가는 방식 대신 독립 트리거로
+    분리 — 아이디어만 기록, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 세션 중 사용자
+    제안) — 지금 `runRevenuePipelineTail()`(`MASTER_011_RevenueSync.js`)은 CSV Import가
+    없는 유일한 타입이라 Leads/MTA/IC Funnel/SAL 중 아무 tail이나 끝날 때마다
+    `enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE)`로 대기열에 얹혀가는 방식으로만
+    트리거됨(`CORE_001_Config.js` v1.56.0 변경 이력 참고). 그런데 Revenue의 실제 소스인 Deal
+    Tracker(외부 스프레드시트)는 이 4개 파이프라인과 무관하게 바뀌므로, 지금 방식도 "진짜 변경
+    감지"가 아니라 다른 파이프라인에 편승하는 간접 트리거일 뿐 — 사용자가 차라리 Revenue를
+    떼어내 독립적으로 도는 트리거로 바꾸자고 제안. 두 방향 검토됨:
+    - **단순 시간 트리거**: 이 프로젝트에 이미 선례 있음 —
+      `periodicRefreshAllReports_()`(하루 2번 KST 10/22시 강제 재계산, 42번 항목 참고)와 동일
+      패턴을 Revenue에도 적용. 구현 난이도 낮음, 기존 검증된 패턴 재사용.
+    - **Deal Tracker 자체 변경 감지(신규 입력 발생 시 트리거)**: 이 스크립트가 Deal Tracker
+      외부 스프레드시트에 직접 installable onEdit 트리거를 설치하는 게 기술적으로 가능해
+      보이나(편집 권한만 있으면 소유하지 않은 스프레드시트에도 설치형 트리거를 걸 수 있음),
+      **실제로 되는지 검증 안 됨** — 이 프로젝트가 Simple Trigger의 외부 `openById()` 권한
+      부족으로 이미 여러 번 막힌 이력(Target_REP/ACQ_REP 사례)이 있어 신중한 검증 필요.
+    막힌 지점: 두 방향 중 어느 쪽으로 갈지, 착수 시점 확정 필요 — 임의로 처리하지 말 것.

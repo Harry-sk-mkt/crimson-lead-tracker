@@ -70,6 +70,79 @@ flagging 아이디어, SAL Sync가 무관한 Engine 6종까지 매번 전부 재
 역싱크 노드 추가, Leads_OPS 필드 소유권 분리(2026-09-02 재편) 반영, 오늘 신설된 ACQ
 Engine → `ACQ_Summary_Weekly` → S&M_REP 관계 추가.
 
+## Master_DB — Leads_Raw/MTA_Raw/ICFunnel_Raw 외부 스프레드시트 이관 (실사용 검증 완료)
+
+`docs/Roadmap.md`의 "Master_DB" 항목 착수 — 메인 스프레드시트 용량/오픈 속도 문제 완화
+목적으로 세 Raw 시트를 Master_DB 폴더 안 전용 외부 스프레드시트로 이관(SAL_Raw/Deal
+Tracker는 이미 그 폴더에 있어 제외). 상세 진행 기록: `docs/exec-plans/active/
+2026-09-03-master-db-raw-migration.md`.
+
+**범위 확정**: Master/Engine(Leads_Master/MTA_Master, ACQ/NewP1/Events/BOFU/Search/
+Content Engine 등)은 이번 범위 밖 — Raw(누적 append-only)가 구조적으로 훨씬 크고,
+Master/Engine은 거의 모든 리포트가 직접 참조하는 허브라 이관 시 blast radius가 비교할
+수 없이 큼(사용자 확정).
+
+**마이그레이션**: `MASTER_012_RawExternalMigration.js`(신규) — 메인 스프레드시트 Raw를
+읽기 전용으로 읽어 외부 스프레드시트에 복사, 탭 이름 자동 확인/rename, Plain Text
+서식을 값 입력 전에 적용해 day-first 날짜 오염 방지. 실행 결과 세 타입 전부 source/written
+건수 정확히 일치(Leads_Raw 37,562건/MTA_Raw 87,180건/ICFunnel_Raw 42,864건, 각 16~103초).
+
+**전환(2단계)**: `CORE_001_Config.js`에 `RAW_EXTERNAL.LEADS/MTA`/`IC_FUNNEL.EXTERNAL`
+신규, `MASTER_005_DataReader.js`/`IMPORT_005_RawWriter.js`/`MASTER_001_
+IncrementalMasterBuild.js`/`MASTER_009_ICFunnelSync.js`/`OPS_006_QA.js`를 SAL_Raw와
+동일한 `targetSpreadsheet` optional 패턴으로 전환 — 기존 SAL_Raw 도입 시 만들어둔
+`appendSheetRecords()`/`filterOutExactDuplicateRawRecords_()`의 optional 파라미터를
+그대로 재사용.
+
+**실사용 검증**: 실제 정기 Import(Leads/MTA/IC Funnel)로 쓰기(외부 시트 append, dedup)와
+읽기(증분 판단, `Total Raw`/`Already Processed`/`New` 건수 정확히 일치) 둘 다 실측
+확인 — 에러 없이 전체 다운스트림 체인(Engine refresh + OPS Build + Report 생성)까지
+완주. 기존 메인 스프레드시트 Raw는 안정화 확인 후 별도로 삭제 예정(사용자 결정).
+
+**부수 발견**: `runICFunnelPipelineTail`이 19분 넘게 걸린 원인 조사 중, 파이프라인
+자신의 자동 리포트 생성이 installable onEdit 트리거(`handleReportGenerateEdit`/
+`onFYReportEdit_`)를 반복 재발동시켜 락 경합으로 느려지는 기존 설계 이슈 발견 —
+`docs/OpenItems.md` #46로 기록, 이번 범위 밖(수정 안 함).
+
+## SAL/Revenue Sync 엔진 refresh 낭비 제거 + Revenue 독립 2시간 트리거
+
+`docs/OpenItems.md` #44(SAL이 무관한 Engine 6종 전부 재실행)를 실제 Engine 파일 전수
+grep으로 정밀화 — "Sales Accepted Date"를 읽는 Engine은 ACQ_Summary 하나뿐(NewP1/
+Events/BOFU/Search/Content_Engine/Target_Engine 전부 미참조), IC Funnel 필드는
+6종 전부가 실제로 필요, MTA(#Touches)는 어느 Engine도 직접 안 읽음(대신 MTA_Master
+자체를 여러 Engine이 캠페인 매칭용으로 스캔). Revenue Sync는 이미 존재하던 경량 버전
+(`refreshACQSummaryRevenueOnly_()`/`refreshNewP1EngineRevenueOnly_()`)을 안 쓰고
+무거운 전체 버전을 호출 중이었고, Deal Tracker를 직접 읽어 무관한 Events/BOFU/Content
+Engine까지 매번 돌고 있었음(실측 485초 중 상당수가 이 3개에서 낭비). 상세 설계/근거:
+`docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`.
+
+**구현**: (1) `MASTER_010_SALSync.js`(v1.1.0) — SAL Sync가 이미 아는 "이번에 바뀐
+리드"만으로 ACQ_Summary/Weekly의 SAL 카운트에 델타(+1/-1)만 반영하는
+`computeSALDeltaLeads_()`/`refreshACQSummarySALDelta_()`(ACQREP_002_Summary.js
+v1.5.1) 신규 — Leads_OPS/MTA_Master 전체 재스캔 없음, 6개 Engine refresh를 이 하나로
+교체. (2) `MASTER_011_RevenueSync.js`(v1.1.0) — Revenue-Only 경량 버전으로 교체,
+Events/BOFU/Content Engine 호출 제거(Search_Engine만 유지 — Leads_OPS Opportunity
+Won Date/Revenue를 직접 읽는 유일한 예외). (3) Revenue 트리거 자체도 재설계 —
+Leads/MTA/IC Funnel/SAL tail에 얹혀가던 방식(진짜 변경 감지 아님, Deal Tracker는 이
+4개와 무관하게 바뀜)을 폐기하고 `periodicRefreshAllReports_()`와 동일한
+self-rescheduling 패턴의 독립 2시간 트리거(`periodicRefreshRevenue_()`,
+`MASTER_002_PipelineAsync.js` v1.27.0)로 교체, `PIPELINE_LOCK`은 계속 존중(충돌 시
+대기열 편입). `CORE_001_Config.js`(v1.59.0)에 `PIPELINE.REVENUE_PERIODIC_REFRESH_
+INTERVAL_MS` 신규.
+
+**검증**: 신규 pure-function 테스트 4개 전부 PASS(1건은 테스트 기대값 실수로 최초
+FAIL, `getFiscalYear()` 실측 대조 후 수정 — 회계연도가 8월 시작이라 7월은 FY26).
+Revenue 2시간 트리거 설치 확인(다음 실행 15:19 KST 예약). SAL Import 실사용 로그/
+ACQ_Summary 실제 반영은 다음 세션 검증 대기.
+
+## 세션 중 신규 기록 항목 (`docs/OpenItems.md`)
+
+- **#45** — Salesforce에서 추출해야 할 필드를 Export 타입(New Leads/MTA/IC Funnel/SAL)별로
+  정리하는 문서화 작업, 미착수.
+- **#46** — 자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인이
+  느려지는 문제(위 Master_DB 이관 부수 발견), 미착수.
+- **#47** — Revenue 파이프라인 독립 트리거 아이디어 → 이번 세션에서 구현 완료(위 항목).
+
 # Changelog — 2026-09-02
 
 ## Session-Start Git Sync Check 트리거 조건 명문화

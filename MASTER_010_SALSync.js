@@ -41,9 +41,22 @@
  *   오래 안 닫히는 문제 방지)
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-03)
+ * - **엔진 refresh 낭비 제거(`docs/OpenItems.md` #44,
+ *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
+ *   "Sales Accepted Date"를 실제로 읽는 Engine이 ACQ_Summary 하나뿐임을 확인
+ *   (NewP1/Events/BOFU/Search/Content_Engine/Target_Engine 전부 미참조) —
+ *   `syncSALToOPS_()` 끝의 `refreshACQSummary_()`/`refreshNewP1Engine_()`/
+ *   `refreshEventsEngine_()`/`refreshBOFUEngine_()`/`refreshSearchEngine_()`/
+ *   `refreshContentEngine_()`/`refreshTargetActuals_()` 7개 전체 재실행을
+ *   `refreshACQSummarySALDelta_()`(ACQREP_002_Summary.js v1.5.0, 신규) 하나로
+ *   교체 — Leads_OPS/MTA_Master 전체 재스캔 없이 이번에 바뀐 리드만 반영.
+ *   `computeSALDeltaLeads_()` 신규(순수 함수) — "바뀐 리드" 판정과 Business
+ *   Segment/Lead Priority 조회를 이 파일이 담당(호출 시점에 이미 읽은 old/new
+ *   값 재사용, 추가 스캔 없음).
  * v1.0.0 (2026-09-02)
  * - 최초 구현. `docs/OpenItems.md` #38 P1 TODO #1 참고.
  * ==========================================================
@@ -327,6 +340,39 @@ function syncSALToOPS_(){
       .getValues();
   });
 
+  //----------------------------------------------------------
+  // ACQ_Summary 델타 갱신용 — Business Segment/Lead Priority 조회
+  // (2026-09-03, refreshACQSummarySALDelta_() 참고. 이번 리드들의 old/new
+  // Sales Accepted Date는 이미 위에서 읽었으니 추가 스캔 없이 재사용)
+  //----------------------------------------------------------
+
+  const segmentCol = headerMap["Business Segment"];
+  const priorityCol = headerMap["Lead Priority"];
+  const priorityOverrideCol = headerMap["Priority Override"];
+
+  const segmentValues = segmentCol !== undefined
+    ? opsSheet.getRange(OPS.ROWS.DATA_START, segmentCol + 1, numRows, 1).getValues()
+    : null;
+
+  const priorityValues = priorityCol !== undefined
+    ? opsSheet.getRange(OPS.ROWS.DATA_START, priorityCol + 1, numRows, 1).getValues()
+    : null;
+
+  const priorityOverrideValues = priorityOverrideCol !== undefined
+    ? opsSheet.getRange(OPS.ROWS.DATA_START, priorityOverrideCol + 1, numRows, 1).getValues()
+    : null;
+
+  const deltaLeads = computeSALDeltaLeads_(
+    leadIds,
+    leadIdToRow,
+    OPS.ROWS.DATA_START,
+    existingColumnValues["Sales Accepted Date"],
+    salByLeadId,
+    segmentValues,
+    priorityValues,
+    priorityOverrideValues
+  );
+
   const syncResult = computeMTASyncColumnUpdates_(
     leadIds, salByLeadId, leadIdToRow, syncColumns, OPS.ROWS.DATA_START, existingColumnValues
   );
@@ -353,14 +399,116 @@ function syncSALToOPS_(){
   Logger.log("Time : " + seconds + "s");
   Logger.log("=======================================");
 
-  refreshACQSummary_();
-  refreshNewP1Engine_();
+  refreshACQSummarySALDelta_(deltaLeads);
 
-  refreshEventsEngine_();
-  refreshBOFUEngine_();
-  refreshSearchEngine_();
-  refreshContentEngine_();
-  refreshTargetActuals_();
+}
+
+
+/**
+ * ==========================================================
+ * Compute SAL Delta Leads (순수 함수)
+ *
+ * WHY
+ * `refreshACQSummarySALDelta_()`(ACQREP_002_Summary.js)에 넘길 "이번에
+ * Sales Accepted Date가 실제로 바뀐 리드" 목록을 계산 — SAL Sync가 이미 읽어둔
+ * old(existingSalesAcceptedValues)/new(salByLeadId) 값을 그대로 재사용하므로
+ * 추가 Leads_OPS 스캔이 없다. 값이 같으면(변화 없음) 목록에서 제외해 델타
+ * 계산량을 최소화.
+ *
+ * INPUT
+ * leadIds : string[]  (SAL_Raw 전체 Lead ID)
+ * leadIdToRow : Object  { [leadId]: rowNumber }
+ * dataStartRow : number
+ * existingSalesAcceptedValues : Array[]  (Sales Accepted Date 컬럼, 변경 전 값)
+ * salByLeadId : Object  { [leadId]: { salesAcceptedDate } }
+ * segmentValues/priorityValues/priorityOverrideValues : Array[] | null
+ *   (해당 컬럼이 Leads_OPS에 없으면 null — 방어적으로 빈 문자열 처리)
+ *
+ * OUTPUT
+ * Object[]  { segment, priority, priorityOverride, oldDate, newDate }
+ *
+ * TEST
+ * testComputeSALDeltaLeads() 참고
+ * ==========================================================
+ */
+function computeSALDeltaLeads_(
+  leadIds, leadIdToRow, dataStartRow,
+  existingSalesAcceptedValues, salByLeadId,
+  segmentValues, priorityValues, priorityOverrideValues
+){
+
+  const deltaLeads = [];
+
+  leadIds.forEach(function(leadId){
+
+    const row = leadIdToRow[leadId];
+    if(row === undefined) return;
+
+    const rowIndex = row - dataStartRow;
+
+    const oldDate = existingSalesAcceptedValues[rowIndex][0];
+    const newDate = salByLeadId[leadId].salesAcceptedDate;
+
+    const oldValid = oldDate instanceof Date && !isNaN(oldDate.getTime());
+    const newValid = newDate instanceof Date && !isNaN(newDate.getTime());
+
+    if(!newValid) return;  // SAL sync는 값을 비우지 않음(기존 원칙)
+    if(oldValid && oldDate.getTime() === newDate.getTime()) return;  // 변화 없음
+
+    deltaLeads.push({
+      segment: segmentValues ? (segmentValues[rowIndex][0] || "") : "",
+      priority: priorityValues ? (priorityValues[rowIndex][0] || "") : "",
+      priorityOverride: priorityOverrideValues ? (priorityOverrideValues[rowIndex][0] || "") : "",
+      oldDate: oldValid ? oldDate : null,
+      newDate: newDate
+    });
+
+  });
+
+  return deltaLeads;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeSALDeltaLeads_()
+ * ==========================================================
+ */
+function testComputeSALDeltaLeads(){
+
+  const leadIds = ["L1", "L2", "L3"];
+
+  const leadIdToRow = { "L1": 2, "L2": 3, "L3": 4 };  // L3는 아래서 존재 안 함 취급
+
+  const existingSalesAcceptedValues = [
+    [""],                        // L1 — 기존 값 없음
+    [new Date(2026, 6, 1)]       // L2 — 기존 값 있음, 동일 값으로 재동기화될 예정
+  ];
+
+  const salByLeadId = {
+    "L1": { salesAcceptedDate: new Date(2026, 7, 15) },   // 신규
+    "L2": { salesAcceptedDate: new Date(2026, 6, 1) },    // 변화 없음
+    "L3": { salesAcceptedDate: new Date(2026, 7, 1) }     // Leads_OPS에 없는 리드
+  };
+
+  const segmentValues = [["Events"], ["Contact"]];
+  const priorityValues = [["Priority 1"], [""]];
+  const priorityOverrideValues = [[""], [""]];
+
+  const result = computeSALDeltaLeads_(
+    leadIds, leadIdToRow, 2,
+    existingSalesAcceptedValues, salByLeadId,
+    segmentValues, priorityValues, priorityOverrideValues
+  );
+
+  const pass =
+    result.length === 1 &&                      // L2(변화 없음)/L3(OPS에 없음) 제외, L1만 남음
+    result[0].segment === "Events" &&
+    result[0].oldDate === null &&
+    result[0].newDate.getTime() === new Date(2026, 7, 15).getTime();
+
+  Logger.log("testComputeSALDeltaLeads: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(result));
 
 }
 

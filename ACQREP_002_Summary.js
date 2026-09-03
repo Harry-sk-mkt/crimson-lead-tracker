@@ -14,9 +14,29 @@
  * - rebuildLeadsMaster(), rebuildMTAMaster()
  *
  * Version
- * v1.4.0
+ * v1.5.1
  *
  * Change Log
+ * v1.5.1 (2026-09-03)
+ * - `testComputeSALDeltaMaps()` 버그 수정 — 실측(사용자 실행)으로 FAIL 확인,
+ *   원인은 실제 코드가 아니라 테스트 기대값: 7월도 FY27일 거라고 하드코딩
+ *   했으나 이 프로젝트 회계연도는 8월 시작이라 7월은 FY26이 맞음(`getFiscalYear()`
+ *   실제 반환값과 대조 없이 임의로 적어 넣은 실수). `getFiscalYear()` 호출로
+ *   교체해 정확한 값 사용하도록 수정 — `computeSALDeltaMaps_()` 자체는 애초에
+ *   정상 동작이었음(로그의 "26|JUL|Events" 키가 이미 올바른 값).
+ * v1.5.0 (2026-09-03)
+ * - **신규 `refreshACQSummarySALDelta_()`/`computeSALDeltaMaps_()`/
+ *   `mergeSALDeltaIntoACQSummaryRows_()`/`mergeSALDeltaIntoACQSummaryWeeklyRows_()`**
+ *   (`docs/OpenItems.md` #44, `docs/exec-plans/active/
+ *   2026-09-02-pipeline-refresh-time-redesign.md`) — SAL Sync 전용 경량 갱신.
+ *   "Sales Accepted Date"를 실제로 읽는 Engine이 ACQ_Summary 하나뿐임을 전체
+ *   Engine 파일 grep으로 확인(NewP1/Events/BOFU/Search/Content_Engine/Target_Engine
+ *   전부 미참조) — `refreshACQSummary_()`(Leads_OPS+MTA_Master+Deal Tracker 전체
+ *   스캔) 대신, SAL Sync가 이미 알고 있는 "이번에 바뀐 리드"만으로 SAL 카운트에
+ *   +1/-1 델타를 반영. Revenue-Only 변형과 달리 소스 자체가 작지 않아(Leads_OPS)
+ *   전체 재계산 대신 호출부(`MASTER_010_SALSync.js`)가 이미 읽은 old/new 값을
+ *   그대로 재사용 — 추가 스캔 전혀 없음(Business Segment/Lead Priority만 해당
+ *   리드 행에 한해 조회).
  * v1.4.0 (2026-09-03)
  * - **신규 "Weekly Engine" — `refreshACQSummaryWeekly_()`/`writeACQSummaryWeekly_()`/
  *   `readACQSummaryWeeklyMap_()`, `ACQ_Summary_Weekly` 캐시 시트(`docs/OpenItems.md`
@@ -550,6 +570,350 @@ function testMergeRevenueIntoACQSummaryRows(){
 function runRefreshACQSummary(){
 
   refreshACQSummary_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Refresh ACQ Summary — SAL Delta Only (SAL Sync 전용, 2026-09-03)
+ *
+ * WHY
+ * `docs/OpenItems.md` #44 — SAL Sync가 매번 `refreshACQSummary_()`(Leads_OPS
+ * 3만+행/MTA_Master 8만+행/Deal Tracker 전체 스캔)를 돌렸으나, "Sales Accepted
+ * Date"를 실제로 읽는 Engine은 ACQ_Summary뿐(전체 Engine 파일 grep으로 확인 —
+ * NewP1/Events/BOFU/Search/Content_Engine/Target_Engine 전부 미참조). SAL
+ * Sync는 이미 이번 배치에서 어떤 Lead ID의 값이 바뀌었는지(old/new 포함) 알고
+ * 있으므로, 그 델타만 기존 캐시에 반영 — 추가 스캔 없음.
+ *
+ * INPUT
+ * deltaLeads : Object[]  { segment, priority, priorityOverride, oldDate, newDate }
+ *              (`computeSALDeltaLeads_()`(MASTER_010_SALSync.js) 결과, oldDate는
+ *              변경 전 값 없으면 null, newDate는 항상 유효한 Date)
+ *
+ * TEST
+ * computeSALDeltaMaps_()/mergeSALDeltaIntoACQSummaryRows_()/
+ * mergeSALDeltaIntoACQSummaryWeeklyRows_() 각각의 test 함수 참고 — 이 함수
+ * 자체는 SpreadsheetApp IO라 별도 테스트 없음(기존 refreshACQSummaryRevenueOnly_()
+ * 와 동일 원칙).
+ * ==========================================================
+ */
+function refreshACQSummarySALDelta_(deltaLeads){
+
+  const start = new Date();
+
+  Logger.log(CONFIG.LOG.PREFIX + " ACQ Summary SAL-Delta Refresh Started");
+
+  if(deltaLeads.length === 0){
+    Logger.log(CONFIG.LOG.PREFIX + " ACQ Summary SAL-Delta Refresh : 변경된 리드 없음, 스킵.");
+    return;
+  }
+
+  const deltas = computeSALDeltaMaps_(deltaLeads);
+
+  const existingMap = readACQSummaryMap_();
+  const monthlyRows = mergeSALDeltaIntoACQSummaryRows_(existingMap, deltas.monthlyDelta);
+  writeACQSummary_(monthlyRows);
+
+  const existingWeeklyMap = readACQSummaryWeeklyMap_();
+  const weeklyRows = mergeSALDeltaIntoACQSummaryWeeklyRows_(
+    existingWeeklyMap, deltas.weeklyDelta, deltas.weeklyP1Delta
+  );
+  writeACQSummaryWeekly_(weeklyRows);
+
+  const seconds = ((new Date() - start) / 1000).toFixed(2);
+
+  Logger.log(
+    CONFIG.LOG.PREFIX + " ACQ Summary SAL-Delta Refresh Completed : " +
+    deltaLeads.length + " leads changed (" + seconds + "s)"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute SAL Delta Maps (순수 함수)
+ *
+ * WHY
+ * "바뀐 리드 목록"을 (FY|Month|Segment) 월 단위 델타 + (WeekStart|Segment)
+ * 주 단위 델타 + P1 전용 주 단위 델타로 변환하는 로직만 분리해 테스트 가능하게
+ * 함. `computeOPSAggregates_()`(ACQREP_001_Report.js)의 SAL 키 생성 규칙과
+ * 동일해야 기존 캐시와 어긋나지 않음 — 반드시 동일한 keyFor/weekKeyFor 로직
+ * 재사용(getFiscalYear/getFiscalMonthLabel/formatWeekKeyDate_/getMondayOfWeek_/
+ * isEffectiveP1_ 전부 기존 전역 함수 그대로 재사용, 새로 만들지 않음).
+ *
+ * ⚠️ 한계(허용된 근사): priority/priorityOverride는 "지금 시점" 값을 old/new
+ * 버킷 조정 양쪽에 동일하게 사용한다 — SAL Sync 자체는 Priority를 바꾸지
+ * 않으므로 대부분 정확하지만, 만약 이 리드의 Priority가 old SAL이 처음
+ * 집계된 시점 이후 다른 파이프라인(IC Funnel Sync)에 의해 바뀌었다면 그
+ * old P1-주간 버킷에서 정확히 원래 넣었던 자리가 아닌 "현재 Priority 기준"
+ * 자리에서 빼게 됨 — 극히 드문 케이스로 판단, 정밀 추적은 하지 않음(사용자
+ * 확인 필요 시 재검토).
+ *
+ * INPUT
+ * deltaLeads : Object[]  { segment, priority, priorityOverride, oldDate, newDate }
+ *
+ * OUTPUT
+ * { monthlyDelta, weeklyDelta, weeklyP1Delta }  각각 Object { key: ±count }
+ *
+ * TEST
+ * testComputeSALDeltaMaps() 참고
+ * ==========================================================
+ */
+function computeSALDeltaMaps_(deltaLeads){
+
+  const monthlyDelta = {};
+  const weeklyDelta = {};
+  const weeklyP1Delta = {};
+
+  function monthKeyFor(date, segment){
+    const fy = Number(getFiscalYear(date).replace("FY", ""));
+    const month = getFiscalMonthLabel(date);
+    return fy + "|" + month + "|" + (segment || "Other");
+  }
+
+  function weekKeyFor(date, segment){
+    return formatWeekKeyDate_(getMondayOfWeek_(date)) + "|" + (segment || "Other");
+  }
+
+  function bump(map, key, amount){
+    map[key] = (map[key] || 0) + amount;
+  }
+
+  deltaLeads.forEach(function(lead){
+
+    const segment = lead.segment || "Other";
+    const isP1 = isEffectiveP1_(lead.priority, lead.priorityOverride);
+
+    if(lead.oldDate instanceof Date && !isNaN(lead.oldDate.getTime())){
+
+      bump(monthlyDelta, monthKeyFor(lead.oldDate, segment), -1);
+      bump(weeklyDelta, weekKeyFor(lead.oldDate, segment), -1);
+
+      if(isP1){
+        bump(weeklyP1Delta, weekKeyFor(lead.oldDate, segment), -1);
+      }
+
+    }
+
+    if(lead.newDate instanceof Date && !isNaN(lead.newDate.getTime())){
+
+      bump(monthlyDelta, monthKeyFor(lead.newDate, segment), 1);
+      bump(weeklyDelta, weekKeyFor(lead.newDate, segment), 1);
+
+      if(isP1){
+        bump(weeklyP1Delta, weekKeyFor(lead.newDate, segment), 1);
+      }
+
+    }
+
+  });
+
+  return {
+    monthlyDelta: monthlyDelta,
+    weeklyDelta: weeklyDelta,
+    weeklyP1Delta: weeklyP1Delta
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeSALDeltaMaps_()
+ * ==========================================================
+ */
+function testComputeSALDeltaMaps(){
+
+  const deltaLeads = [
+    // 신규 SAL (old 없음) — 2026-08-15 (FY27 Aug)
+    { segment: "Events", priority: "Priority 1", priorityOverride: "", oldDate: null, newDate: new Date(2026, 7, 15) },
+    // 기존 SAL이 다른 달로 이동 — 2026-07-01(FY27 Jul) → 2026-08-01(FY27 Aug)
+    { segment: "Events", priority: "", priorityOverride: "", oldDate: new Date(2026, 6, 1), newDate: new Date(2026, 7, 1) }
+  ];
+
+  const result = computeSALDeltaMaps_(deltaLeads);
+
+  const augKey =
+    Number(getFiscalYear(new Date(2026, 7, 15)).replace("FY", "")) + "|" +
+    getFiscalMonthLabel(new Date(2026, 7, 15)) + "|Events";
+
+  const julKey =
+    Number(getFiscalYear(new Date(2026, 6, 1)).replace("FY", "")) + "|" +
+    getFiscalMonthLabel(new Date(2026, 6, 1)) + "|Events";
+
+  const pass =
+    result.monthlyDelta[augKey] === 2 &&      // 신규 +1, 이동 +1
+    result.monthlyDelta[julKey] === -1 &&     // 이동으로 -1
+    result.weeklyP1Delta[
+      formatWeekKeyDate_(getMondayOfWeek_(new Date(2026, 7, 15))) + "|Events"
+    ] === 1;                                  // 첫 리드만 P1
+
+  Logger.log(
+    "testComputeSALDeltaMaps: " + (pass ? "PASS" : "FAIL") +
+    " monthlyDelta=" + JSON.stringify(result.monthlyDelta)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge SAL Delta Into ACQ Summary Rows (순수 함수)
+ *
+ * `mergeRevenueIntoACQSummaryRows_()`와 동일 구조 — allLeads/allP1/newLeads/
+ * newP1/icBooked/icComplete/revenue는 기존 캐시값 그대로 보존, sal만 델타
+ * 반영. 0 밑으로 내려가지 않도록 방어(음수 델타 누적 버그가 있어도 화면에
+ * 음수가 뜨는 사고는 방지).
+ *
+ * TEST
+ * testMergeSALDeltaIntoACQSummaryRows() 참고
+ * ==========================================================
+ */
+function mergeSALDeltaIntoACQSummaryRows_(existingMap, monthlyDelta){
+
+  const allKeys = {};
+
+  Object.keys(existingMap).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(monthlyDelta).forEach(function(key){ allKeys[key] = true; });
+
+  return Object.keys(allKeys).map(function(key){
+
+    const parts = key.split("|");
+    const fy = parts[0];
+    const month = parts[1];
+    const segment = parts[2];
+
+    const existing = existingMap[key] || {
+      allLeads: 0, allP1: 0, newLeads: 0, newP1: 0,
+      sal: 0, icBooked: 0, icComplete: 0, revenue: 0
+    };
+
+    const newSal = Math.max(0, (existing.sal || 0) + (monthlyDelta[key] || 0));
+
+    return [
+      "FY" + String(fy).slice(-2),
+      month,
+      segment,
+      existing.allLeads,
+      existing.allP1,
+      existing.newLeads,
+      existing.newP1,
+      newSal,
+      existing.icBooked,
+      existing.icComplete,
+      existing.revenue || 0
+    ];
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeSALDeltaIntoACQSummaryRows_()
+ * ==========================================================
+ */
+function testMergeSALDeltaIntoACQSummaryRows(){
+
+  const existingMap = {
+    "26|Jul|Contact": { allLeads: 100, allP1: 50, newLeads: 20, newP1: 10, sal: 5, icBooked: 3, icComplete: 1, revenue: 5000 }
+  };
+
+  const monthlyDelta = {
+    "26|Jul|Contact": 2,       // 5 → 7
+    "27|Aug|Events": 1         // 신규 키, 나머지 0
+  };
+
+  const rows = mergeSALDeltaIntoACQSummaryRows_(existingMap, monthlyDelta);
+
+  const byKey = {};
+  rows.forEach(function(row){
+    byKey[Number(row[0].replace("FY", "")) + "|" + row[1] + "|" + row[2]] = row;
+  });
+
+  const pass =
+    byKey["26|Jul|Contact"][7] === 7 &&               // sal 5+2
+    byKey["26|Jul|Contact"][3] === 100 &&             // allLeads 보존
+    byKey["26|Jul|Contact"][10] === 5000 &&           // revenue 보존
+    byKey["27|Aug|Events"][7] === 1 &&                // 신규 키
+    byKey["27|Aug|Events"][3] === 0;                  // 신규 키 나머지 0
+
+  Logger.log("testMergeSALDeltaIntoACQSummaryRows: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(rows));
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge SAL Delta Into ACQ Summary Weekly Rows (순수 함수)
+ * ==========================================================
+ */
+function mergeSALDeltaIntoACQSummaryWeeklyRows_(existingMap, weeklyDelta, weeklyP1Delta){
+
+  const allKeys = {};
+
+  Object.keys(existingMap).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(weeklyDelta).forEach(function(key){ allKeys[key] = true; });
+  Object.keys(weeklyP1Delta).forEach(function(key){ allKeys[key] = true; });
+
+  return Object.keys(allKeys).map(function(key){
+
+    const sepIndex = key.indexOf("|");
+    const weekStart = key.slice(0, sepIndex);
+    const segment = key.slice(sepIndex + 1);
+
+    const existing = existingMap[key] || {
+      allLeads: 0, newLeads: 0, newP1: 0, sal: 0, salP1: 0
+    };
+
+    const newSal = Math.max(0, (existing.sal || 0) + (weeklyDelta[key] || 0));
+    const newSalP1 = Math.max(0, (existing.salP1 || 0) + (weeklyP1Delta[key] || 0));
+
+    return [
+      weekStart,
+      segment,
+      existing.allLeads,
+      existing.newLeads,
+      existing.newP1,
+      newSal,
+      newSalP1
+    ];
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergeSALDeltaIntoACQSummaryWeeklyRows_()
+ * ==========================================================
+ */
+function testMergeSALDeltaIntoACQSummaryWeeklyRows(){
+
+  const existingMap = {
+    "2026-07-27|Events": { allLeads: 10, newLeads: 4, newP1: 2, sal: 1, salP1: 0 }
+  };
+
+  const weeklyDelta = { "2026-07-27|Events": 1, "2026-08-03|Contact": 1 };
+  const weeklyP1Delta = { "2026-07-27|Events": 1 };
+
+  const rows = mergeSALDeltaIntoACQSummaryWeeklyRows_(existingMap, weeklyDelta, weeklyP1Delta);
+
+  const byKey = {};
+  rows.forEach(function(row){ byKey[row[0] + "|" + row[1]] = row; });
+
+  const pass =
+    byKey["2026-07-27|Events"][5] === 2 &&    // sal 1+1
+    byKey["2026-07-27|Events"][6] === 1 &&    // salP1 0+1
+    byKey["2026-07-27|Events"][2] === 10 &&   // allLeads 보존
+    byKey["2026-08-03|Contact"][5] === 1 &&   // 신규 키
+    byKey["2026-08-03|Contact"][2] === 0;     // 신규 키 나머지 0
+
+  Logger.log("testMergeSALDeltaIntoACQSummaryWeeklyRows: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(rows));
 
 }
 

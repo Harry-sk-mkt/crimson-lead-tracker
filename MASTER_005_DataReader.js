@@ -10,9 +10,20 @@
  * 10 Master Build
  *
  * Version
- * v2.1.1
+ * v2.2.0
  *
  * Change Log
+ * v2.2.0 (2026-09-03)
+ * - **Master_DB Raw 이관 2단계(사용자 확정, `docs/exec-plans/active/
+ *   2026-09-03-master-db-raw-migration.md`)**: `readRawSheet()`/
+ *   `getRawSheetDataRowCount_()`/`readRawSheetFrom_()`에 5번째(또는 3번째)
+ *   optional 파라미터 `targetSpreadsheet` 추가(생략 시 기존과 동일하게
+ *   `SpreadsheetApp.getActiveSpreadsheet()` 사용 — 기존 호출부 전부 무변경).
+ *   `openLeadsRawExternalSpreadsheet_()`/`openMTARawExternalSpreadsheet_()`
+ *   신규(`openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)와 동일 패턴,
+ *   SPREADSHEET_ID 비어있으면 명시 에러) — `readLeadRaw()`/`readMTARaw()`가
+ *   이제 각자의 external opener로 연 Leads_Raw/MTA_Raw 전용 스프레드시트를
+ *   읽는다(마이그레이션 완료·검증됨, 위 exec-plan 참고).
  * v2.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `11_DataReader.js` → 신규 `MASTER_005_DataReader.js`, 코드 내용 변경 없음.
  * v2.1.0 (2026-08-05)
@@ -35,13 +46,61 @@
 
 /**
  * ==========================================================
- * Read Lead Raw
+ * Open Leads Raw External Spreadsheet (IO 래퍼)
+ *
+ * WHY
+ * `openSALExternalSpreadsheet_()`(MASTER_010_SALSync.js)와 동일 원칙 —
+ * CONFIG.RAW_EXTERNAL.LEADS.SPREADSHEET_ID가 비어있으면 추측으로 진행하지
+ * 않고 명시적 에러로 실패한다("No Assumptions" 원칙).
+ * ==========================================================
+ */
+function openLeadsRawExternalSpreadsheet_(){
+
+  const spreadsheetId = CONFIG.RAW_EXTERNAL.LEADS.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "CONFIG.RAW_EXTERNAL.LEADS.SPREADSHEET_ID가 비어있습니다 — 외부 " +
+      "스프레드시트 ID를 CORE_001_Config.js에 채워넣어야 합니다."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
+
+
+/**
+ * ==========================================================
+ * Open MTA Raw External Spreadsheet (IO 래퍼)
+ * ==========================================================
+ */
+function openMTARawExternalSpreadsheet_(){
+
+  const spreadsheetId = CONFIG.RAW_EXTERNAL.MTA.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "CONFIG.RAW_EXTERNAL.MTA.SPREADSHEET_ID가 비어있습니다 — 외부 " +
+      "스프레드시트 ID를 CORE_001_Config.js에 채워넣어야 합니다."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Lead Raw (전용 외부 스프레드시트, 2026-09-03부터)
  * ==========================================================
  */
 function readLeadRaw(){
 
   return readRawSheet(
-    CONFIG.SHEETS.LEADS_RAW
+    CONFIG.SHEETS.LEADS_RAW,
+    openLeadsRawExternalSpreadsheet_()
   );
 
 }
@@ -49,13 +108,14 @@ function readLeadRaw(){
 
 /**
  * ==========================================================
- * Read MTA Raw
+ * Read MTA Raw (전용 외부 스프레드시트, 2026-09-03부터)
  * ==========================================================
  */
 function readMTARaw(){
 
   return readRawSheet(
-    CONFIG.SHEETS.MTA_RAW
+    CONFIG.SHEETS.MTA_RAW,
+    openMTARawExternalSpreadsheet_()
   );
 
 }
@@ -67,15 +127,19 @@ function readMTARaw(){
  * ==========================================================
  *
  * @param {string} sheetName
+ * @param {Spreadsheet} [targetSpreadsheet]  생략 시 CONFIG.SPREADSHEET(메인
+ *   스프레드시트) — 외부 스프레드시트에서 읽어야 할 때만 명시(Leads_Raw/
+ *   MTA_Raw 등, 2026-09-03 추가)
  * @returns {Object[]}
  *
  */
 function readRawSheet(
-  sheetName
+  sheetName,
+  targetSpreadsheet
 ){
 
   const ss =
-    SpreadsheetApp.getActiveSpreadsheet();
+    targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
 
   const sheet =
     ss.getSheetByName(
@@ -166,9 +230,9 @@ function readRawSheet(
  * 않는 메타데이터 호출이라 매우 빠름 — 이 값만으로 총 행 수를 구한다.
  * ==========================================================
  */
-function getRawSheetDataRowCount_(sheetName){
+function getRawSheetDataRowCount_(sheetName, targetSpreadsheet){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
 
   if(!sheet){
@@ -266,9 +330,9 @@ function testComputeRawReadRange(){
  * Object[]  (헤더 매핑된 레코드 배열, 읽을 게 없으면 빈 배열)
  * ==========================================================
  */
-function readRawSheetFrom_(sheetName, startIndex){
+function readRawSheetFrom_(sheetName, startIndex, targetSpreadsheet){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = targetSpreadsheet || SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
 
   if(!sheet){

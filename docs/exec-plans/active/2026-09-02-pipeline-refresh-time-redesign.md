@@ -4,9 +4,24 @@
 #40/#41/#42와 직결)
 **시작일**: 2026-09-02
 **상태**: 부분 구현 완료(2026-09-03) — #41 계열(BOFU/Content 이중조회, FY_REP 반복오픈,
-S&M_REP 전체 재스캔) 전부 구현·실측 검증 완료. **남은 것(Engine 독립 트리거 분리 여부,
-Target_REP/FY_REP 증분화)은 여전히 설계 미확정 — 사용자가 확정 후 알려주면 진행**
-(2026-09-02 원칙 유지). 그 전까지 이 파일의 남은 항목을 임의로 구현하지 말 것.
+S&M_REP 전체 재스캔) 전부 구현·실측 검증 완료. **SAL/Revenue Engine refresh 낭비 제거 +
+Revenue 독립 2시간 트리거도 구현 완료(2026-09-03), 유닛 테스트 4개 전부 PASS, 실사용
+검증만 남음(아래 "다음 세션 시작점" 참고)**. Engine 독립 트리거 분리 자체(Axis A,
+Leads/MTA 전용)와 Target_REP/FY_REP 증분화는 여전히 설계 미확정 — 사용자가 확정 후
+알려주면 진행(2026-09-02 원칙 유지). 그 전까지 이 두 항목은 임의로 구현하지 말 것.
+
+**다음 세션 시작점(2026-09-03 세션 종료 시점)**:
+1. Revenue 2시간 트리거 실사용 확인 — `runInstallRevenuePeriodicRefreshTrigger()` 실행
+   후 "2026-09-03 15:19 KST" 다음 실행 예약됨. Executions 목록에서 `periodicRefreshRevenue_`가
+   그 시각에 자동으로 뜨는지, PIPELINE_LOCK 충돌 없이(또는 충돌 시 대기열 처리가 정상인지)
+   확인.
+2. 다음 SAL Import 때 로그에 기존 6개 Engine refresh 대신 "ACQ Summary SAL-Delta
+   Refresh Completed" 한 줄만 뜨는지, ACQ_Summary/ACQ_Summary_Weekly의 SAL 카운트가
+   실제로 정확히 반영되는지(예: S&M_REP 등에서 육안 대조) 확인.
+3. 위 둘 다 검증되면 이 exec-plan을 `docs/exec-plans/completed/`로 이동(`git mv`),
+   Outcomes & Retrospective 작성.
+4. (별개, 사용자가 새로 착수 원할 때만) Axis A(Engine 독립 트리거 분리)/Target_REP·
+   FY_REP 증분화 — 여전히 설계 미확정, 임의로 시작하지 말 것.
 
 ## Goal
 
@@ -131,6 +146,72 @@ FY_REP/S&M_REP이 과거 확정 구간을 매번 재계산하지 않고 증분�
   확정. "P1 리스트 기반 자동 flagging"(사용자 제안)과 "SAL Sync가 무관한 Engine 6종까지
   전부 재실행하는 낭비"(코드로 확인된 별개 문제)는 각각 `docs/OpenItems.md` #43/#44로
   분리 기록, 이번 구현 범위 밖.
+
+- **2026-09-03 (Master_DB Raw 이관 세션 중 이어서 진행) — SAL/Revenue Engine 재실행 낭비,
+  코드로 정밀 검증 및 설계 확정**: `docs/OpenItems.md` #44(SAL이 무관한 Engine 6종 전부
+  재실행)를 실제로 어느 Engine이 어느 OPS 필드를 읽는지 전수 대조해 정밀화:
+  - **Sales Accepted Date(SAL 필드)를 읽는 Engine은 ACQ_Summary(`ACQREP_002_Summary.js`)
+    단 하나뿐** — NewP1_Engine/Events/BOFU/Search/Content_Engine/Target_Engine 전부
+    "Sales Accepted Date" 문자열 참조 자체가 코드에 없음(전체 파일 grep으로 확인). SAL
+    Sync가 이 5+1개를 매번 다시 도는 건 전부 순수 낭비.
+  - **IC Funnel 필드(IC Booked/Completed Date)는 ACQ/NewP1/Events/BOFU/Search/Content
+    전부가 읽음** — IC Funnel Sync의 현재 "6종 전부 재실행"은 낭비가 아니라 실제로
+    필요함(수정 대상 아님).
+  - **MTA(#Touches)는 어느 Engine도 직접 안 읽음** — 대신 여러 Engine이 MTA_Master
+    자체(캠페인 매칭용)를 별도로 스캔하므로 MTA import는 여전히 폭넓은 refresh가 필요.
+  - **Revenue Sync(`MASTER_011_RevenueSync.js`)가 이미 존재하는 경량 버전
+    (`refreshACQSummaryRevenueOnly_()`/`refreshNewP1EngineRevenueOnly_()`, Leads_OPS/
+    MTA_Master 스캔 없이 Deal Tracker만 병합)을 안 쓰고 무거운 전체 버전을 그대로 호출
+    중이었음 — 게다가 Events/BOFU/Content Engine까지 매번 도는데, 이 셋은 Deal Tracker를
+    직접 읽어 Leads_OPS Revenue와 무관(2026-07-28 2트랙 전환 이후)해서 Revenue Sync가
+    뭘 해도 결과가 안 바뀜. 실측(2026-09-03 아침 로그): Revenue tail 485초 중 상당수가
+    이 불필요한 3개 Engine(Events 75s+BOFU 59s+Content 101s ≈ 235s)에서 낭비.
+  - **SAL Sync의 ACQ_Summary 갱신도 "전체 재계산" 대신 "델타(변경된 리드만) 병합"으로
+    가능함(사용자 지적)** — SAL Sync는 이미 이번 배치에서 어떤 Lead ID의 Sales Accepted
+    Date가 바뀌었는지(old/new 값 포함) 알고 있음(`computeMTASyncColumnUpdates_()` 호출
+    직전 시점의 `existingColumnValues`/`salByLeadId`) — Leads_OPS/MTA_Master 전체를
+    다시 스캔할 필요 없이, 바뀐 리드들의 Business Segment/Lead Priority만 추가로
+    조회해서 ACQ_Summary/ACQ_Summary_Weekly의 SAL 카운트에 +1/-1 델타만 반영하면 됨.
+    "일정 범위만 재계산"(range 필터) 대신 "아예 안 읽고 이미 아는 변경분만 반영"이라
+    weekly/monthly 캐시 도입(41번 항목)이 풀었던 문제(리포트 레이어의 재스캔)와는 다른
+    한 단계 더 안쪽 문제(캐시 자체의 갱신 비용)를 푸는 것.
+  - **Revenue 트리거 자체도 재설계 — 다른 파이프라인에 얹혀가는 방식 대신 독립 시간
+    트리거로(사용자 확정)**: Deal Tracker는 Leads/MTA/IC Funnel/SAL Import와 무관하게
+    바뀌므로 지금 방식(아무 tail이나 끝날 때 대기열 편입)도 진짜 변경 감지가 아님 —
+    `periodicRefreshAllReports_()`(하루 2번 KST 10/22시, self-rescheduling 절대시각
+    1회성 트리거 체인)와 동일 패턴으로 2시간마다 독립 실행. 단, `periodicRefreshAllReports_()`
+    는 Report 시트만 재작성해 `PIPELINE_LOCK`을 아예 확인하지 않는 반면, Revenue Sync는
+    Leads_OPS 셀 자체를 씀 — Leads/MTA/IC Funnel/SAL과 동시 쓰기 경합 위험이 있어
+    **PIPELINE_LOCK은 계속 사용**(획득 실패 시 대기열 등록 후 다음 2시간 주기에 재시도).
+    `docs/OpenItems.md` #47에 있던 아이디어를 이 설계로 구체화.
+  - **구현 완료(2026-09-03)**: (1) `MASTER_010_SALSync.js`(v1.1.0) — 6종 refresh를
+    `computeSALDeltaLeads_()`(신규 순수 함수) + `refreshACQSummarySALDelta_()`
+    (ACQREP_002_Summary.js v1.5.0, 신규)로 교체, 추가 스캔 없이 이번에 바뀐
+    리드만 반영. (2) `MASTER_011_RevenueSync.js`(v1.1.0) — `refreshACQSummary_()`/
+    `refreshNewP1Engine_()` → 기존 Revenue-Only 변형으로 교체, Events/BOFU/
+    Content Engine 호출 제거(Search만 유지, `refreshTargetActuals_()`도 Revenue
+    미참조 확인돼 제거). (3) `MASTER_002_PipelineAsync.js`(v1.27.0) —
+    `scheduleNextRevenuePeriodicRefresh_()`/`periodicRefreshRevenue_()`(2시간
+    독립 트리거, `PIPELINE_LOCK` 존중) 신설, Leads/MTA/IC Funnel/SAL tail 끝의
+    `enqueuePendingPipelineType_(...REVENUE)` 호출 6곳 전부 제거. `CORE_001_
+    Config.js`(v1.59.0)에 `PIPELINE.REVENUE_PERIODIC_REFRESH_INTERVAL_MS`(2시간)
+    신규. Pre-commit 체크(naming/version-header/duplicate-declaration/syntax)
+    전부 통과.
+  - **✅ Pure-function 테스트 4개 전부 PASS 확인(사용자 실행, 2026-09-03)** —
+    `testMergeSALDeltaIntoACQSummaryRows`/`testMergeSALDeltaIntoACQSummaryWeeklyRows`는
+    처음부터 PASS. `testComputeSALDeltaMaps`는 최초 FAIL — 원인은 실제 코드가
+    아니라 테스트 기대값 실수(7월도 FY27일 거라 하드코딩했으나 이 프로젝트
+    회계연도가 8월 시작이라 7월은 FY26이 맞음, `getFiscalYear()` 실측 대조 없이
+    적어 넣은 값) — `getFiscalYear()` 호출로 교체해 수정, 재실행으로 PASS 확인
+    (ACQREP_002_Summary.js v1.5.1). `computeSALDeltaMaps_()` 자체는 애초에
+    정상 동작이었음.
+  - **✅ Revenue 2시간 독립 트리거 설치 확인** — `runInstallRevenuePeriodicRefreshTrigger()`
+    실행 후 "Revenue 주기적 Refresh 다음 실행 예약: 2026-09-03 15:19 KST" 로그 확인.
+  - **실사용 검증 남은 것**: (a) 15:19 KST에 `periodicRefreshRevenue_`가 Executions
+    목록에 자동으로 뜨는지, PIPELINE_LOCK 충돌 없이(또는 충돌 시 대기열 처리가
+    정상인지) 확인. (b) 다음 SAL Import 때 로그에 기존 6개 Engine refresh 대신
+    "ACQ Summary SAL-Delta Refresh Completed" 한 줄만 뜨는지, ACQ_Summary/Weekly
+    시트의 SAL 카운트가 실제로 정확히 반영되는지(예: S&M_REP 등에서 육안 대조).
 
 ## Outcomes & Retrospective
 
