@@ -1,5 +1,14 @@
 # Changelog — 2026-09-03
 
+## 파이프라인 성능 및 구조 비효율 개선 계획 수립 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)
+
+Master 시트 전체 정렬 연산 제거, RawDeduplicator 동적 윈도우 벤치마크 적용, ICFunnel/SAL Sync Direct Update 전환, UtmProgramDictionary 증분 등록, Leads_OPS 증분 업데이트 및 대용량 청크 도입 등 5대 비효율 개선 항목을 수립하여 프로젝트 저장소 내부 exec-plan 문서로 등록하고 `Roadmap.md`에 연결.
+
+## 신규 TODO 항목 2건 추가 (`docs/OpenItems.md` #48, #49)
+
+1. **#48**: 외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅 알림 트리거 신설.
+2. **#49**: Naver Search API 누적 캐시 시트(`Naver_Search_Campaign_Stats_Cache` 및 `Ad_Spend_Cache`) 외부 Master_DB 스프레드시트로 이관.
+
 ## Session-Start Git Sync Check 미실행 사고 재발 + 재발 방지 hook 도입
 
 전날(2026-09-02) 세션에서 이미 한 번 명문화한 "세션 시작 = 트리거" 원칙을 이번 세션에서도
