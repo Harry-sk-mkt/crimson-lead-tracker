@@ -201,7 +201,7 @@ P1 Target(구 코호트 딜의 이번 FY 전환분)은 이 확장에서 제외 �
 
 ## 진행 중 (exec-plans/active/에 대응 문서 있음)
 
-(없음)
+- **파이프라인 성능 및 구조 비효율 개선**: `docs/exec-plans/active/2026-09-03-performance-optimization.md` 참고 (Master 정렬 제거, RawDeduplicator 동적 윈도우, ICFunnel/SAL Direct Update, UtmProgramDictionary 증분 등록 등 5대 개선 항목)
 
 ## 보류/재검토 대기
 
