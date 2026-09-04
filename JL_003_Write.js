@@ -20,9 +20,13 @@
  * (filterJLMonthsUpToToday_() 참고).
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-04)
+ * - `computeJLMetricsFromLiveData_()`의 Ad_Spend_Cache 읽기를
+ *   `openAdSpendCacheExternalSpreadsheet_()`(AD_004_SpendCache.js) 경유로
+ *   전환 — `docs/OpenItems.md` #49(Ad_Spend_Cache 외부 스프레드시트 이관).
  * v1.0.0 (2026-09-01)
  * - 최초 구현.
  * ==========================================================
@@ -135,7 +139,7 @@ function computeJLMetricsFromLiveData_(externalSheet){
 
   const summaryMap = readACQSummaryMap_();
 
-  const spendCacheSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ACQ.AD_SPEND_CACHE_SHEET);
+  const spendCacheSheet = openAdSpendCacheExternalSpreadsheet_().getSheetByName(CONFIG.ACQ.AD_SPEND_CACHE_SHEET);
   const spendCacheRows = spendCacheSheet
     ? spendCacheSheet.getDataRange().getValues().slice(1)
     : [];

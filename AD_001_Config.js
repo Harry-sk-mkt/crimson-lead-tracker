@@ -21,9 +21,14 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.23.0
+ * v1.24.0
  *
  * Change Log
+ * v1.24.0 (2026-09-04)
+ * - **`NAVER_SEARCH_CAMPAIGN_STATS.EXTERNAL` 신규**(`docs/OpenItems.md` #49) —
+ *   `Naver_Search_Campaign_Stats_Cache`를 Master_DB 폴더 기존 캠페인 시트로
+ *   이관하기 위한 외부 스프레드시트 ID(`CORE_001_Config.js`
+ *   `CONFIG.ACQ.AD_SPEND_CACHE_EXTERNAL`과 동일 파일).
  * v1.23.0 (2026-08-25)
  * - **`GOOGLE_SEARCH` 신규 — 4번째 플랫폼(Google Search) 착수, Search_OPS
  *   전용 범위로 한정(사용자 확정, 2026-08-25)**. `RAW_SHEET["Google Search"]`
@@ -391,7 +396,15 @@ const AD = {
 
     LAST_FETCHED_THROUGH_PROPERTY_KEY: "NAVER_SEARCHAD_CAMPAIGN_STATS_LAST_FETCHED_THROUGH",
 
-    MAX_QUERY_RANGE_DAYS: 90
+    MAX_QUERY_RANGE_DAYS: 90,
+
+    // 2026-09-04 — 기존 캠페인 시트(Master_DB 폴더, Meta_Raw/NaverSA_Raw가 있는
+    // 파일)에 탭만 추가해 재사용(CORE_001_Config.js CONFIG.ACQ.AD_SPEND_CACHE_EXTERNAL과
+    // 동일 파일, 사용자 확정 — 새 파일 안 만듦, 숨김 탭으로 유지).
+    EXTERNAL: {
+      // https://docs.google.com/spreadsheets/d/1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY
+      SPREADSHEET_ID: "1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY"
+    }
 
   },
 

@@ -9,9 +9,17 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.62.0
+ * v1.63.0
  *
  * Change Log
+ * v1.63.0 (2026-09-04)
+ * - **`ACQ.AD_SPEND_CACHE_EXTERNAL` 신규**(`docs/OpenItems.md` #49) —
+ *   `Ad_Spend_Cache`를 Master_DB 폴더 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가
+ *   있는 파일, 사용자 확정)로 이관하기 위한 외부 스프레드시트 ID. 기존
+ *   `AD_SPEND_CACHE_SHEET` 주석의 stale한 "Simple Trigger라 openById() 불가"
+ *   설명도 함께 정정(현재는 installable onEdit/시간 트리거로 Full Authorization
+ *   컨텍스트임을 확인, `docs/exec-plans/active/2026-09-04-ad-spend-cache-external-migration.md`
+ *   참고).
  * v1.62.0 (2026-09-04)
  * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #4)**:
  *   `PROPERTIES.UTM_PROGRAM_DICT_LEADS_LAST_ROW`/`_MTA_LAST_ROW`,
@@ -981,15 +989,22 @@ const CONFIG = {
     CPNP1_COLUMN: 24,  // X열
 
     // Ad Spend 캐시 시트(2026-07-30 Meta 전용으로 신규, 2026-07-31 플랫폼 합산
-    // 캐시로 확장·개명 — 같은 메인 스프레드시트 안) — ACQ_REP의 Generate
-    // 체크박스가 onEdit() Simple Trigger로 실행되는데, Simple Trigger는
-    // 제한된 권한이라 캠페인 지출 시트를 openById()로 여는 걸 못 함(실측 확인:
-    // "Specified permissions are not sufficient to call SpreadsheetApp.openById").
-    // ACQ_Summary와 동일한 캐시 패턴 — AD_004_SpendCache.js의 runRefreshAdSpendCache()가
-    // 수동 실행 시 Meta/Naver Search 각 플랫폼 요약을 합산(환율 변환 포함)해 이 캐시
-    // 시트(같은 스프레드시트)에 미리 저장해두고, generateACQReport_()는 이 캐시만
-    // 읽는다(외부 열기/API 호출 없음, Simple Trigger 안전).
+    // 캐시로 확장·개명, 2026-09-04 외부 스프레드시트로 이관) — ACQ_Summary와
+    // 동일한 캐시 패턴. AD_004_SpendCache.js의 runRefreshAdSpendCache()가
+    // 수동 실행 시 Meta/Naver Search/Kakao 각 플랫폼 요약을 합산(환율 변환
+    // 포함)해 이 캐시 시트에 미리 저장해두고, generateACQReport_()는 이 캐시만
+    // 읽는다. 읽기/쓰기 모두 installable onEdit 트리거 또는 시간 기반 트리거
+    // (둘 다 Full Authorization) 컨텍스트에서만 호출되므로 openById() 사용 가능
+    // (docs/exec-plans/active/2026-09-04-ad-spend-cache-external-migration.md 참고).
     AD_SPEND_CACHE_SHEET: "Ad_Spend_Cache",
+
+    // 2026-09-04 — 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가 있는 Master_DB 폴더
+    // 외부 스프레드시트, Phase 1 캠페인 지출 Raw 이관 참고용으로 미리 만들어둔
+    // 파일)에 탭만 추가해 재사용(사용자 확정 — 새 파일 안 만듦, 숨김 탭으로 유지).
+    AD_SPEND_CACHE_EXTERNAL: {
+      // https://docs.google.com/spreadsheets/d/1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY
+      SPREADSHEET_ID: "1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY"
+    },
 
     SEGMENTS: [
       "Seminar",

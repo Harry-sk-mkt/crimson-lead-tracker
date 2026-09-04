@@ -44,9 +44,16 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.15.0
+ * v2.16.0
  *
  * Change Log
+ * v2.16.0 (2026-09-04)
+ * - **`Naver_Search_Campaign_Stats_Cache` 외부 스프레드시트 이관**
+ *   (`docs/OpenItems.md` #49) — `openNaverSearchCampaignStatsCacheExternalSpreadsheet_()`
+ *   신규(`MASTER_010_SALSync.js`의 `openSALExternalSpreadsheet_()`와 동일 패턴),
+ *   `readNaverSearchAdCampaignStatsCache_()`/`writeNaverSearchAdCampaignStatsCache_()`/
+ *   `runShowNaverSearchAdCampaignStatsCache()`가 `getActiveSpreadsheet()` 대신
+ *   이 opener 경유. 헤더/로직/호출부는 전혀 무변경 — I/O 대상만 전환.
  * v2.15.0 (2026-08-19)
  * - Target_REP 주별 CPNP1 정확도 개선(AD_002_Meta.js v1.7.0과 동일 배경) —
  *   `/stats`가 임의 기간을 그대로 받는다는 점(`fetchNaverSearchAdStats_()`가
@@ -1601,9 +1608,36 @@ function fetchNaverSearchAdImpressionsClicksStats_(ids, since, until){
  */
 const NAVER_CAMPAIGN_STATS_CACHE_HEADERS = ["Campaign Name", "Impressions", "Link Clicks", "Spent (KRW)", "Results"];
 
+
+/**
+ * ==========================================================
+ * Open Naver Search Campaign Stats Cache External Spreadsheet (IO 래퍼)
+ *
+ * WHY
+ * CONFIG.AD.NAVER_SEARCH_CAMPAIGN_STATS.EXTERNAL.SPREADSHEET_ID가 비어있으면
+ * 추측으로 진행하지 않고 명시적 에러로 실패한다("No Assumptions" 원칙,
+ * MASTER_010_SALSync.js의 openSALExternalSpreadsheet_()와 동일 패턴).
+ * ==========================================================
+ */
+function openNaverSearchCampaignStatsCacheExternalSpreadsheet_(){
+
+  const spreadsheetId = AD.NAVER_SEARCH_CAMPAIGN_STATS.EXTERNAL.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "AD.NAVER_SEARCH_CAMPAIGN_STATS.EXTERNAL.SPREADSHEET_ID가 비어있습니다 — " +
+      "AD_001_Config.js를 먼저 확인하세요."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
+
+
 function readNaverSearchAdCampaignStatsCache_(){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = openNaverSearchCampaignStatsCacheExternalSpreadsheet_();
   const sheet = ss.getSheetByName(AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET);
 
   const map = {};
@@ -1634,7 +1668,7 @@ function readNaverSearchAdCampaignStatsCache_(){
 
 function writeNaverSearchAdCampaignStatsCache_(totals){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = openNaverSearchCampaignStatsCacheExternalSpreadsheet_();
   let sheet = ss.getSheetByName(AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET);
 
   if(!sheet){
@@ -2119,7 +2153,7 @@ function runBackfillNaverSearchCampaignSpendHistory(){
  */
 function runShowNaverSearchAdCampaignStatsCache(){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = openNaverSearchCampaignStatsCacheExternalSpreadsheet_();
   const sheetName = AD.NAVER_SEARCH_CAMPAIGN_STATS.CACHE_SHEET;
   const sheet = ss.getSheetByName(sheetName);
 

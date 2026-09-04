@@ -6,13 +6,14 @@
  * Responsibility
  * Meta(AD_002_Meta.js, NZD 원본)/Naver Search(AD_003_NaverSearch.js, KRW
  * 원본)/Kakao Channel(AD_005_KakaoChannel.js, KRW 원본)의 캠페인 지출 요약을
- * 합산해 `Ad_Spend_Cache` 시트(메인 스프레드시트 안)에 저장한다.
- * `30_ACQReport.js`의 `generateACQReport_()`는 이 캐시만 읽는다(외부
- * 스프레드시트/API 호출 없음 — ACQ_REP Generate 체크박스는 `onEdit()` Simple
- * Trigger로 실행되는데, Simple Trigger는 제한된 권한이라
- * `SpreadsheetApp.openById()`나 `UrlFetchApp`을 못 씀, 2026-07-30 Meta 연결
- * 때 실측 확인 — 그때 도입한 캐시 패턴을 여러 플랫폼 합산용으로 그대로
- * 확장).
+ * 합산해 `Ad_Spend_Cache` 시트(2026-09-04부터 Master_DB 폴더 외부
+ * 스프레드시트, `docs/OpenItems.md` #49)에 저장한다. `ACQREP_001_Report.js`의
+ * `generateACQReport_()`는 이 캐시만 읽는다 — API 재호출 없이 캐시된 값만
+ * 조회(2026-07-30 Meta 연결 때 도입한 패턴을 여러 플랫폼 합산용으로 확장).
+ * **트리거 컨텍스트(2026-09-04 정정)**: ACQ_REP Generate 체크박스는 예전엔
+ * `onEdit()` Simple Trigger(제한된 권한, `openById()` 불가)였으나 이후
+ * installable onEdit 트리거(`handleReportGenerateEdit`, Full Authorization)로
+ * 전환됨 — 이 캐시 자체를 외부 스프레드시트로 옮길 수 있게 된 배경.
  *
  * **KRW→NZD 환율(2026-07-31, 사용자 확정)**: Google Sheets의
  * `GOOGLEFINANCE("CURRENCY:KRWNZD")` 사용. Apps Script는 GOOGLEFINANCE를
@@ -36,9 +37,17 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.5.0
+ * v1.6.0
  *
  * Change Log
+ * v1.6.0 (2026-09-04)
+ * - **`Ad_Spend_Cache` 외부 스프레드시트 이관**(`docs/OpenItems.md` #49) —
+ *   `openAdSpendCacheExternalSpreadsheet_()` 신규(`MASTER_010_SALSync.js`의
+ *   `openSALExternalSpreadsheet_()`와 동일 패턴), `refreshAdSpendCache_()`/
+ *   `readAdSpendCacheMap_()`가 `getActiveSpreadsheet()` 대신 이 opener 경유.
+ *   합산/환율 변환 로직은 전혀 무변경 — I/O 대상만 전환. 헤더 주석의 stale한
+ *   Simple Trigger 설명도 정정(실제로는 installable onEdit/시간 트리거로
+ *   Full Authorization).
  * v1.5.0 (2026-08-19)
  * - Target_REP 주별 CPNP1이 한 달 내내 동일 값으로 반복 표시되던 문제(사용자
  *   리포트) 해소 — 신규 `refreshAdSpendWeeklyCache_()`/`runRefreshAdSpendWeeklyCache()`/
@@ -320,6 +329,32 @@ const AD_SPEND_CACHE_HEADERS = ["FY", "Month", "Segment", "Spent"];
 
 /**
  * ==========================================================
+ * Open Ad Spend Cache External Spreadsheet (IO 래퍼)
+ *
+ * WHY
+ * CONFIG.ACQ.AD_SPEND_CACHE_EXTERNAL.SPREADSHEET_ID가 비어있으면 추측으로
+ * 진행하지 않고 명시적 에러로 실패한다("No Assumptions" 원칙,
+ * MASTER_010_SALSync.js의 openSALExternalSpreadsheet_()와 동일 패턴).
+ * ==========================================================
+ */
+function openAdSpendCacheExternalSpreadsheet_(){
+
+  const spreadsheetId = CONFIG.ACQ.AD_SPEND_CACHE_EXTERNAL.SPREADSHEET_ID;
+
+  if(!spreadsheetId){
+    throw new Error(
+      "CONFIG.ACQ.AD_SPEND_CACHE_EXTERNAL.SPREADSHEET_ID가 비어있습니다 — " +
+      "CORE_001_Config.js를 먼저 확인하세요."
+    );
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+
+}
+
+
+/**
+ * ==========================================================
  * Refresh Ad Spend Cache (IO 래퍼 — 수동 실행 전용)
  *
  * WHY
@@ -354,7 +389,7 @@ function refreshAdSpendCache_(){
 
   });
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = openAdSpendCacheExternalSpreadsheet_();
 
   let sheet = ss.getSheetByName(CONFIG.ACQ.AD_SPEND_CACHE_SHEET);
 
@@ -553,11 +588,14 @@ function readAdSpendWeeklyCacheMap_(){
 
 /**
  * ==========================================================
- * Read Ad Spend Cache Map (같은 스프레드시트 안 캐시 읽기 — Simple Trigger 안전)
+ * Read Ad Spend Cache Map (외부 스프레드시트 캐시 읽기)
  *
  * WHY
- * generateACQReport_()가 onEdit() Simple Trigger에서 호출되므로, 이 함수는
- * `getActiveSpreadsheet()`(같은 문서)만 쓰고 외부 시트/API는 절대 열지 않는다.
+ * 호출부(ACQ_REP/NewP1_REP Generate)가 installable onEdit 트리거(Full
+ * Authorization)로 실행되므로 openById() 사용 가능(2026-09-04 확인,
+ * docs/exec-plans/active/2026-09-04-ad-spend-cache-external-migration.md
+ * 참고 — 예전엔 Simple Trigger 제약으로 같은 스프레드시트만 읽었으나
+ * 그 제약 자체가 이미 해소된 상태였음).
  *
  * OUTPUT
  * Object  키 "fy|month|segment" → Spent(NZD)
@@ -565,7 +603,7 @@ function readAdSpendWeeklyCacheMap_(){
  */
 function readAdSpendCacheMap_(){
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = openAdSpendCacheExternalSpreadsheet_();
   const sheet = ss.getSheetByName(CONFIG.ACQ.AD_SPEND_CACHE_SHEET);
 
   const map = {};

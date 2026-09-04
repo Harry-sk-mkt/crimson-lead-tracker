@@ -907,6 +907,6 @@
       부족으로 이미 여러 번 막힌 이력(Target_REP/ACQ_REP 사례)이 있어 신중한 검증 필요.
     막힌 지점: 두 방향 중 어느 쪽으로 갈지, 착수 시점 확정 필요 — 임의로 처리하지 말 것.
 48. **외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅 알림 트리거 신설 (TODO)** (2026-09-03) — P1 리스트가 정리된 외부 스프레드시트와 대조하여, 외부 리스트에는 P1으로 수록되어 있으나 파이프라인(`Leads_OPS` / `Leads_Master`) 상에서 Priority가 다르게 잘못 지정된 리드를 자동으로 검출(플래깅)하여 사용자에게 알려주는 백그라운드/주기적 트리거 기능 구현 필요. (착수 시 대상 외부 시트 ID 및 알림 수단 확정 필요).
-49. **Naver Search API 누적 캐시 시트 외부 Master_DB 스프레드시트로 이관 (TODO)** (2026-09-03) — 현재 메인 스프레드시트 내부 숨김 탭으로 존재하는 `Naver_Search_Campaign_Stats_Cache` 및 `Ad_Spend_Cache`를 `Leads_Raw`/`MTA_Raw` 이관 패턴과 동일하게 `Master_DB` 폴더 내 외부 스프레드시트로 이관하여 메인 시트 용량을 추가로 절감하고 오픈 속도 개선.
+49. ~~Naver Search API 누적 캐시 시트 외부 Master_DB 스프레드시트로 이관~~ — 구현 및 실행 검증 완료(2026-09-04). `Naver_Search_Campaign_Stats_Cache`/`Ad_Spend_Cache`를 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가 있는 Master_DB 폴더 파일, `1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`, 사용자 확정 — 새 파일 안 만들고 탭만 추가)로 이관. 재계산 가능한 캐시라는 성질을 이용해 Raw 이관과 달리 별도 복사 스크립트 없이 read/write 함수의 대상만 외부 스프레드시트로 전환(`AD_003_NaverSearch.js` v2.16.0/`AD_004_SpendCache.js` v1.6.0의 opener 함수 신규, `JL_003_Write.js` v1.1.0도 함께 전환). `runRefreshAdSpendCache()`(222행)/`runRefreshNaverSearchAdCampaignStatsCache()`(9개 캠페인) 실행 결과 외부 시트에 탭 정상 생성 확인, ACQ_REP Generate 재실행도 정상 값 확인(사용자 확인, 2026-09-04). 상세: `docs/exec-plans/completed/2026-09-04-ad-spend-cache-external-migration.md`. **남은 낮은 우선순위 항목**: 메인 스프레드시트의 기존 숨김 탭 2개는 안정화 확인 후 별도 삭제(당장 안 함).
 
 
