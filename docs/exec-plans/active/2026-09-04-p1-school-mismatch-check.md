@@ -2,10 +2,10 @@
 
 **관련 로드맵 항목**: `docs/OpenItems.md` #48 (2026-09-03 등록)
 **시작일**: 2026-09-04
-**상태**: 정방향 체크(P1_School_Mismatch_QA) 코드 작성 + clasp push + 수동 실행/육안 검증
-완료(2026-09-04). 같은 세션 후속 요청으로 역방향 체크(Not_Striked, 신규 학교 후보 검출)도
-코드 작성 완료 — 아직 clasp push/실행 전. 남은 건 (1) 역방향 체크 clasp push, (2) 실제 Leads
-Import 1회로 두 방향 다 파이프라인 자동 편입 확인.
+**상태**: 정방향(P1_School_Mismatch_QA)/역방향(Not_Striked) 둘 다 코드 작성 + clasp push +
+수동 실행 완료(2026-09-04). 정방향은 육안 검증까지 완료, 역방향은 배포 당일이라 양성 케이스
+미확인(0건이 정상). 남은 건 실제 Leads Import 1회로 두 방향 다 파이프라인 자동 편입 + 역방향
+양성 케이스 확인뿐(2026-09-07 월요일 예정).
 
 ## Goal
 
@@ -66,11 +66,14 @@ Leads_OPS를 매 Leads Import마다 자동으로 양방향 대조한다(이메�
       신규, `OPS_007_P1SchoolMismatch.js`(v1.1.0)의 `computeMissingP1Schools_()`(순수 함수,
       node 단위 테스트 PASS)/`writeMissingP1SchoolsResults_()` 신규 —
       `performP1SchoolMismatchCheck_()`가 기존 opsRecords/p1SchoolSet을 그대로 재사용.
-- [ ] **남은 검증**: 실제 Leads Import 한 번 실행해 `runLeadsPipelineTail()`의
-      `checkP1SchoolMismatch_` 단계가 두 방향(P1_School_Mismatch_QA + Not_Striked) 전부
-      자동으로 정상 동작하는지 확인(README Pipeline Status 또는 Execution 로그) — 지금까지는
-      수동 진입점(`runCheckP1SchoolMismatch()`)만 검증됨, 파이프라인 자동 편입 자체와 역방향
-      체크(Not_Striked)는 실 Leads Import로 아직 검증 전(다음 주 월요일 2026-09-07 예정).
+- [x] **역방향 체크 clasp push + 수동 실행 확인(2026-09-04)** — `runCheckP1SchoolMismatch()`
+      재실행 결과: "2026-09-04 이후 신규 P1 리드 중 리스트에 없는 학교 0개 Not_Striked에
+      기록", 에러 없음. 0건은 정상(배포 당일이라 아직 START_DATE 이후 신규 P1 리드 자체가
+      없음) — 양성 케이스(실제로 누락 학교가 잡히는지)는 신규 리드가 들어와야 검증 가능.
+- [ ] **남은 검증**: 실제 Leads Import 1회 실행해 (1) `runLeadsPipelineTail()`의
+      `checkP1SchoolMismatch_` 단계가 파이프라인 안에서 자동으로 도는지(README Pipeline
+      Status 또는 Execution 로그), (2) Not_Striked가 실제로 신규 P1 리드+누락 학교가 있을 때
+      양성 케이스를 정확히 잡는지 — 둘 다 다음 주 월요일(2026-09-07) 실 Import 때 확인 예정.
 
 ## Surprises & Discoveries
 
