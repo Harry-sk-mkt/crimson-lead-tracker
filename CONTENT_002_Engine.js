@@ -21,9 +21,22 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-05)
+ * - **버그 수정 — `isEligibleContentProgram_()`가 Program_Segment_Dictionary
+ *   대신 `getBusinessSegment(programName, programName)` 재분류에만 의존해
+ *   실제로는 Content인 프로그램의 Meta Spend 매칭이 누락되던 문제**
+ *   (`docs/OpenItems.md` #30, `TEMPQA_051_BOFUContentMetaProgramCoverageDiagnostic.js`
+ *   실측 확인 — Content 9건, 전부 matchCount/totalCount가 크고 명확한
+ *   케이스). `isEligibleContentProgramPure_(programName, programSegmentMap)`
+ *   신규(순수 함수, Program_Segment_Dictionary 우선 → 없으면 기존 방식
+ *   폴백) — `isEligibleContentProgram_()`는 `readProgramSegmentDictionaryMap_()`
+ *   로 맵을 가져와 위임하는 IO 래퍼로 축소(단일 인자 시그니처는 그대로
+ *   유지, `aggregateMetaCampaignDataByProgram_()` 호출부 변경 없음).
+ *   `testIsEligibleContentProgram()` 갱신 — 딕셔너리 히트/미스 양쪽 케이스 추가.
+ *   `BOFU_002_Engine.js` v1.8.0과 동일 패턴/동일 세션.
  * v1.8.0 (2026-09-03)
  * - **Meta_Raw+UTM_Program_Dictionary 이중 조회 제거(`docs/OpenItems.md` #41,
  *   `BOFU_002_Engine.js` v1.7.0과 동일 패턴)** — `computeContentMetaCampaignDataAggregates_()`
@@ -178,21 +191,37 @@ function refreshContentEngine_() {
 
 /**
  * ==========================================================
- * Is Eligible Content Program (순수 함수)
+ * Is Eligible Content Program Pure (순수 함수)
  *
- * WHY
+ * WHY (`docs/OpenItems.md` #30 후속, 2026-09-05)
  * UTM_Program_Dictionary가 찾아낸 Marketo Program명이 진짜 Content
- * 프로그램인지 판정 — `BOFU_002_Engine.js`의 `isEligibleBOFUProgram_()`와
- * 동일 패턴(Content도 단일 세그먼트라 Business Segment 체크 하나로 충분).
- * `getBusinessSegment(programName, programName)` — 문자열 하나를
- * campaign/detail 두 인자 모두에 넣는 게 이미 확립된 관례
- * (`AD_006_KakaoMoments.js` `computeKakaoMomentsSyncRow_()` 참고).
+ * 프로그램인지 판정 — `BOFU_002_Engine.js`의 `isEligibleBOFUProgramPure_()`와
+ * 동일 패턴/동일 배경(자세한 WHY는 그쪽 헤더 참고). 예전엔
+ * `getBusinessSegment(programName, programName)`만 썼으나,
+ * `TEMPQA_051_BOFUContentMetaProgramCoverageDiagnostic.js`
+ * `runTraceBOFUContentMetaProgramMismatch()` 실측 결과 Content 프로그램
+ * 9건(예: "WF-2026-02-KOR-MOFU-Core RISE Academic Foundation", matchCount
+ * 559/559로 딕셔너리 매칭 자체는 완벽)이 이 재분류 방식으로는 Content가
+ * 아니라고 오판돼 실제 Meta Spend가 반영 안 되고 있었음이 확인됨 —
+ * `Program_Segment_Dictionary`(실제 리드 데이터 다수결 채굴, #22/#34)를
+ * 최우선으로 조회하고, 없는 경우에만 기존 방식으로 폴백.
+ *
+ * INPUT
+ * programName        : string
+ * programSegmentMap  : Object  (readProgramSegmentDictionaryMap_() 결과,
+ *                       {programNameLower: Business Segment명})
  *
  * TEST
  * testIsEligibleContentProgram 참고
  * ==========================================================
  */
-function isEligibleContentProgram_(programName) {
+function isEligibleContentProgramPure_(programName, programSegmentMap) {
+
+  if (!programName) return false;
+
+  const dictSegment = (programSegmentMap || {})[String(programName).trim().toLowerCase()];
+
+  if (dictSegment) return CONTENT.SEGMENTS.indexOf(dictSegment) !== -1;
 
   return isKoreanProgram_(programName) &&
     CONTENT.SEGMENTS.indexOf(getBusinessSegment(programName, programName)) !== -1;
@@ -202,16 +231,43 @@ function isEligibleContentProgram_(programName) {
 
 /**
  * ==========================================================
- * TEST — isEligibleContentProgram_()
+ * Is Eligible Content Program (IO 래퍼)
+ *
+ * WHY
+ * `aggregateMetaCampaignDataByProgram_()`(EVENTS_002_Engine.js)가 이 함수를
+ * 단일 인자 `isEligibleProgram` predicate로 그대로 호출하므로 시그니처를
+ * 유지 — `readProgramSegmentDictionaryMap_()`(모듈 스코프 메모이제이션,
+ * 실행당 1회만 시트 읽음)로 맵을 가져와 순수 함수에 위임한다.
+ * ==========================================================
+ */
+function isEligibleContentProgram_(programName) {
+
+  return isEligibleContentProgramPure_(programName, readProgramSegmentDictionaryMap_());
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEligibleContentProgramPure_()
  * ==========================================================
  */
 function testIsEligibleContentProgram() {
 
+  const dictMap = {
+    "wf-2025-01-kor-mofu-core dictionary-confirmed content": "Content",
+    "wf-2025-02-kor-mofu-core dictionary-confirmed webinar": "Webinar" // 딕셔너리가 아니라고 확정 — getBusinessSegment 결과와 달라도 딕셔너리 우선
+  };
+
   const pass =
-    isEligibleContentProgram_("WF-2026-07-KOR-MOFU-Core Hyperlocalized Rising 8~9 Roadmap eBook") === true &&
-    isEligibleContentProgram_("WB-2026-02-KOR-MOFU-Core Application Tips") === false &&
-    isEligibleContentProgram_("WF-2026-08-KOR-BOFU-Core Duke CAO advise") === false &&
-    isEligibleContentProgram_("") === false;
+    // 딕셔너리 미스 → 기존 getBusinessSegment() 폴백 경로(기존 동작 그대로)
+    isEligibleContentProgramPure_("WF-2026-07-KOR-MOFU-Core Hyperlocalized Rising 8~9 Roadmap eBook", {}) === true &&
+    isEligibleContentProgramPure_("WB-2026-02-KOR-MOFU-Core Application Tips", {}) === false &&
+    isEligibleContentProgramPure_("WF-2026-08-KOR-BOFU-Core Duke CAO advise", {}) === false &&
+    isEligibleContentProgramPure_("", {}) === false &&
+    // 딕셔너리 히트 → 딕셔너리 값이 최우선(신규 동작)
+    isEligibleContentProgramPure_("WF-2025-01-KOR-MOFU-Core Dictionary-Confirmed Content", dictMap) === true &&
+    isEligibleContentProgramPure_("WF-2025-02-KOR-MOFU-Core Dictionary-Confirmed Webinar", dictMap) === false;
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

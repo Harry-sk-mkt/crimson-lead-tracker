@@ -32,9 +32,20 @@
  * 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-09-05)
+ * - **버그 수정 — `isEligibleBOFUProgram_()`가 Program_Segment_Dictionary
+ *   대신 `getBusinessSegment(programName, programName)` 재분류에만 의존해
+ *   실제로는 BOFU인 프로그램의 Meta Spend 매칭이 누락되던 문제**
+ *   (`docs/OpenItems.md` #30, `TEMPQA_051_BOFUContentMetaProgramCoverageDiagnostic.js`
+ *   실측 확인). `isEligibleBOFUProgramPure_(programName, programSegmentMap)`
+ *   신규(순수 함수, Program_Segment_Dictionary 우선 → 없으면 기존 방식
+ *   폴백) — `isEligibleBOFUProgram_()`는 `readProgramSegmentDictionaryMap_()`
+ *   로 맵을 가져와 위임하는 IO 래퍼로 축소(단일 인자 시그니처는 그대로
+ *   유지, `aggregateMetaCampaignDataByProgram_()` 호출부 변경 없음).
+ *   `testIsEligibleBOFUProgram()` 갱신 — 딕셔너리 히트/미스 양쪽 케이스 추가.
  * v1.7.0 (2026-09-03)
  * - **Meta_Raw+UTM_Program_Dictionary 이중 조회 제거(`docs/OpenItems.md` #41,
  *   실측 근거: `docs/PerformanceBenchmark.md` 2026-09-03)** —
@@ -229,24 +240,45 @@ function testPickEarliestDate() {
 
 /**
  * ==========================================================
- * Is Eligible BOFU Program (순수 함수)
+ * Is Eligible BOFU Program Pure (순수 함수)
  *
- * WHY
+ * WHY (`docs/OpenItems.md` #30 후속, 2026-09-05)
  * UTM_Program_Dictionary가 찾아낸 Marketo Program명이 진짜 BOFU
- * 프로그램인지 판정 — `EVENTS_002_Engine.js`의
- * `isEligibleEventProgram_()`(EVENT_TYPE_PREFIXES 필터)와 동일 역할이지만
- * BOFU는 단일 세그먼트라 Business Segment 체크 하나로 충분(BOFU_002_Engine.js
- * 파일 헤더 WHY와 동일 원칙 — "Events와 달리 EVENT_TYPE_PREFIXES 필터가
- * 없다"). `getBusinessSegment(programName, programName)` — 문자열 하나를
- * campaign/detail 두 인자 모두에 넣는 게 이미 확립된 관례
- * (`AD_006_KakaoMoments.js` `computeKakaoMomentsSyncRow_()` 참고, 한쪽
- * 인자만 넣으면 "wb-"/"ev-" 등 detail 전용 신호를 놓쳐 분류가 실패함).
+ * 프로그램인지 판정. 예전엔 `getBusinessSegment(programName, programName)`
+ * (문자열 하나를 campaign/detail 두 인자 모두에 넣는 관례,
+ * `AD_006_KakaoMoments.js` `computeKakaoMomentsSyncRow_()` 참고)만 썼으나,
+ * `TEMPQA_051_BOFUContentMetaProgramCoverageDiagnostic.js`
+ * `runTraceBOFUContentMetaProgramMismatch()` 실측 결과 이 재분류 방식이
+ * 실제 분류와 어긋나는 프로그램이 있음이 확인됨(예: "WF-2023-04-KOR-MOFU-Core
+ * Hyperlocalized Korean Army Infographic" — 딕셔너리 매칭/정규화는 정확한데
+ * `getBusinessSegment(programName, programName)`가 BOFU가 아니라고 오판해
+ * 실제 Meta Spend(연 419.32 등)가 반영 안 되고 있었음) — Program명 하나를
+ * 인위적으로 campaign/detail 두 슬롯에 넣는 방식 자체가 실제 리드의 진짜
+ * campaign/detail 조합과 달라 키워드 규칙이 다르게 걸릴 수 있는 구조적
+ * 한계. `Program_Segment_Dictionary`(실제 Leads_Master/MTA_Master의 진짜
+ * Business Segment 값을 프로그램별로 다수결 채굴한 캐시, #22/#34)가 이미
+ * 있으므로 그걸 최우선으로 조회하고(이 프로그램이 실제로 어떤 세그먼트로
+ * 분류돼왔는지 그라운드 트루스), 딕셔너리에 없는 경우(신규/모호한 프로그램)
+ * 에만 기존 `getBusinessSegment()` 재분류로 폴백 — `resolveBusinessSegment_()`
+ * (`UTIL_002_UtmProgramDictionary.js`)와 동일한 "딕셔너리 우선, 키워드
+ * 폴백" 원칙.
+ *
+ * INPUT
+ * programName        : string
+ * programSegmentMap  : Object  (readProgramSegmentDictionaryMap_() 결과,
+ *                       {programNameLower: Business Segment명})
  *
  * TEST
  * testIsEligibleBOFUProgram 참고
  * ==========================================================
  */
-function isEligibleBOFUProgram_(programName) {
+function isEligibleBOFUProgramPure_(programName, programSegmentMap) {
+
+  if (!programName) return false;
+
+  const dictSegment = (programSegmentMap || {})[String(programName).trim().toLowerCase()];
+
+  if (dictSegment) return BOFU.SEGMENTS.indexOf(dictSegment) !== -1;
 
   return isKoreanProgram_(programName) &&
     BOFU.SEGMENTS.indexOf(getBusinessSegment(programName, programName)) !== -1;
@@ -256,16 +288,43 @@ function isEligibleBOFUProgram_(programName) {
 
 /**
  * ==========================================================
- * TEST — isEligibleBOFUProgram_()
+ * Is Eligible BOFU Program (IO 래퍼)
+ *
+ * WHY
+ * `aggregateMetaCampaignDataByProgram_()`(EVENTS_002_Engine.js)가 이 함수를
+ * 단일 인자 `isEligibleProgram` predicate로 그대로 호출하므로 시그니처를
+ * 유지 — `readProgramSegmentDictionaryMap_()`(모듈 스코프 메모이제이션,
+ * 실행당 1회만 시트 읽음)로 맵을 가져와 순수 함수에 위임한다.
+ * ==========================================================
+ */
+function isEligibleBOFUProgram_(programName) {
+
+  return isEligibleBOFUProgramPure_(programName, readProgramSegmentDictionaryMap_());
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isEligibleBOFUProgramPure_()
  * ==========================================================
  */
 function testIsEligibleBOFUProgram() {
 
+  const dictMap = {
+    "wf-2025-01-kor-mofu-core dictionary-confirmed bofu": "BOFU",
+    "wf-2025-02-kor-mofu-core dictionary-confirmed webinar": "Webinar" // 딕셔너리가 아니라고 확정 — getBusinessSegment 결과와 달라도 딕셔너리 우선
+  };
+
   const pass =
-    isEligibleBOFUProgram_("WF-2026-08-KOR-BOFU-Core Duke CAO advise") === true &&
-    isEligibleBOFUProgram_("WB-2026-02-KOR-MOFU-Core Application Tips") === false &&
-    isEligibleBOFUProgram_("WF-2026-01-KOR-MOFU-Core Some Ebook") === false &&
-    isEligibleBOFUProgram_("") === false;
+    // 딕셔너리 미스 → 기존 getBusinessSegment() 폴백 경로(기존 동작 그대로)
+    isEligibleBOFUProgramPure_("WF-2026-08-KOR-BOFU-Core Duke CAO advise", {}) === true &&
+    isEligibleBOFUProgramPure_("WB-2026-02-KOR-MOFU-Core Application Tips", {}) === false &&
+    isEligibleBOFUProgramPure_("WF-2026-01-KOR-MOFU-Core Some Ebook", {}) === false &&
+    isEligibleBOFUProgramPure_("", {}) === false &&
+    // 딕셔너리 히트 → 딕셔너리 값이 최우선(신규 동작)
+    isEligibleBOFUProgramPure_("WF-2025-01-KOR-MOFU-Core Dictionary-Confirmed BOFU", dictMap) === true &&
+    isEligibleBOFUProgramPure_("WF-2025-02-KOR-MOFU-Core Dictionary-Confirmed Webinar", dictMap) === false;
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

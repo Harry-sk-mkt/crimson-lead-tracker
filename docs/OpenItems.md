@@ -423,6 +423,50 @@
     소수 등록)으로 일부 보완하고 있음 — BOFU/Content는 아직 이런 override 안전망이 없음.
     딕셔너리 자체를 넓히거나(모호한 UTM 재검토 등) override 맵을 BOFU/Content에도 도입할지는
     사용자 확인 필요, 임의로 처리하지 말 것.
+    **✅ 세분화 진단 스크립트 신규(2026-09-05)**: `TEMPQA_051_BOFUContentMetaProgramCoverageDiagnostic.js`
+    (읽기 전용) — `runDiagnoseBOFUContentMetaProgramCoverage()`가 미매칭 프로그램마다
+    원인을 4가지로 분류: (1) `UTM_Program_Dictionary`에 이 프로그램을 가리키는 UTM
+    항목 자체가 없음(0건 터치 추정 — 딕셔너리 확장/override 둘 다 무효), (2) 수동 제외
+    목록(`UTM_PROGRAM_DICT_MANUAL_EXCLUSIONS`)에만 걸림, (3) 후보는 있지만 전부
+    모호(distinctProgramCount>1)해서 제외 — 그 중 실제로 Meta_Raw에 그 UTM 캠페인명이
+    존재하는 것만 "override 도입 시 진짜 Spend가 채워지는" 유효 후보로 별도 카운트,
+    (4) 확실한 후보(distinctProgramCount===1)가 있는데도 안 잡힌 경우(버그 의심, 별도
+    확인 필요). `resolveMetaCampaignProgramKey_()`(`EVENTS_002_Engine.js`)가 실제로
+    쓰는 정규화(`stripLGSuffix_(stripRegistrationFormSuffix_(...))`)를 그대로 재사용해
+    실제 매칭 로직과 동일한 기준으로 비교. **실측 결과(2026-09-05, 사용자 실행)**:
+    BOFU 미매칭 92건 — (1) 딕셔너리 자체 없음 35 / (3) 모호(override 후보 12건) 19 /
+    (4) 확실한 후보인데 Meta_Raw엔 없음(버그 아님) 37 / (5) 확실한 후보 + Meta_Raw에도
+    있는데 안 잡힘(버그 의심) 1. Content 미매칭 86건 — (1) 18 / (3) 모호(override 후보
+    7건) 15 / (4) 44 / (5) **9**. (5)번이 예상외로 유의미해 `runTraceBOFUContentMetaProgramMismatch()`
+    신규(실제 프로덕션 함수 그대로 호출해 단계별 추적)로 원인 확정.
+    **✅ 근본 원인 확정 및 수정 완료(2026-09-05)**: (5)번 10건 전부 딕셔너리 조회/
+    정규화는 정확한데 `isEligibleBOFUProgram_()`/`isEligibleContentProgram_()`의
+    `getBusinessSegment(programName, programName)` 재분류 단계에서 false가 나옴 —
+    Program명 문자열 하나를 campaign/detail 두 슬롯에 억지로 넣는 방식이 실제 리드의
+    진짜 campaign/detail 조합과 달라 키워드 규칙이 다르게 걸리는 구조적 한계(예:
+    "WF-2026-02-KOR-MOFU-Core RISE Academic Foundation"은 matchCount 559/559로
+    완벽히 확실한 매칭인데도 재분류에서 Content가 아니라고 오판). `Program_Segment_Dictionary`
+    (실제 Leads_Master/MTA_Master 다수결 채굴, #22/#34)가 이미 이 프로그램이 실제로
+    어떤 세그먼트인지 아는 그라운드 트루스라는 점에 착안 — `isEligibleBOFUProgramPure_()`/
+    `isEligibleContentProgramPure_()` 신규(순수 함수, Program_Segment_Dictionary
+    최우선 조회 → 없으면 기존 `getBusinessSegment()` 재분류로 폴백), 기존
+    `isEligibleBOFUProgram_()`/`isEligibleContentProgram_()`는 `readProgramSegmentDictionaryMap_()`
+    로 맵을 가져와 위임하는 IO 래퍼로 축소(단일 인자 시그니처 유지, 호출부 변경 없음,
+    `BOFU_002_Engine.js` v1.8.0/`CONTENT_002_Engine.js` v1.9.0). Node vm 하네스로
+    `testIsEligibleBOFUProgram()`/`testIsEligibleContentProgram()`(딕셔너리 히트/미스
+    양쪽 케이스로 갱신) 전부 PASS, `check-syntax`/`check-naming`/`check-version-header`/
+    `check-duplicate-declarations` 전부 통과, push 완료. **(1)/(4)번(딕셔너리에 UTM
+    후보 자체가 없거나 Meta_Raw에 그 캠페인 자체가 없음)은 코드로 해결 불가 — 그
+    광고가 지금까지 리드로 귀속된 적이 없거나 Meta 스펜드 자체가 없다는 뜻이라
+    딕셔너리 확장/override 둘 다 무효, 낮은 우선순위로 그대로 둠(사용자 확인 불필요,
+    구조적 한계)**. **(3)번 override 후보(BOFU 12건/Content 7건)는 이번 세션 범위
+    밖 — Events_OPS 선례(`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`)와 동일한
+    override 맵을 BOFU/Content에 도입할지는 여전히 사용자 결정 필요, 임의로 처리하지
+    말 것.** **남은 것(TODO)**: `runRefreshBOFUEngine()`/`runRefreshContentEngine()`
+    → `buildBOFUOPS()`/`buildContentOPS()` 순으로 재실행해 이번 수정으로 BOFU
+    1건/Content 9건의 Spent/Campaign/Off-On/Start Date/End Date/Impressions/
+    Reach/Link clicks/Results가 실제로 자동 채워지는지 확인 — 확인 전까지 완료로
+    간주하지 말 것.
 31. **Target_REP Actual CPNP1 과소집계 버그 수정 완료 — 잔여 확인 필요(2026-08-25)** — 사용자
     리포트("8월 Webinar Actual CPNP1이 실제보다 훨씬 낮게 나옴")로 조사한 결과
     `isMetaRowWeekPrecise_()`(`AD_002_Meta.js`)가 부분(예: 화~일 6일) Meta export를 "정밀"로
