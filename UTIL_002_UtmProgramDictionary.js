@@ -53,9 +53,30 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.9.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-09-04)
+ * - **`resolveBusinessSegment_()` — UTM 단위 override 우선 체크 추가**
+ *   (`docs/OpenItems.md` #34 후속, 사용자 요청) — 여러 UTM이 하나의
+ *   Program으로 묶여 Program 단위 override로는 구분이 안 되는 케이스 대응.
+ *   `readUtmSegmentOverrideMap_()`(UTIL_004_DictionaryQA.js)에 해당 campaign
+ *   (UTM)의 override가 있으면 최우선 반환, 없으면 기존 로직 그대로.
+ * v1.11.0 (2026-09-04)
+ * - **`readProgramSegmentDictionaryMap_()` — 사람이 직접 확정한 override
+ *   병합**(`docs/OpenItems.md` #34 후속, 사용자 요청): "QA 시트에서 수정한
+ *   걸 어떻게 딕셔너리에 반영하나"에 대한 답 — `Program_Segment_Override`
+ *   (`UTIL_004_DictionaryQA.js`의 `readProgramSegmentOverrideMap_()`, 사람이
+ *   직접 편집하는 영구 시트)를 자동 다수결 map 위에 덮어써 항상 우선하도록
+ *   병합. 애매해서 제외됐던(distinctSegmentCount>1) Program도 override가
+ *   있으면 다시 포함됨.
+ * v1.10.0 (2026-09-04)
+ * - **`periodicRefreshDictionaries_()` — Marketo_QA 특이 분류 모니터링
+ *   편입**(`docs/OpenItems.md` #34, `UTIL_004_DictionaryQA.js` 신규):
+ *   `refreshProgramSegmentDictionaryIncremental_()` 단독 호출을
+ *   `refreshProgramSegmentDictionaryWithAnomalyCheck_()`로 교체 — 갱신
+ *   전후 스냅샷을 비교해 확신도 낮은 신규 키/다수결 뒤집힘/애매한 키를
+ *   `Marketo_QA` 시트에 플래깅. 갱신 자체의 실패 전파 동작은 변경 없음.
  * v1.9.0 (2026-09-04)
  * - **증분 등록(Incremental Update) 전환(성능 개선,
  *   docs/exec-plans/active/2026-09-03-performance-optimization.md #4)** —
@@ -1956,7 +1977,8 @@ function refreshProgramSegmentDictionaryIncremental_(){
  *
  * OUTPUT
  * Object  { programKeyLower: Business Segment명 }  Distinct Segment Count === 1인
- *   항목만
+ *   항목 + `Program_Segment_Override`(사람이 직접 확정한 값, 자동 다수결보다
+ *   항상 우선 — 2026-09-04 추가, `docs/OpenItems.md` #34 후속)
  * ==========================================================
  */
 let _programSegmentDictCache = null;
@@ -1986,6 +2008,17 @@ function readProgramSegmentDictionaryMap_(){
     map[String(values[i][0] || "").trim().toLowerCase()] = values[i][1];
 
   }
+
+  // 2026-09-04 추가(docs/OpenItems.md #34 후속) — 사람이 Marketo_QA 검토 후
+  // Program_Segment_Override(UTIL_004_DictionaryQA.js)에 직접 확정한 값은
+  // 자동 다수결(위 map)보다 항상 우선한다. 애매해서 제외된(distinctSegmentCount>1)
+  // Program도 override가 있으면 여기서 다시 채워짐 — override는 그 자체가
+  // "사람이 애매함을 해소한 결과"이므로 의도된 동작.
+  const overrideMap = readProgramSegmentOverrideMap_();
+
+  Object.keys(overrideMap).forEach(function(programKey){
+    map[programKey] = overrideMap[programKey];
+  });
 
   _programSegmentDictCache = map;
 
@@ -2197,9 +2230,23 @@ function testResolveBusinessSegmentPure(){
  * `getBusinessSegment()`와 동일하게 동작 — 배포 자체는 무위험.
  *
  * INPUT/OUTPUT: getBusinessSegment()와 완전히 동일한 시그니처.
+ *
+ * UTM 단위 override 우선(2026-09-04 추가, docs/OpenItems.md #34 후속,
+ * 사용자 요청 — "여러 UTM이 섞인 Program은 UTM별로 따로 분류해야 한다")
+ * `readUtmSegmentOverrideMap_()`(UTIL_004_DictionaryQA.js)에 이 정확한
+ * campaign(UTM)에 대한 사람의 확정값이 있으면, Program 단위 딕셔너리/
+ * 확정 신호(resolveDefiniteBusinessSegment_) 전부보다 먼저 그 값을 그대로
+ * 반환한다 — 사람이 특정 UTM 하나를 콕 집어 확정한 것보다 더 구체적인
+ * 신호는 없기 때문(기존 `BUSINESS_SEGMENT_EXCEPTIONS`와 같은 우선순위
+ * 개념, 코드 대신 시트로 관리).
  * ==========================================================
  */
 function resolveBusinessSegment_(campaign, detail, leadSource, category){
+
+  const utmSegmentOverrideMap = readUtmSegmentOverrideMap_();
+  const utmOverride = utmSegmentOverrideMap[String(campaign || "").trim().toLowerCase()];
+
+  if(utmOverride) return utmOverride;
 
   const programSegmentMap = readProgramSegmentDictionaryMap_();
   const utmProgramMap = readUtmProgramDictionaryMap_();
@@ -2229,12 +2276,21 @@ function resolveBusinessSegment_(campaign, detail, leadSource, category){
  * 행만 읽어 기존 캐시 카운트에 증분) 호출. 전체 재구축이 필요하면
  * `runRefreshUtmProgramDictionary()`/`runRefreshProgramSegmentDictionary()`를
  * 수동으로 직접 Run.
+ *
+ * **2026-09-04 — Marketo_QA 특이 분류 모니터링 편입**(`docs/OpenItems.md`
+ * #34, `UTIL_004_DictionaryQA.js` 신규): Program_Segment_Dictionary 갱신을
+ * `refreshProgramSegmentDictionaryIncremental_()` 단독 호출 대신
+ * `refreshProgramSegmentDictionaryWithAnomalyCheck_()`로 교체 — 갱신 전후
+ * 스냅샷을 비교해 확신도 낮은 신규 키/다수결 뒤집힘/애매한 키를
+ * `Marketo_QA` 시트에 플래깅한다. 갱신 자체의 실패는 그대로 전파되고,
+ * 모니터링(diff+쓰기) 단계만 실패해도 갱신 자체는 보존되도록 그 함수
+ * 내부에서 격리(UTIL_004_DictionaryQA.js 참고).
  * ==========================================================
  */
 function periodicRefreshDictionaries_(){
 
   refreshUtmProgramDictionaryIncremental_();
-  refreshProgramSegmentDictionaryIncremental_();
+  refreshProgramSegmentDictionaryWithAnomalyCheck_();
 
 }
 

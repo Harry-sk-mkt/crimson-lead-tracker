@@ -8,9 +8,28 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.20.0
+ * v1.21.0
  *
  * Change Log
+ * v1.21.0 (2026-09-04)
+ * - **getBusinessSegment() — SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES 순서 버그
+ *   수정(OpenItems.md #29)**. leadSource="paid social"/"affiliate
+ *   organization"/"offline outreach" → "Other" 캐치올(2026-07-29 추가)이
+ *   campaign의 "_contact"/"contact"/"consult" 확정 신호 fallback(2026-07-28
+ *   확정, leadSource로 BOFU/Search 최종 판별)보다 먼저 체크되고 있어, 이
+ *   campaign 신호가 있는 리드도 leadSource만으로 먼저 "Other"가 반환되고
+ *   fallback 자체에 도달을 못 했음(회귀 테스트
+ *   testGetBusinessSegmentContactFallbackToBOFU()/
+ *   testGetBusinessSegmentSearchCampaignSignals() 3개 FAIL의 원인). campaign
+ *   fallback을 먼저 체크하도록 이동("Organic Content"→Content 매핑만 이
+ *   fallback과 충돌 없어 원래 위치 유지). TEMPQA_047로 실측한 영향 범위
+ *   (Leads_Master 17건/MTA_Master 42건, 전부 Paid Social + "_contact"/
+ *   "consult"/"book-a-consult" 캠페인 → Other에서 BOFU로 재분류)를 사용자가
+ *   확인 후 승인. testGetBusinessSegmentContentBeatsGenericContactForm()의
+ *   stale 기대값 1건("Search"→"Other", testGetBusinessSegmentResearchSubstringFix()
+ *   의 동일 입력 기대값과 모순돼 있었음)도 함께 정정. 기존 Leads_Master/
+ *   MTA_Master 데이터는 이 수정만으로 자동 갱신되지 않음 — 다음 재import
+ *   또는 Full Rebuild 시 반영(소급 적용 여부는 별도 논의).
  * v1.20.0 (2026-08-28)
  * - parsePriorityRank_()/resolveMonotonicPriority_() 신규(`docs/OpenItems.md`
  *   New P1 8월 갭 조사 후속) — "Lead Priority"가 Lead 레벨 스냅샷이라
@@ -1327,15 +1346,64 @@ function getBusinessSegment(
   }
 
   //----------------------------------------------------------
-  // leadSource 기반 재분류 (2026-07-29, Search 캐치올 후속 QA)
+  // leadSource="Organic Content" (2026-07-29, Search 캐치올 후속 QA)
   //
-  // 아래 detail 확정 신호(무조건 Search)에 도달하기 전에, First Lead
-  // Source 자체가 이미 명확한 신호인 경우 그걸 우선 사용 — 예:
-  // leadSource="Organic Content"인데 detail이 범용 "Contact Us form"이라는
-  // 이유만으로 Search가 되는 건 말이 안 됨(사용자 확인). BOFU/Seminar/
-  // Webinar/campaign 확정신호/Content 키워드 등 더 구체적인 신호가 이미
-  // 위에서 전부 먼저 체크됐으므로, 여기 도달했다는 건 그런 신호가 전혀
-  // 없다는 뜻 — 이 경우 leadSource를 신뢰하는 게 안전.
+  // SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES 4개 중 "Content"로 매핑되는
+  // 값은 이 하나뿐 — 아래 "_contact"/"consult" fallback(BOFU/Search만
+  // 반환, Content는 반환하지 않음)보다 먼저 확정해도 다른 분기와 충돌이
+  // 없어 원래 위치(맨 먼저) 그대로 유지. 나머지 3개(Other로 매핑되는
+  // "paid social"/"affiliate organization"/"offline outreach")는 아래로
+  // 이동 — 순서 버그 수정 사유는 다음 블록 주석 참고.
+  //----------------------------------------------------------
+
+  if (SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES[leadSource] === "Content") {
+    return "Content";
+  }
+
+  //----------------------------------------------------------
+  // BOFU/Search 공용 fallback (campaign에 "_contact"/"contact"/"consult"만
+  // 있는 경우, 2026-07-28 재설계)
+  //
+  // 사용자 확정: 이 계정 BOFU/Search 세그먼트 캠페인 둘 다 슬러그에 관례적
+  // 으로 "_contact"를 붙이는데, Search는 역사적으로 Lead Source가 Naver
+  // Search/Google Search/Organic Search(+Paid Search)인 경우만 존재 — 그 외
+  // 나머지(예: Paid Social 등)는 전부 BOFU여야 함. "search"/"sitelink"가
+  // campaign에 없는 순수 "_contact"/"consult" 캠페인은 leadSource로 최종
+  // 판별: leadSource에 "search"가 포함되면 Search, 아니면 BOFU.
+  // ⚠️ 잔여 이슈(별도, CLAUDE.md 미해결 항목 참고): 옛날 ebook Marketo flow가
+  // UTM 없으면 leadSource를 "Organic Search"로 기본 처리하던 레거시 때문에,
+  // leadSource="Organic Search"라고 다 진짜 Search는 아닐 수 있음 — 이번
+  // 수정으로 이 fallback 경로는 해소되지만, campaign.includes("search")로
+  // 이미 확정 Search 처리되는 케이스나 leadSource 자체가 남아있는 잔존
+  // 레거시는 별도 처리 필요.
+  //
+  // ⚠️ 2026-09-04 순서 수정: 원래 이 블록 위에 SEARCH_CATCHALL_LEAD_SOURCE_
+  // OVERRIDES 전체(leadSource="paid social" 등 → "Other") 체크가 먼저
+  // 있었는데, campaign에 "_contact"/"consult" 확정 신호가 있어도 leadSource
+  // 만으로 먼저 "Other"를 반환해버려 이 fallback에 도달조차 못 했음
+  // (OpenItems.md #29, testGetBusinessSegmentContactFallbackToBOFU()/
+  // testGetBusinessSegmentSearchCampaignSignals() FAIL의 원인). campaign
+  // 확정 신호가 leadSource 캐치올보다 더 구체적이므로 이 블록을 먼저 체크
+  // 하도록 이동 — TEMPQA_047로 실측한 영향 범위(Leads_Master 17건/
+  // MTA_Master 42건, 전부 "_contact"/"consult"/"book-a-consult" 캠페인의
+  // Paid Social 리드 → Other에서 BOFU로 재분류)를 사용자가 확인 후 승인.
+  //----------------------------------------------------------
+
+  if (
+    campaign.includes("_contact") ||
+    campaign.includes("contact") ||
+    campaign.includes("consult")
+  ) {
+    return leadSource.includes("search") ? "Search" : "BOFU";
+  }
+
+  //----------------------------------------------------------
+  // leadSource 기반 재분류 (2026-07-29, Search 캐치올 후속 QA) — 나머지
+  // ("paid social"/"affiliate organization"/"offline outreach" → "Other")
+  //
+  // 위 campaign 확정 신호(Content/BOFU/Search)에 전부 안 걸렸을 때만 도달
+  // — leadSource="Organic Content"인데 detail이 범용 "Contact Us form"
+  // 이라는 이유만으로 Search가 되는 건 말이 안 됨(사용자 확인).
   //----------------------------------------------------------
 
   if (SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES[leadSource]) {
@@ -1359,32 +1427,6 @@ function getBusinessSegment(
     detail.includes("organic search")
   ) {
     return "Search";
-  }
-
-  //----------------------------------------------------------
-  // BOFU/Search 공용 fallback (campaign에 "_contact"/"contact"/"consult"만
-  // 있는 경우, 2026-07-28 재설계)
-  //
-  // 사용자 확정: 이 계정 BOFU/Search 세그먼트 캠페인 둘 다 슬러그에 관례적
-  // 으로 "_contact"를 붙이는데, Search는 역사적으로 Lead Source가 Naver
-  // Search/Google Search/Organic Search(+Paid Search)인 경우만 존재 — 그 외
-  // 나머지(예: Paid Social 등)는 전부 BOFU여야 함. "search"/"sitelink"가
-  // campaign에 없는 순수 "_contact"/"consult" 캠페인은 leadSource로 최종
-  // 판별: leadSource에 "search"가 포함되면 Search, 아니면 BOFU.
-  // ⚠️ 잔여 이슈(별도, CLAUDE.md 미해결 항목 참고): 옛날 ebook Marketo flow가
-  // UTM 없으면 leadSource를 "Organic Search"로 기본 처리하던 레거시 때문에,
-  // leadSource="Organic Search"라고 다 진짜 Search는 아닐 수 있음 — 이번
-  // 수정으로 이 fallback 경로는 해소되지만, campaign.includes("search")로
-  // 이미 확정 Search 처리되는 케이스나 leadSource 자체가 남아있는 잔존
-  // 레거시는 별도 처리 필요.
-  //----------------------------------------------------------
-
-  if (
-    campaign.includes("_contact") ||
-    campaign.includes("contact") ||
-    campaign.includes("consult")
-  ) {
-    return leadSource.includes("search") ? "Search" : "BOFU";
   }
 
   //----------------------------------------------------------
@@ -1726,7 +1768,14 @@ function testGetBusinessSegmentContentBeatsGenericContactForm(){
     // (2026-07-25 확정, temp_QA 43건 구제 목적 — 이번 재배치로 건드리지 않음)
     ["", "Crimson Education Contact Us form", "", "Search"],
     ["", "Filled in CGA Contact Enquiry form", "", "Search"],
-    ["", "Crimson Education Contact Us form", "Paid Social", "Search"]
+
+    // 2026-09-04 수정: leadSource="Paid Social"은 SEARCH_CATCHALL_LEAD_SOURCE_
+    // OVERRIDES(2026-07-29)로 "Other"가 맞음 — 이 케이스는 그 캐치올 도입 전
+    // (2026-07-25) 기대값이 그대로 남아있던 stale 값이었음(OpenItems.md #29,
+    // testGetBusinessSegmentResearchSubstringFix()의 동일 입력 기대값 "Other"와
+    // 모순돼 있었던 것을 발견해 정정 — 그쪽이 이 leadSource 재분류를 검증하려고
+    // 명시적으로 작성된 더 최신 테스트).
+    ["", "Crimson Education Contact Us form", "Paid Social", "Other"]
   ];
 
   let pass = true;

@@ -52,6 +52,7 @@ Google Apps Script 기반 마케팅 리드 ETL 파이프라인 프로젝트입�
 - `docs/QAAgentDesign.md` — QA 에이전트(`qa-review` 스킬: 코드 품질/데이터 정합성/리포트 값 검증) 설계, 2026-08-09 구현
 - `docs/Roadmap.md` — 장기 방향/우선순위 (계속 갱신되는 문서, OpenItems와 별개)
 - `docs/ExecPlanConvention.md` — `docs/exec-plans/`(작업 단위 실시간 진행 기록) 작성 규칙
+- `docs/SalesforceFieldRequirements.md` — Export 타입(New Leads/MTA/IC Funnel/SAL)별로 Salesforce에서 뽑아야 하는 필드 목록·필수 여부·day-first 날짜 보호 필요 여부 정리, 2026-09-04 작성
 
 ## 현재 알려진 미해결 항목
 

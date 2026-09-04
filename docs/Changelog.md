@@ -62,6 +62,47 @@ School Name이 리스트에 없는 경우를 학교 단위로 집계해 `Not_Str
 편입/역방향 양성 케이스 검증은 다음 주 월요일(2026-09-07) 예정** — 상세:
 `docs/exec-plans/active/2026-09-04-p1-school-mismatch-check.md`.
 
+## getBusinessSegment() SEARCH_CATCHALL 순서 버그 수정 + 데이터/하위 캐시 반영 (`docs/OpenItems.md` #29)
+
+Node vm으로 전체 회귀 테스트를 돌리다 이미 실패 상태였던 3개(`testGetBusinessSegmentContentBeatsGenericContactForm`/
+`testGetBusinessSegmentSearchCampaignSignals`/`testGetBusinessSegmentContactFallbackToBOFU`)를 조사 —
+`SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES`(leadSource="paid social" 등 → "Other", 2026-07-29 추가)가
+campaign의 "_contact"/"consult" 확정 신호 fallback(2026-07-28 확정, leadSource로 BOFU/Search 최종
+판별)보다 먼저 체크되고 있어 fallback에 도달을 못 하던 순서 버그로 확정. campaign fallback을 먼저
+체크하도록 이동(`UTIL_001_TransformHelper.js` v1.21.0), 모순되던 stale 테스트 기대값 1건도 정정.
+`TEMPQA_047_PaidSocialContactFallbackOrderDiagnostic.js`(신규, 읽기 전용)로 실측한 영향 범위
+(Leads_Master 17건/MTA_Master 42건, 전부 Paid Social + `_contact`/`consult`/`book-a-consult`
+캠페인 → Other에서 BOFU로 재분류 예상)를 사용자 확인 후 `TEMPQA_048_PaidSocialContactFallbackOrderRepair.js`
+(신규, 1회성)로 기존 Master 데이터에도 직접 반영(정확히 17건/42건 갱신, 예측치와 일치). 이어서
+`runLeadsPipelineTail()`/`runMTAPipelineTail()`을 수동 재실행해 Leads_OPS/Events·BOFU·Search·
+Content_OPS/Engine 6종/리포트 5종까지 전부 하위 캐시 반영 — 둘 다 에러 없이 완주해 #9(비동기
+파이프라인 재설계)의 "체인이 끝까지 안전하게 도는지" 잔여 검증 항목도 부수적으로 확보.
+
+## Salesforce 필드 요구사항 문서화 (`docs/OpenItems.md` #45)
+
+`docs/SalesforceFieldRequirements.md` 신규 — `CORE_001_Config.js`의 `REQUIRED_FIELDS`/
+`RAW_DATE_COLUMNS`/`IC_FUNNEL.COLUMNS`/`SAL.COLUMNS`와 각 Transformer/Sync 파일을 직접 읽어
+Export 타입(New Leads/MTA/IC Funnel/SAL)별 필드 목록·필수 여부·day-first 날짜 보호 필요 여부를
+표로 정리. CLAUDE.md 문서 목록에도 등록.
+
+## Marketo_QA — Program_Segment_Dictionary 특이 분류 모니터링 신규 (`docs/OpenItems.md` #34)
+
+`Program_Segment_Dictionary`(자동 다수결 딕셔너리)가 소수 오분류를 조용히 전파할 위험을 사람이
+주기적으로 검토할 수 있도록 `UTIL_004_DictionaryQA.js` 신규 — 확신도 낮은 신규 Program 키/다수결
+뒤집힌 기존 키/애매한 키(Distinct Segment Count>1) 3종을 `Marketo_QA` 시트에 플래깅, 12시간 주기
+딕셔너리 갱신 트리거(`periodicRefreshDictionaries_()`)에 자동 편입. 같은 세션에서 사용자 피드백
+3라운드로 반복 개선: (1) Override 입력 위치를 별도 시트에서 `Marketo_QA` 자체의 컬럼으로 재설계,
+(2) 판정 근거 컬럼(Anomaly Type/Match·Total Count 등) 제거하고 4개 컬럼(Program/UTM/현재 Segment/
+Override)으로 표시 간소화, (3) 여러 UTM Campaign이 하나의 Program(detail 텍스트)으로 뭉치는 실제
+사례를 사용자가 지적해 `explodeAnomaliesByUtm_()`로 UTM별 개별 행으로 펼치고 UTM 단위 override
+저장소(`UTM_Segment_Override`, `resolveBusinessSegment_()`가 Program 딕셔너리보다도 우선 적용)를
+신규 추가, Override 컬럼도 자유 텍스트 대신 Data Validation 드롭다운으로 전환. 배포 직전 실측 중
+발견한 버그 2건(UTM 단위 재플래깅 필터가 기존 Program 단위 확정을 놓치던 오탐, 존재하지 않는
+`sheet.clearDataValidations()` 호출)도 즉시 수정. 최종 실측(`runCheckProgramSegmentDictionaryAnomalies()`
+반복 재실행): 2,853개 Program 키 → 148개 anomaly → UTM 단위 517행 explode → override 13행 제외 →
+최종 504행 플래깅, 에러 없이 정상 완료. override 입력→캡처→딕셔너리 반영→재플래깅 제외 전체 왕복
+흐름도 사용자가 직접 3건 입력해 실사용 검증 완료.
+
 # Changelog — 2026-09-03
 
 ## 파이프라인 성능 및 구조 비효율 개선 계획 수립 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)

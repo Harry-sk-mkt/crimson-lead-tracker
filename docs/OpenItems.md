@@ -26,6 +26,15 @@
    정상 갱신되는지, 락 충돌·재시도(`runRetryPipelineTail()`)가 의도대로 동작하는지 — 확인 전까지
    완료로 간주하지 말 것. 아래는 설계 당시 기록(참고용, 최신 구현과 세부 함수명이 다를 수 있음 —
    실제 구현은 위 exec-plan 참고).
+   **2026-09-04 부분 검증**: #29(getBusinessSegment 순서버그) 수정분을 기존 Master 데이터에
+   반영하는 과정에서 `runLeadsPipelineTail()`/`runMTAPipelineTail()`을 수동으로(트리거 경유가
+   아니라 Apps Script 편집기에서 직접 Run) 실행 — 둘 다 각 단계(dedup/OPS Build/Engine 6종/
+   OPS 시트 재작성/Ad Spend/Target Actuals/리포트 Generate 5종)를 에러 없이 끝까지 완주,
+   `[TIMING]` 로그로 단계별 소요시간도 정상 기록됨(Leads tail ~12분/MTA tail ~10분, 30분
+   실행시간 제한 내 여유 있게 완료) — **"체인 자체가 끝까지 안전하게 도는지"는 이걸로 검증된
+   것으로 볼 수 있음**. 다만 `appendNewLeads()`/`appendNewMTA()` → 락 확인 → 트리거 설치 →
+   트리거 자동 발동 경로 자체는 이번에 거치지 않았음(직접 tail 함수를 Run) — README Pipeline
+   Status 갱신/락 충돌·재시도 동작까지는 여전히 미검증이라 완료로 간주하지 말 것.
    **2026-08-05 실사용 검증 중 발견·수정**: 20번 항목(ACQ_REP New P1 불일치) 조사 과정에서
    신뢰성 버그 발견 — 중복 정리 등 한 스테이지의 실행 시간이 길어지다 Apps Script
    플랫폼이 실행을 강제 종료하면, 최상위 try/catch(JS 예외 전용)가 개입 못 해
@@ -359,21 +368,36 @@
     Content용으로 만든 `runAuditContentSegmentDeadKeys()`/`runDeleteDeadContentOPSRows()`
     (`CONTENT_002_Engine.js`)와 동일한 패턴의 Events 전용 함수가 아직 없음. 다음 세션에
     필요 시 Events 버전을 만들어 확인할 것 — 임의로 처리하지 말 것.
-29. **`getBusinessSegment()` leadSource="Paid Social" 관련 회귀 테스트 3개 — 이번 변경과
-    무관하게 이미 실패 상태였음이 발견됨(2026-08-25), 원인/해결 미착수** —
-    `testGetBusinessSegmentContentBeatsGenericContactForm()`/
-    `testGetBusinessSegmentSearchCampaignSignals()`/
-    `testGetBusinessSegmentContactFallbackToBOFU()`(`UTIL_001_TransformHelper.js`) 3개가
-    campaign 예외 가드 수정(v1.17.0) 검증 중 Node vm으로 전체 테스트 스위트를 돌려보다가
-    발견됨 — `git show HEAD:UTIL_001_TransformHelper.js`(이번 세션 변경 전 커밋)로도 동일하게
-    FAIL 확인, 이번 세션 변경과 무관한 기존 버그. **원인(가설)**: leadSource가 "Paid Social"인
-    경우 `SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES["paid social"] = "Other"`가 campaign의
-    "_contact"/"consult" 기반 BOFU/Search fallback(leadSource로 최종 판별하는 블록)보다
-    먼저 체크되어, 테스트가 기대하는 "BOFU"/"Search" 대신 "Other"가 반환됨 — 두 블록의
-    의도된 우선순위가 서로 다른 세션에서 각각 확정된 뒤 조율 안 된 것으로 추정(미확정).
-    실제 라이브 데이터에 영향 있는지(Leads_Master/MTA_Master의 Paid Social 리드가 실제로
-    Other로 잘못 떨어지고 있는지) 아직 확인 안 됨 — 다음 세션에 실측 확인 후 처리 방향
-    결정할 것, 임의로 처리하지 말 것.
+29. ~~`getBusinessSegment()` leadSource="Paid Social" 관련 회귀 테스트 3개 FAIL~~ — **✅ 원인
+    확정·수정 완료(2026-09-04)**. 원인: `SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES["paid social"/
+    "affiliate organization"/"offline outreach"] = "Other"`(2026-07-29 추가)가 campaign의
+    "_contact"/"consult" 기반 BOFU/Search fallback(2026-07-28 확정)보다 먼저 체크되고 있어
+    fallback에 도달을 못 하던 순서 버그(가설 그대로 확정) — "Organic Content"→"Content"
+    매핑만 이 fallback과 충돌이 없어 원래 위치 유지, 나머지 3개(→"Other")만 fallback 뒤로
+    이동(`UTIL_001_TransformHelper.js` v1.21.0). **실측 영향 범위 확인 후 진행**:
+    `TEMPQA_047_PaidSocialContactFallbackOrderDiagnostic.js`(신규, 읽기 전용)로 사용자가
+    직접 Run — Leads_Master 36,680건 중 17건/MTA_Master 85,384건 중 42건이 영향 대상(전부
+    "_contact"/"consult"/"book-a-consult" 캠페인의 Paid Social 리드, Other→BOFU로 재분류
+    예상), 샘플 확인 후 사용자 승인 얻고 진행. `testGetBusinessSegmentContentBeatsGenericContactForm()`
+    의 stale 기대값 1건도 함께 정정(`testGetBusinessSegmentResearchSubstringFix()`의 동일
+    입력 기대값과 모순돼 있었음 — 더 최신인 후자 기준으로 정정). Node vm 하네스로
+    getBusinessSegment 관련 테스트 14개 전부 PASS 확인, `check-syntax`/`check-naming`/
+    `check-version-header`/`check-duplicate-declarations` 전부 통과, push 완료.
+    **✅ 기존 데이터 소급 반영 완료(2026-09-04)** — Full Rebuild 대신 이번 순서버그 영향분만
+    정확히 타겟팅하는 1회성 Repair 스크립트로 진행(사용자 확정, 더 큰 범위인 #22의 dictionary
+    drift 소급 적용과는 별도 사안으로 분리 유지). `TEMPQA_048_PaidSocialContactFallbackOrderRepair.js`
+    (신규, TEMPQA_047과 동일 판정 조건 재사용)의 `runRepairPaidSocialContactFallbackOrderSegments()`
+    실행 결과 Leads_Master 17건/MTA_Master 42건 갱신(TEMPQA_047 실측치와 정확히 일치),
+    Business Segment 컬럼만 "Other"→"BOFU"로 직접 수정(Raw는 안 건드림).
+    **✅ 하위 캐시 반영도 완료(2026-09-04)** — `MASTER_002_PipelineAsync.js`의
+    `runLeadsPipelineTail()`/`runMTAPipelineTail()`(둘 다 "트리거 대상 + 수동 재실행
+    진입점"으로 설계돼 있어 직접 Run 가능, #9 참고)를 순서대로 수동 실행 — 각각 에러 없이
+    `Execution completed`로 완주(Leads tail 약 12분/MTA tail 약 10분). buildLeadsOPS/
+    Events·BOFU·Search·Content_OPS 재작성/ACQ·NewP1·Events·BOFU·Search·Content Engine
+    6종/ACQ_REP·NewP1_REP·Target_REP·S&M_REP·FY_REP 리포트 5종 전부 정상 재생성 확인 —
+    이 두 실행이 **#9(비동기 파이프라인 재설계) 잔여 검증 항목의 "체인이 끝까지 안전하게
+    도는지"도 함께 검증**(단, `appendNewLeads()`/`appendNewMTA()` 경유 시의 트리거 설치/
+    자동 발동 경로까지 검증한 것은 아니므로 #9는 계속 별도 미해결로 유지).
 30. **BOFU_OPS/Content_OPS Meta 매칭 커버리지 부족 — 자동화 자체는 정상, 딕셔너리가 못
     찾는 프로그램은 여전히 공란/0(2026-08-25)** — Spent/Campaign/Off-On/Start Date/End
     Date/Impressions/Reach/Link clicks/Results를 Meta_Raw 자동 집계로 전환했으나(`BOFU_004_
@@ -496,21 +520,90 @@
     **미해결**: 이게 "IC 단계를 정상적으로 건너뛰는 케이스"(예: 재신청/기존 고객 등)인지
     "원래 있어야 하는데 기록 누락"인지 판단 불가 — Salesforce 프로세스/데이터 지식이 필요한
     질문이라 다음 세션으로 보류(사용자 결정, 2026-08-26). 임의로 처리하지 말 것.
-34. **Business Segment 딕셔너리("Lead 유입 → Dictionary 조회 → Business Segment 분류")의
-    "특이 분류" 모니터링 프로세스 구축 필요 — 미착수(2026-08-26 사용자 요청)** —
-    `Program_Segment_Dictionary`는 자동 채굴(다수결)이라, 오늘처럼 딕셔너리가 이미 검증된
-    확정 신호를 근거 없이 덮어쓰는 사고가 또 발생할 수 있음(`resolveDefiniteBusinessSegment_()`
-    로 확정 신호는 우선권을 갖도록 막아뒀지만, 그 확정 신호 밖에 있는 fallback 영역에서는
-    여전히 다수결이 소수 오분류를 그대로 학습해 전파할 위험이 구조적으로 남아있음 —
-    `docs/BusinessSegmentClassification.md` 2026-08-26 항목 참고). 매 딕셔너리 갱신
-    (`periodicRefreshDictionaries_()`, 12시간 주기)마다 "이번에 새로 추가/변경된 Program→
-    Segment 매핑 중 확신도가 낮거나(matchCount/totalCount 비율 낮음) 이전 갱신과 값이
-    달라진 항목"을 사람이 주기적으로 육안 검토할 수 있는 리포트/알림 체계가 필요 —
-    구체적 설계(별도 진단 시트로 뽑을지, 이메일/Slack 알림을 붙일지, 얼마나 자주 볼지 등)는
-    미정, 다음 세션에 설계 착수. 참고: `TEMPQA_034_BusinessSegmentDictionaryDiff.js`가
-    지금은 1회성 수동 diff 진단이라 이 목적에 가장 가까운 기존 코드 — 이걸 정기 모니터링
-    체계로 발전시키는 방향이 유력해 보이나 확정 아님, 임의로 설계하지 말고 사용자와 먼저
-    논의할 것.
+34. ~~Business Segment 딕셔너리("Lead 유입 → Dictionary 조회 → Business Segment 분류")의
+    "특이 분류" 모니터링 프로세스 구축~~ — **✅ 설계·구현·실측 검증 완료(2026-09-04)**.
+    사용자와 방향 먼저 논의 후 진행 — 플래깅 대상 3종 전부 확정: (1) 확신도 낮은
+    (matchCount/totalCount < 70%) 신규 Program 키, (2) 다수결이 뒤집힌 기존 키, (3) 애매한
+    키(Distinct Segment Count > 1, 이미 소비처에선 자동 제외되지만 사람이 해결 전까진 매
+    사이클 계속 플래깅). 출력 위치는 신규 시트 `Marketo_QA`(사용자 확정 이름). 구현:
+    `UTIL_004_DictionaryQA.js` 신규 — `detectProgramSegmentDictionaryAnomalies_()`(순수
+    함수, 이전/이후 스냅샷 비교) + `readAllProgramSegmentDictionaryEntries_()`(필터 없이
+    5개 core 컬럼 전체 리더, 기존 `readProgramSegmentDictionaryMap_()`은 애매한 키를
+    걸러내므로 재사용 불가) + `writeMarketoQASheet_()`(Leads_OPS_QA/P1_School_Mismatch_QA와
+    동일한 clear+재작성 스냅샷 관행) + `refreshProgramSegmentDictionaryWithAnomalyCheck_()`
+    (갱신 자체는 격리 없이 실패 전파, diff+쓰기 단계만 try/catch로 격리). `CONFIG.MARKETO_QA`
+    (`CORE_001_Config.js` v1.64.0, `SHEET`/`LOW_CONFIDENCE_THRESHOLD=0.7`) 신규.
+    `periodicRefreshDictionaries_()`(`UTIL_002_UtmProgramDictionary.js` v1.10.0, 12시간
+    주기 트리거 기존 설치돼 있어 재설치 불필요)의 `refreshProgramSegmentDictionaryIncremental_()`
+    단독 호출을 `refreshProgramSegmentDictionaryWithAnomalyCheck_()`로 교체해 자동 편입.
+    Node vm으로 `testDetectProgramSegmentDictionaryAnomalies()` PASS, `check-syntax`/
+    `check-naming`/`check-version-header`/`check-duplicate-declarations` 전부 통과, push
+    완료. **실 시트 검증(2026-09-04, `runCheckProgramSegmentDictionaryAnomalies()` 수동
+    실행)**: 전체 2,853개 Program 키 중 153건(5.4%) 플래깅, 에러 없이 정상 완료.
+    **Override 반영 방식 — 최초 설계 후 사용자 재요청으로 즉시 재설계(2026-09-04, 같은
+    세션)**: 최초엔 별도 시트(Program_Segment_Override)에 사람이 직접 입력하는 방식으로
+    구현했으나, 사용자가 "QA탭에서 컬럼 하나 추가하는 걸 생각했다"고 재요청 — `Marketo_QA`
+    자체의 마지막 컬럼("Override (직접 입력)")에서 바로 입력하도록 전환.
+    `readMarketoQAOverrideColumnValues_()`(clear 직전에 그 컬럼값 캡처, 순서가 핵심 —
+    바뀌면 입력값이 반영 전에 날아감)/`mergeProgramSegmentOverrides_()`(순수 함수)/
+    `writeProgramSegmentOverrideMap_()`(병합 결과를 내부 저장소에 자동 동기화) 신규 —
+    `Program_Segment_Override` 시트는 이제 사람이 직접 관리하는 시트가 아니라 Marketo_QA
+    컬럼값이 매 사이클 자동 동기화되는 내부 누적 저장소로 성격 변경(직접 편집도 여전히
+    지원 — 다음 병합 시 보존됨). UTM 표시도 같은 세션에 함께 요청·구현: Marketo_QA에
+    "UTM Campaign(s)" 컬럼(Program당 매칭 UTM 최대 5개 샘플, `UTM_Program_Dictionary`
+    역인덱싱) 추가. Node vm으로 신규 테스트(`testBuildProgramToUtmCampaignsMap`/
+    `testAttachUtmCampaignsToAnomalies`/`testFilterOutOverriddenProgramAnomalies`/
+    `testMergeProgramSegmentOverrides`) 전부 PASS, 재설계 후 `runCheckProgramSegmentDictionaryAnomalies()`
+    재실행 결과 148건 플래깅, 에러 없이 정상 완료(신규 10번째 컬럼 정상 반영 확인).
+    **✅ 표시 간소화 + 단일/복수 UTM 정렬 + override 왕복 실사용 검증 완료(2026-09-04, 같은
+    세션 후속 요청)** — 사용자 요청: (1) "실제 판단에 필요한건 marketo program, utm,
+    business segment (현재)면 충분해" → `Marketo_QA` 컬럼을 4개(Marketo Program/UTM
+    Campaign(s)/Business Segment (현재)/Override (직접 입력))로 축소, 판정 근거(Anomaly
+    Type/이전 Segment/Match·Total Count/Confidence/Distinct Segment Count)는 내부 로직만
+    쓰고 화면엔 안 보임 — Anomaly Type이 사라지며 한 Program이 여러 사유로 중복 표시되던
+    문제를 `dedupeAnomaliesByProgram_()`(순수 함수, 신규)로 Program당 1행만 남겨 해소.
+    (2) "UTM이 단일인 것과 아닌 것을 구분할 필요가 있다 — 여러 개 묶인 건 하나하나 검토,
+    단일 오분류는 바로 분류 가능" → `attachUtmCampaignsToAnomalies_()`에 `utmCount`(원본
+    개수) 필드 추가, `sortAnomaliesForReview_()`(순수 함수, 신규)로 UTM 개수 오름차순(단일
+    먼저) → Program 알파벳순 정렬. `readMarketoQAOverrideColumnValues_()`는 고정 컬럼
+    인덱스 대신 **그 순간 실제 시트 헤더 텍스트**로 컬럼을 찾도록 전환(컬럼 레이아웃이
+    10개→4개로 바뀌는 배포 중에도 사용자가 예전 레이아웃에 이미 입력해둔 override 값이
+    안전하게 캡처되도록). Node vm으로 신규 테스트(`testDedupeAnomaliesByProgram`/
+    `testSortAnomaliesForReview`) 포함 전체 7개 PASS. **실사용 왕복 검증(2026-09-04,
+    사용자 직접 수행)**: 사용자가 `Marketo_QA`에서 3건을 미리 override 입력 →
+    `runCheckProgramSegmentDictionaryAnomalies()` 재실행 → 로그 "148건 플래깅" →
+    "145건 플래깅(override로 제외된 3건, 이번 사이클 신규 캡처된 override 3건)"으로 정확히
+    3건 감소, 사용자가 시트에서 해당 3건이 실제로 사라진 것 육안 확인 — override 입력→
+    캡처→딕셔너리 반영→재플래깅 제외 전체 왕복 흐름 실사용 검증 완료.
+    **✅ UTM 단위 explode + override selector 드롭다운 추가 완료(2026-09-04, 같은 세션
+    최종 요청)** — 사용자가 실제 사례 3건(`ca_cgahq_2024-03-06_search-curriculum-courses_contact`
+    등)을 짚으며 "여러 UTM이 섞인 Program은 하나로 override하면 안 되고 UTM별로 따로
+    분류해야 한다"고 지적 → 설계: UTM이 1개 이상 매칭되는 Program은 UTM별로 행을 펼치고
+    (매칭 UTM이 없는 Program만 Program 단위 행 유지), override도 UTM 단위/Program 단위
+    이원화. 구현: `attachUtmCampaignsToAnomalies_()`(joined 문자열)를 `explodeAnomaliesByUtm_()`
+    (UTM별 개별 행, 순수 함수)로 교체, `sortAnomaliesForReview_()`는 UTM 개수 정렬 대신
+    program→utm 알파벳순으로 단순화(explode 후엔 모든 행이 이미 원자적). UTM 단위
+    override 저장소 `UTM_Segment_Override`(`CONFIG.MARKETO_QA.UTM_OVERRIDE_SHEET`) 신규 —
+    `resolveBusinessSegment_()`(`UTIL_002_UtmProgramDictionary.js` v1.12.0)가 이 값을
+    Program 딕셔너리/확정 신호보다도 먼저 최우선 적용. `filterOutOverriddenProgramAnomalies_()`
+    를 `filterOutOverriddenRows_()`(UTM/Program 겸용)로 교체, `mergeProgramSegmentOverrides_()`
+    는 도메인 무관 범용 함수라 `mergeOverrideMaps_()`로 개명(Program/UTM 양쪽 재사용).
+    **Override selector**(사용자 요청 — "클릭변경이 가능하게"): `CONFIG.MARKETO_QA.
+    BUSINESS_SEGMENT_OPTIONS`(getBusinessSegment() 실제 반환값 전체를 grep으로 확인해
+    나열) 기반 Data Validation(드롭다운)을 "Override (직접 입력)" 컬럼에 적용, 자유
+    텍스트 입력 차단. **배포 직전 발견·수정한 버그 2건**: (1) `filterOutOverriddenRows_()`
+    가 UTM 단위 행을 UTM override map으로만 판단하면, 이미 Program 단위로 확정해둔
+    항목이 그 Program에 매칭되는 UTM이 있다는 이유만으로 재플래깅되는 오탐 발견 — UTM
+    단위 행도 Program override map을 먼저 확인하도록 수정. (2) 실측 중
+    `sheet.clearDataValidations is not a function` 에러 발견(Sheet에 없는 메서드,
+    Range에만 존재) — `sheet.getRange(1,1,maxRows,maxCols).clearDataValidations()`로
+    수정. Node vm으로 신규 테스트(`testExplodeAnomaliesByUtm`/`testMergeOverrideMaps`/
+    `testFilterOutOverriddenRows`) 포함 전체 7개 PASS. **실측 검증(2026-09-04,
+    `runCheckProgramSegmentDictionaryAnomalies()` 재실행)**: 에러 없이 정상 완료 — Program
+    148개 anomaly가 UTM 단위로 517행까지 explode, override로 제외된 13행(기존에 확정해둔
+    3개 Program에 속한 UTM들 — 버그 수정이 실제로 작동함을 실측으로 재확인), 최종 504행
+    플래깅. **잔여**: `LOW_CONFIDENCE_THRESHOLD`(70%) 자체가 적정한지, 드롭다운 선택 →
+    override 반영이 실제로 매끄러운지는 계속 사용해보며 판단.
 35. **New P1 8월 갭(279 vs 267) — `Lead Priority` 필드 스냅샷 지연 확인·부분 해결(2026-08-28),
     나머지는 사용자 액션 대기(TODO)** — 사용자가 제공한 Salesforce 8월 New Leads CSV(739건,
     Priority 1=279건)를 `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`로 대조한 결과 10건이
@@ -859,16 +952,16 @@
     `refreshACQSummary_()`(및 나머지 Engine들)를 "SAL 파생 부분만 부분 갱신" 가능하게
     쪼개야 하는데, 이건 그 자체로 별도 설계/구현 작업 — 오늘(#39 Revenue 매칭 실패 조사 중
     파생된 S&M_REP 성능 개선) 범위에는 포함하지 않기로 함. 임의로 처리하지 말 것.
-45. **Salesforce에서 추출해야 할 필드값을 리포트(Export 타입)별로 정리 — 사용자 요청, 미착수(TODO)**
-    (2026-09-03, Master_DB Raw 이관 세션 중 메모) — 지금은 각 Export 타입(New Leads/MTA/IC
-    Funnel/SAL)이 어떤 Salesforce 필드를 필요로 하는지가 `CORE_001_Config.js`의
-    `REQUIRED_FIELDS`/`RAW_DATE_COLUMNS`/각 Transformer(`MASTER_006_LeadTransformer.js`/
-    `MASTER_007_MTATransformer.js`)/`MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`
-    코드 여기저기에 흩어져 있어, "이 리포트를 만들려면 Salesforce에서 정확히 어떤 필드를
-    뽑아야 하는가"를 한눈에 보려면 코드를 전부 훑어야 함. 리포트별(New Leads Export/MTA
-    Export/IC Funnel Export/SAL Export)로 필요한 Salesforce 필드 목록을 정리하는 문서화
-    작업 — 어느 문서에 정리할지, 필드별로 "어느 다운스트림 리포트/컬럼이 이 필드를 쓰는지"까지
-    역추적해서 정리할지는 착수 시 확인. 임의로 처리하지 말 것.
+45. ~~Salesforce에서 추출해야 할 필드값을 리포트(Export 타입)별로 정리~~ — **✅ 문서화
+    완료(2026-09-04)**. `docs/SalesforceFieldRequirements.md` 신규 — `CORE_001_Config.js`의
+    `REQUIRED_FIELDS`/`RAW_DATE_COLUMNS`/`IC_FUNNEL.COLUMNS`/`SAL.COLUMNS`와 각 Transformer/
+    Sync 파일(`MASTER_006_LeadTransformer.js`/`MASTER_007_MTATransformer.js`/
+    `MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`)을 직접 읽어 Export 타입(New
+    Leads/MTA/IC Funnel/SAL)별 필드 목록·필수 여부·day-first 날짜 보호 필요 여부를 표로
+    정리, 공통 주의사항(day-first 보호 누락 시 영구 손상 위험, Raw 헤더 미반영 시 조용한
+    드롭 위험)도 함께 기록. **범위 결정(착수 시 확정)**: 필드별 다운스트림 리포트/컬럼
+    역추적은 하지 않음(Business Segment 등 다수 리포트에 영향을 주는 필드가 많아 과도한
+    범위 확장으로 판단) — 대신 파생 컬럼 단위로 용도만 요약. CLAUDE.md 문서 목록에도 등록.
 46. **자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인 tail이 느려짐 —
     실측으로 발견, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 검증 세션 중 발견) —
     `runICFunnelPipelineTail()` 실행이 19분 넘게 걸려 원인 조사 중 확인. `handleReportGenerateEdit`

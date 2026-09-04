@@ -9,9 +9,26 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.63.0
+ * v1.66.0
  *
  * Change Log
+ * v1.66.0 (2026-09-04)
+ * - **`MARKETO_QA.UTM_OVERRIDE_SHEET`/`BUSINESS_SEGMENT_OPTIONS` 신규**
+ *   (`docs/OpenItems.md` #34 후속, 사용자 요청) — (1) 여러 UTM이 하나의
+ *   Program으로 묶이는 경우 Program 단위 override로는 부족해 UTM 단위
+ *   override 저장소("UTM_Segment_Override") 추가, (2) Marketo_QA "Override
+ *   (직접 입력)" 컬럼을 자유 텍스트 대신 드롭다운(Data Validation)으로
+ *   제한할 선택지 목록.
+ * v1.65.0 (2026-09-04)
+ * - **`MARKETO_QA.OVERRIDE_SHEET` 신규**(`docs/OpenItems.md` #34 후속, 사용자
+ *   요청) — Marketo_QA 검토 후 사람이 직접 확정한 Business Segment를 영구
+ *   보존하는 시트명("Program_Segment_Override"). 자동 다수결보다 우선,
+ *   재플래깅 제외 대상(둘 다 사용자 확정).
+ * v1.64.0 (2026-09-04)
+ * - **`MARKETO_QA` 신규**(`docs/OpenItems.md` #34) — Program_Segment_Dictionary
+ *   "특이 분류" 모니터링(`UTIL_004_DictionaryQA.js` 신규)의 대상 시트명/확신도
+ *   임계값. 사용자 확정: 플래깅 대상 3종(확신도 낮은 신규 키/다수결 뒤집힘/
+ *   애매한 키) 전부, 출력 시트명 "Marketo_QA".
  * v1.63.0 (2026-09-04)
  * - **`ACQ.AD_SPEND_CACHE_EXTERNAL` 신규**(`docs/OpenItems.md` #49) —
  *   `Ad_Spend_Cache`를 Master_DB 폴더 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가
@@ -547,6 +564,45 @@ const CONFIG = {
      */
   DICTIONARY_REFRESH: {
     PERIODIC_INTERVAL_HOURS: 12
+  },
+
+  /**
+     * MARKETO_QA — Program_Segment_Dictionary "특이 분류" 모니터링(2026-09-04
+     * 신규, docs/OpenItems.md #34). `periodicRefreshDictionaries_()`
+     * (UTIL_002_UtmProgramDictionary.js) 매 12시간 갱신마다 이전 사이클과
+     * 비교해 (1) 확신도 낮은 신규 Program 키, (2) 다수결이 뒤집힌 기존 키,
+     * (3) 애매한 키(Distinct Segment Count > 1)를 `Marketo_QA` 시트에
+     * 플래깅(UTIL_004_DictionaryQA.js). LOW_CONFIDENCE_THRESHOLD는 튜닝
+     * 가능한 휴리스틱 기본값(70%) — 실측 후 플래깅 건수가 너무 많거나
+     * 적으면 조정할 것, 임의로 확정된 값 아님.
+     */
+  MARKETO_QA: {
+    SHEET: "Marketo_QA",
+    LOW_CONFIDENCE_THRESHOLD: 0.7,
+    // 2026-09-04 추가(사용자 요청 — "QA 시트에서 수정한 걸 딕셔너리에 어떻게
+    // 반영하나") — 사람이 Marketo_QA 검토 후 직접 확정한 Business Segment를
+    // 영구 보존하는 시트명. 자동 다수결(Program_Segment_Dictionary)보다 항상
+    // 우선(readProgramSegmentDictionaryMap_(), UTIL_002_UtmProgramDictionary.js
+    // v1.11.0), override된 Program은 Marketo_QA 재플래깅 대상에서도 제외됨
+    // (UTIL_004_DictionaryQA.js). 사람이 직접 편집하는 시트라 자동 갱신 코드가
+    // 절대 clearContents/재작성하지 않음 — Program_Segment_Dictionary(자동
+    // 다수결 캐시, 매 사이클 통째로 재작성)와 반드시 구분할 것.
+    OVERRIDE_SHEET: "Program_Segment_Override",
+    // 2026-09-04 추가(사용자 요청 — "여러 UTM이 섞인 Program은 UTM별로 따로
+    // 분류해야 한다") — 한 Program(detail 텍스트)에 여러 UTM Campaign이 같이
+    // 매칭될 수 있는데, 그중 실제로는 서로 다른 캠페인이 섞여있으면 Program
+    // 단위 override 하나로는 구분이 안 됨. Marketo_QA가 UTM이 1개 이상
+    // 매칭되는 Program은 UTM별로 행을 펼쳐 보여주고(UTIL_004_DictionaryQA.js
+    // `explodeAnomaliesByUtm_()`), 그 UTM 단위 확정값을 저장하는 시트명 —
+    // Program 단위(OVERRIDE_SHEET)보다 우선 적용(UTM이 더 구체적인 신호).
+    UTM_OVERRIDE_SHEET: "UTM_Segment_Override",
+    // 2026-09-04 추가(사용자 요청 — "Override에는 selector가 나오도록, 그냥
+    // 클릭변경이 가능하게") — Marketo_QA의 "Override (직접 입력)" 컬럼에
+    // Data Validation(드롭다운)으로 강제할 선택지. `getBusinessSegment()`
+    // (UTIL_001_TransformHelper.js)가 실제 반환하는 값 전체를 grep으로 확인해
+    // 그대로 나열한 것(Referral/Seminar/Webinar/Search/BOFU/Content/Other/
+    // N/A) — 새 Segment 종류가 코드에 추가되면 이 배열도 같이 갱신할 것.
+    BUSINESS_SEGMENT_OPTIONS: ["BOFU", "Content", "N/A", "Other", "Referral", "Search", "Seminar", "Webinar"]
   },
 
   /**
