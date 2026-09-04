@@ -2,8 +2,8 @@
 
 **관련 로드맵 항목**: `docs/OpenItems.md` #48 (2026-09-03 등록)
 **시작일**: 2026-09-04
-**상태**: 코드 작성 완료(2026-09-04), 순수 함수 단위 테스트 PASS, clasp push 전 —
-실 Import/실 트리거 실행 검증 아직.
+**상태**: 코드 작성 + clasp push + 수동 실행/육안 검증 전부 완료(2026-09-04) —
+남은 건 실제 Leads Import 1회로 파이프라인 자동 편입 단계 확인뿐.
 
 ## Goal
 
@@ -43,12 +43,16 @@ Leads_OPS를 매 Leads Import마다 자동으로 대조해, 리스트엔 P1 학�
       `runP1SchoolMismatchCheck_()`가 "run+trailing _" 패턴으로 걸림 →
       `performP1SchoolMismatchCheck_()`로 개명(실제 수동 Run 진입점은
       `runCheckP1SchoolMismatch()` 그대로 유지)
-- [ ] **차단 — clasp push 및 실 Import 실행 검증 아직**: 다음 세션 시작점 —
-      (1) `scripts/safe-clasp-push.sh`, (2) `runCheckP1SchoolMismatch()` 수동 실행해
-      `P1_School_Mismatch_QA` 시트가 정상 생성되고 값이 그럴듯한지 확인(사용자가 P1
-      School List를 보고 실제 학교 몇 개가 맞게 잡히는지 육안 대조), (3) 실제 Leads
-      Import 한 번 실행해 파이프라인 자동 단계로도 정상 동작하는지 확인(README Pipeline
-      Status 또는 Execution 로그에서 `checkP1SchoolMismatch_` 단계 확인).
+- [x] `scripts/safe-clasp-push.sh` 완료
+- [x] **수동 실행 + 육안 검증 완료(2026-09-04, 사용자 확인)** — `runCheckP1SchoolMismatch()`
+      실행 결과: "P1 학교 572개(별칭 포함) / Leads_OPS 36628건 대조 — 불일치 2116건
+      P1_School_Mismatch_QA에 기록", 에러 없음. 사용자가 상위 10건 육안 대조 —
+      "전부 있는학교 맞아"(School Name 매칭 정확도 확인, 오탐 없음). 불일치 건수(2116/36628,
+      약 5.8%)는 오래 누적된 미교정 리드로 판단, 매칭 로직 문제 아님.
+- [ ] **남은 검증**: 실제 Leads Import 한 번 실행해 `runLeadsPipelineTail()`의
+      `checkP1SchoolMismatch_` 단계가 자동으로 정상 동작하는지 확인(README Pipeline
+      Status 또는 Execution 로그) — 지금까지는 수동 진입점(`runCheckP1SchoolMismatch()`)
+      만 검증됨, 파이프라인 자동 편입 자체는 아직 실측 전.
 
 ## Surprises & Discoveries
 
