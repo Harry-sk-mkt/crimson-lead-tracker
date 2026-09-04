@@ -32,9 +32,14 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v4.1.0
+ * v4.2.0
  *
  * Change Log
+ * v4.2.0 (2026-09-05)
+ * - **`onFYReportEdit_()`에 `isPipelineTailRunning_()` 가드 추가**
+ *   (`docs/OpenItems.md` #46) — installable onEdit이 파이프라인 tail 자신의
+ *   리포트 시트 쓰기에도 재발동해 Apps Script 락 경합으로 Engine 구간이
+ *   2~3배 느려지던 문제 수정. 상세: `MASTER_002_PipelineAsync.js` v1.29.0.
  * v4.1.0 (2026-08-20)
  * - 사용자 피드백("3번째는 subtotal, 4번째는 헤더 이렇게 나와야해") 반영 —
  *   헤더 라벨+SUBTOTAL 겸용 1행(3행) 설계를 2행으로 분리: 3행=SUBTOTAL 값만
@@ -538,6 +543,12 @@ function setupFYReport(){
 function onFYReportEdit_(e){
 
   if(!e || !e.range) return;
+
+  // docs/OpenItems.md #46 — installable onEdit은 파이프라인 tail 자신의
+  // 리포트 시트 쓰기에도 재발동한다. 지금 파이프라인 tail이 실행 중이면
+  // 이 호출은 사람의 체크박스 클릭이 아니라 그 재발동일 가능성이 높으므로
+  // 즉시 반환(isPipelineTailRunning_(), MASTER_002_PipelineAsync.js).
+  if(isPipelineTailRunning_()) return;
 
   const sheet = e.range.getSheet();
 

@@ -1009,24 +1009,38 @@
     역추적은 하지 않음(Business Segment 등 다수 리포트에 영향을 주는 필드가 많아 과도한
     범위 확장으로 판단) — 대신 파생 컬럼 단위로 용도만 요약. CLAUDE.md 문서 목록에도 등록.
 46. **자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인 tail이 느려짐 —
-    실측으로 발견, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 검증 세션 중 발견) —
-    `runICFunnelPipelineTail()` 실행이 19분 넘게 걸려 원인 조사 중 확인. `handleReportGenerateEdit`
-    (`ACQREP_001_Report.js`, ACQ_REP/NewP1_REP/S&M_REP의 Generate 체크박스 처리)와
-    `onFYReportEdit_`(`FYREP_002_Report.js`)는 **installable onEdit 트리거**로 등록돼 있는데,
-    installable onEdit은 Simple Trigger와 달리 사람이 직접 편집할 때뿐 아니라 **스크립트 자신이
-    같은 스프레드시트에 값을 쓸 때도 발동**한다 — 그래서 파이프라인 tail 안에서
-    `generateACQReport_()`/`generateNewP1Report_()`/`generateSMReport_()`/`generateFYReport_()`가
-    리포트 시트에 쓰기를 할 때마다 이 핸들러들이 반복 재발동됨(실측: `runICFunnelPipelineTail`
-    실행 중이던 11:13~11:22 사이 `onFYReportEdit_`/`handleReportGenerateEdit`가 10회 넘게
-    개별 실행으로 잡힘, 사용자가 그 시간에 시트를 전혀 건드리지 않았음을 확인). 각 재발동은
-    가드 조건(`row`/`col`이 정확히 Generate 체크박스 셀인지, `e.value === "TRUE"`인지)에서
-    대부분 조기 return하므로 무한루프나 중복 생성으로 이어지진 않는 것으로 보이지만, 같은
-    스프레드시트에 여러 실행이 동시에 몰리면서 Apps Script 락 경합을 유발해 그 tail의 Events/
-    BOFU/Content Engine 구간이 평소(MTA tail 기준 각 55~76초)보다 2~3배 느려짐(각 153~207초)이
-    실측 확인됨. **막힌 지점**: 정확한 근본 수정 방향(예: 리포트 쓰기를 이 트리거들이 감지 못하는
-    방식으로 바꿀지, 가드에 "이 실행이 같은 파이프라인 tail 안에서 발생했는지" 체크를 추가할지)은
-    미검토 — 이번 세션(Master_DB Raw 이관) 범위 밖이라 조사만 하고 수정하지 않음. 임의로
-    처리하지 말 것.
+    가드 추가로 수정 완료(2026-09-05), 실사용 검증 대기(TODO)** (2026-09-03, Master_DB Raw
+    이관 검증 세션 중 발견) — `runICFunnelPipelineTail()` 실행이 19분 넘게 걸려 원인 조사 중
+    확인. `handleReportGenerateEdit`(`ACQREP_001_Report.js`, ACQ_REP/NewP1_REP/S&M_REP의
+    Generate 체크박스 처리)와 `onFYReportEdit_`(`FYREP_002_Report.js`)는 **installable
+    onEdit 트리거**로 등록돼 있는데, installable onEdit은 Simple Trigger와 달리 사람이
+    직접 편집할 때뿐 아니라 **스크립트 자신이 같은 스프레드시트에 값을 쓸 때도 발동**한다 —
+    그래서 파이프라인 tail 안에서 `generateACQReport_()`/`generateNewP1Report_()`/
+    `generateSMReport_()`/`generateFYReport_()`가 리포트 시트에 쓰기를 할 때마다 이
+    핸들러들이 반복 재발동됨(실측: `runICFunnelPipelineTail` 실행 중이던 11:13~11:22 사이
+    `onFYReportEdit_`/`handleReportGenerateEdit`가 10회 넘게 개별 실행으로 잡힘, 사용자가 그
+    시간에 시트를 전혀 건드리지 않았음을 확인). 각 재발동은 가드 조건(`row`/`col`이 정확히
+    Generate 체크박스 셀인지, `e.value === "TRUE"`인지)에서 대부분 조기 return하므로
+    무한루프나 중복 생성으로 이어지진 않는 것으로 보이지만, 같은 스프레드시트에 여러 실행이
+    동시에 몰리면서 Apps Script 락 경합을 유발해 그 tail의 Events/BOFU/Content Engine
+    구간이 평소(MTA tail 기준 각 55~76초)보다 2~3배 느려짐(각 153~207초)이 실측 확인됨.
+    **✅ 수정 완료(2026-09-05)**: 두 방향(리포트 쓰기를 트리거가 감지 못하게 바꾸기 vs
+    "같은 파이프라인 tail 안에서 발생했는지" 가드 추가) 중 후자로 진행 — `PIPELINE_LOCK`이
+    파이프라인 tail 실행 중에만 값을 갖는다는 점을 이용해, `acquirePipelineLock_()`가
+    쓰는 `computePipelineLockState_()`(순수 함수, staleness 판정 포함)를 재사용한 읽기
+    전용 peek `isPipelineTailRunning_()`(`MASTER_002_PipelineAsync.js` v1.29.0, 락을
+    획득/해제하지 않음) 신규 — `handleReportGenerateEdit()`(`ACQREP_001_Report.js`
+    v1.20.0)/`onFYReportEdit_()`(`FYREP_002_Report.js` v4.2.0) 맨 앞에 이 가드를 추가해
+    파이프라인 tail 실행 중이면 즉시 return하도록 수정. `check-syntax`/`check-naming`/
+    `check-version-header`/`check-duplicate-declarations` 전부 통과, `computePipelineLockState_()`
+    재사용이라 별도 신규 테스트는 없음(기존 `testComputePipelineLockState()`가 이미 커버).
+    **알려진 트레이드오프(사용자 확인 없이 진행 — 순수 성능 최적화, 리포트 출력값 자체는
+    변경 없음)**: 사람이 파이프라인 tail 실행 도중 정확히 같은 순간 Generate 체크박스를
+    직접 클릭하면 이번 사이클엔 무시됨(체크박스는 TRUE로 남고 자동 리셋도 안 됨) —
+    `periodicRefreshAllReports_()`(하루 2번 강제 재계산) 안전망이 있어 리스크 낮다고 판단.
+    **남은 것(TODO)**: 실제 파이프라인 tail 실행 중 handleReportGenerateEdit/onFYReportEdit_가
+    더 이상 재발동하지 않는지, Events/BOFU/Content Engine 구간 소요시간이 원래 수준(55~76초)
+    으로 돌아오는지 다음 실 Import 때 확인 전까지 완료로 간주하지 말 것.
 47. **Revenue 파이프라인 — Leads/MTA/IC Funnel/SAL 완료에 얹혀가는 방식 대신 독립 트리거로
     분리 — 아이디어만 기록, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 세션 중 사용자
     제안) — 지금 `runRevenuePipelineTail()`(`MASTER_011_RevenueSync.js`)은 CSV Import가

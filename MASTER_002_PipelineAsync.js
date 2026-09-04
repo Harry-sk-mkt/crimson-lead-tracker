@@ -22,9 +22,28 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.28.0
+ * v1.29.0
  *
  * Change Log
+ * v1.29.0 (2026-09-05)
+ * - **`isPipelineTailRunning_()` 신규(`docs/OpenItems.md` #46)** — Report
+ *   Generate installable onEdit 트리거(`handleReportGenerateEdit`,
+ *   `ACQREP_001_Report.js`/`onFYReportEdit_`, `FYREP_002_Report.js`)가
+ *   installable 트리거 특성상 사람이 직접 편집할 때뿐 아니라 파이프라인
+ *   tail 자신이 리포트 시트에 쓰기를 할 때도 재발동돼, `runICFunnelPipelineTail()`
+ *   실행 중 10회 넘게 반복 재발동하며 Apps Script 락 경합으로 Events/BOFU/
+ *   Content Engine 구간이 2~3배 느려지는 게 실측 확인된 문제(2026-09-03
+ *   Master_DB Raw 이관 세션 발견, 이번 세션에 수정 착수) — `PIPELINE_LOCK`이
+ *   현재 살아있는 파이프라인 tail 실행 중에만 값을 갖는다는 점을 이용해,
+ *   그 두 핸들러 맨 앞에서 "지금 파이프라인 tail이 실행 중이면 이 onEdit은
+ *   그 tail 자신의 쓰기로 인한 재발동일 가능성이 높으니 즉시 return"하는
+ *   가드로 활용. `acquirePipelineLock_()`가 이미 쓰는 `computePipelineLockState_()`
+ *   (순수 함수, staleness 판정 포함)를 그대로 재사용한 읽기 전용 래퍼 —
+ *   락을 쓰거나 해제하지 않음(peek만). 사람이 파이프라인 tail 실행 도중에
+ *   정확히 같은 순간 Generate 체크박스를 직접 클릭하는 극히 드문 경우는
+ *   이번 사이클엔 무시되지만, `periodicRefreshAllReports_()`(하루 2번 강제
+ *   재계산) 안전망이 있어 리스크 낮음(사용자 확인 없이 진행 — 순수 성능
+ *   최적화, 리포트 출력 자체는 변경 없음).
  * v1.28.0 (2026-09-04)
  * - **`runLeadsPipelineTail()`에 `checkP1SchoolMismatch_()` 신규 단계 추가**
  *   (`docs/OpenItems.md` #48, `OPS_007_P1SchoolMismatch.js`) — `buildLeadsOPS`
@@ -675,6 +694,31 @@ function releasePipelineLock_(){
   PropertiesService
     .getScriptProperties()
     .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+}
+
+
+/**
+ * ==========================================================
+ * Is Pipeline Tail Running (읽기 전용 peek — 락을 쓰거나 해제하지 않음)
+ *
+ * WHY (`docs/OpenItems.md` #46)
+ * Report Generate installable onEdit 트리거(`handleReportGenerateEdit`/
+ * `onFYReportEdit_`)가 파이프라인 tail 자신의 리포트 시트 쓰기에도
+ * 재발동하는 문제의 가드용 — `acquirePipelineLock_()`와 동일한
+ * `computePipelineLockState_()`(staleness 판정 포함 순수 함수) 판정을
+ * 재사용하되, 락을 실제로 획득/해제하지 않고 "지금 누군가 쥐고 있는지"만
+ * 확인한다.
+ *
+ * OUTPUT
+ * boolean  현재 살아있는(stale 아닌) PIPELINE_LOCK이 있으면 true
+ * ==========================================================
+ */
+function isPipelineTailRunning_(){
+
+  const existing = PropertiesService.getScriptProperties().getProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+  return !computePipelineLockState_(existing, null, Date.now()).acquired;
 
 }
 

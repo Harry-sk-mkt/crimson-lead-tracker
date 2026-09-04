@@ -4,9 +4,26 @@
  * Custom Menu
  *
  * Version
- * v3.6.0
+ * v3.7.0
  *
  * Change Log
+ * v3.7.0 (2026-09-05, 사용자 요청)
+ * - "📥 Update" 메뉴 라벨을 "📥 Import"로 환원(하위 항목은 이미 전부
+ *   "Import X"라 라벨만 정정 — 함수/시그니처 변경 없음).
+ * - **"🏗️ Append"/"🗂️ OPS" 메뉴 제거** — 둘 다 `importCsv()`/
+ *   `refreshOPSSheets_()`(`MASTER_002_PipelineAsync.js`)를 통해 매 Import마다
+ *   이미 자동 호출되는 단계라 수동 메뉴로 별도 노출할 실익이 없음을 확인
+ *   (`importLeadReport()`/`importMTAReport()` → `importCsv()`가 내부에서
+ *   `appendNewLeads(true)`/`appendNewMTA(true)` 호출, 파이프라인 tail의
+ *   `refreshOPSSheets_()`가 `buildEventsOPS()`/`buildBOFUOPS()`/
+ *   `buildSearchOPS()`/`buildContentOPS()` 전부 자동 호출) — 오히려 수동
+ *   재실행이 파이프라인 실행 도중과 겹치면 혼동 소지. `createBuildMenu()`/
+ *   `createOPSMenu()`와 그 메뉴 전용 wrapper(`menuAppendNewLeads()`/
+ *   `menuAppendNewMTA()`/`menuUpdateEventsOPS()`/`menuUpdateBOFUOPS()`/
+ *   `menuUpdateSearchOPS()`/`menuUpdateContentOPS()`) 삭제 — 다른 파일에서
+ *   참조하는 곳 없음 확인(grep). 실제 로직 함수(`appendNewLeads()`/
+ *   `appendNewMTA()`/`buildEventsOPS()` 등)는 그대로 있어 Apps Script
+ *   편집기에서 직접 Run 가능, 파이프라인 자동 호출도 무관하게 계속 동작.
  * v3.6.0 (2026-09-02)
  * - "📥 Update" 메뉴에 "Import SAL Report"(importSALReport) 추가 — SAL을
  *   IC Funnel 리포트에서 분리해 전용 외부 시트로 이관(`docs/OpenItems.md`
@@ -43,8 +60,6 @@
 function onOpen() {
 
   createImportMenu();
-  createBuildMenu();
-  createOPSMenu();
   // createReportMenu();  // Report Stage 미구현 — 항목 생기면 다시 활성화
 
 }
@@ -52,13 +67,13 @@ function onOpen() {
 
 /**
  * ==========================================================
- * Import Menu (Update)
+ * Import Menu
  * ==========================================================
  */
 function createImportMenu() {
 
   SpreadsheetApp.getUi()
-    .createMenu("📥 Update")
+    .createMenu("📥 Import")
     .addItem("Import Leads", "importLeadReport")
     .addItem("Import MTA", "importMTAReport")
     .addItem("Import IC Funnel", "importICFunnelReport")
@@ -67,129 +82,6 @@ function createImportMenu() {
 
 }
 
-
-/**
- * ==========================================================
- * Build Menu (Append)
- * ==========================================================
- */
-function createBuildMenu() {
-
-  SpreadsheetApp.getUi()
-    .createMenu("🏗️ Append")
-    .addItem("Append New Leads", "menuAppendNewLeads")
-    .addItem("Append New MTA", "menuAppendNewMTA")
-    .addToUi();
-
-}
-
-
-/**
- * ==========================================================
- * Menu Wrappers (Append)
- * ==========================================================
- */
-
-function menuAppendNewLeads(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Append New Leads"
-  );
-
-  appendNewLeads();
-
-}
-
-
-function menuAppendNewMTA(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Append New MTA"
-  );
-
-  appendNewMTA();
-
-}
-
-/**
- * ==========================================================
- * OPS Menu (2026-07-24 — QA 메뉴 대체)
- *
- * WHY
- * Leads_OPS QA는 buildLeadsOPS() 실행 시 자동으로 돌아가서 별도
- * 메뉴 항목의 실익이 줄어듦. 대신 세그먼트별 OPS 트래커(Events,
- * 추후 Search/BOFU/Ebook 등)의 수동 빌드 진입점을 모아두는 메뉴로
- * 전환. Search/BOFU/Ebook은 아직 미구현이라 항목 자체를 추가하지
- * 않음 — 구현되는 대로 이 메뉴에 addItem() 추가.
- * ==========================================================
- */
-function createOPSMenu() {
-
-  SpreadsheetApp.getUi()
-    .createMenu("🗂️ OPS")
-    .addItem("🔄 Sync Events", "menuUpdateEventsOPS")
-    .addItem("🔄 Sync BOFU", "menuUpdateBOFUOPS")
-    .addItem("🔄 Sync Search", "menuUpdateSearchOPS")
-    .addItem("🔄 Sync Content", "menuUpdateContentOPS")
-    .addToUi();
-
-}
-
-
-/**
- * ==========================================================
- * Menu Wrappers (OPS)
- * ==========================================================
- */
-
-function menuUpdateEventsOPS(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Update Events"
-  );
-
-  buildEventsOPS();
-
-}
-
-
-function menuUpdateBOFUOPS(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Update BOFU"
-  );
-
-  buildBOFUOPS();
-
-}
-
-
-function menuUpdateSearchOPS(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Update Search"
-  );
-
-  buildSearchOPS();
-
-}
-
-
-function menuUpdateContentOPS(){
-
-  Logger.log(
-    CONFIG.LOG.PREFIX +
-    " Menu : Update Content"
-  );
-
-  buildContentOPS();
-
-}
 
 /**
  * ==========================================================
