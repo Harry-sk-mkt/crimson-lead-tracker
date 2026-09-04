@@ -35,6 +35,33 @@ Target_REP Content 세그먼트 2026-08-31주가 New P1=9/CPNP1=$709.64(⇒ Spen
 주 일요일이 아직 지나지 않았으면 보정하지 않고 원본 값 그대로 반환하도록 가드 추가 —
 `Ad_Spend_Cache_Weekly` 재계산 + Target_REP 재생성으로 사용자 확인 완료.
 
+## Naver_Search_Campaign_Stats_Cache/Ad_Spend_Cache 외부 스프레드시트 이관 (`docs/OpenItems.md` #49)
+
+메인 스프레드시트 내부 숨김 탭이던 두 캐시를 Master_DB 폴더 기존 캠페인 시트(Meta_Raw/
+NaverSA_Raw가 있는 파일)로 이관 — 새 파일을 만들지 않고 탭만 추가(사용자 확정). Raw
+이관과 달리 두 캐시 모두 외부 API로 100% 재계산 가능해, 별도 복사 스크립트 없이 read/write
+함수의 대상만 외부 스프레드시트로 전환(`AD_003_NaverSearch.js`/`AD_004_SpendCache.js`/
+`JL_003_Write.js`의 opener 함수 신규). 조사 중 `AD_004_SpendCache.js`의 "ACQ_REP Generate가
+Simple Trigger라 openById() 불가"라던 헤더 주석이 stale함을 발견(실제로는 이미 installable
+onEdit 트리거로 전환돼 있어 제약 자체가 사라진 상태) — 정정. `runRefreshAdSpendCache()`(222행)/
+`runRefreshNaverSearchAdCampaignStatsCache()`(9개 캠페인) 실행 및 ACQ_REP Generate 재검증까지
+사용자 확인 완료. 상세: `docs/exec-plans/completed/2026-09-04-ad-spend-cache-external-migration.md`.
+
+## P1 School Mismatch 검출/플래깅 신규 (`docs/OpenItems.md` #48)
+
+외부 "P1 School List" 스프레드시트(담당팀이 P1으로 확정한 학교 목록, E열 대표 학교명 + N열부터
+오기입 변형 표기)와 Leads_OPS를 양방향 대조하는 `OPS_007_P1SchoolMismatch.js` 신규:
+(1) 정방향 — 리스트엔 P1 학교인데 파이프라인상 effective Priority(`isEffectiveP1_()` 재사용)가
+P1이 아닌 리드를 `P1_School_Mismatch_QA`(visible)에 플래깅. 실행 결과 P1 학교 572개(별칭 포함)/
+Leads_OPS 36,628건 대조, 불일치 2,116건 — 사용자가 상위 10건 육안 대조해 매칭 정확함을 확인.
+(2) 역방향(같은 세션 후속 요청) — 2026-09-04 이후 신규 리드 중 파이프라인상 이미 P1인데
+School Name이 리스트에 없는 경우를 학교 단위로 집계해 `Not_Striked`(항상 숨김, 사용자 지정
+이름)에 기록 — 정방향 체크가 이미 읽은 Leads_OPS/외부 리스트를 재사용해 추가 Sheet I/O 없음.
+`runLeadsPipelineTail()`(`MASTER_002_PipelineAsync.js`)의 `buildLeadsOPS` 직후 자동 편입
+(실패 격리 — `refreshCampaignSpend_()`와 동일 원칙). **실 Leads Import로 파이프라인 자동
+편입/역방향 양성 케이스 검증은 다음 주 월요일(2026-09-07) 예정** — 상세:
+`docs/exec-plans/active/2026-09-04-p1-school-mismatch-check.md`.
+
 # Changelog — 2026-09-03
 
 ## 파이프라인 성능 및 구조 비효율 개선 계획 수립 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)
