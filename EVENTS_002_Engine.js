@@ -15,9 +15,22 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.20.0
+ * v1.21.0
  *
  * Change Log
+ * v1.21.0 (2026-09-05)
+ * - **`runAuditEventsSegmentDeadKeys()`/`runDeleteDeadEventsOPSRows()`/
+ *   `runDeleteDeadEventsOPSRowsForce()` 신규(`docs/OpenItems.md` #28)** —
+ *   Content_OPS/Search_OPS와 동일한 "죽은 키" 구조적 문제(Business
+ *   Segment 재분류로 더 이상 Webinar/Seminar가 아니게 된 프로그램이
+ *   union 병합 구조상 Events_OPS에 남아 지표만 0으로 표시)가
+ *   Events_OPS에도 있는지 확인할 방법이 없다는 게 발견돼(28번 항목
+ *   등록 당시 "Events 전용 함수가 아직 없음"), `CONTENT_002_Engine.js`
+ *   v1.2.0의 `runAuditContentSegmentDeadKeys()`/`runDeleteDeadContentOPSRows()`
+ *   패턴을 그대로 복제 — Events는 GROUP_3_MANUAL이 빈 배열이고 "Channel"
+ *   컬럼 자체가 없어 Content/BOFU의 Channel 기본값 예외 처리는 불필요
+ *   (그 부분만 제외하고 로직 동일). `readEventsOPS_()`(`EVENTS_004_Merge.js`)
+ *   기존 함수 재사용, 코드 변경 없음(순수 진단/삭제 유틸리티 추가).
  * v1.20.0 (2026-08-25)
  * - `aggregateMetaCampaignDataByProgram_()`에 `impressions`/`reach` 추가
  *   (additive) — `AD_001_Config.js` v1.22.0/`AD_002_Meta.js` v1.9.0에서
@@ -2048,5 +2061,245 @@ function runInvestigateFirstTouchDetailGrouping() {
     );
 
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Audit Events Segment Dead Keys (1회성 진단, 수동 실행용)
+ *
+ * WHY
+ * mergeEventsOPS_()(EVENTS_004_Merge.js)가 "현재 Events_Engine 키 ∪
+ * 기존 Events_OPS 키" 합집합으로 병합하기 때문에, Business Segment
+ * 재분류(Full Rebuild 등)로 더 이상 Webinar/Seminar가 아니게 된
+ * 프로그램은 Events_Engine에서 사라져도 Events_OPS엔 그대로 남아
+ * 지표만 0으로 표시됨 — Search_OPS/Content_OPS와 동일한 구조적 문제
+ * (`CONTENT_002_Engine.js`의 `runAuditContentSegmentDeadKeys()`와 동일
+ * 패턴, `docs/OpenItems.md` #28). 수동 컬럼(GROUP_1_MANUAL/GROUP_2_MANUAL,
+ * Events는 GROUP_3_MANUAL이 빈 배열이고 "Channel" 컬럼 자체가 없어
+ * Content/BOFU의 Channel 기본값 예외 처리는 불필요)에 실제 데이터가
+ * 있는지로 "완전 공백(삭제 안전)" vs "데이터 있음(검토 필요)" 구분.
+ *
+ * 코드 변경 없음(getBusinessSegment() 등 기존 로직 그대로) — 순수 진단.
+ * ==========================================================
+ */
+function runAuditEventsSegmentDeadKeys() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(EVENTS.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(EVENTS.SHEET.OPS);
+
+  Logger.log("======================================");
+  Logger.log("Audit Events Segment Dead Keys");
+  Logger.log("======================================");
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r[EVENTS.KEY] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  if (!opsSheet) {
+    Logger.log(EVENTS.SHEET.OPS + " sheet not found — skipped.");
+    return;
+  }
+
+  const opsRows = readEventsOPS_();
+  const manualCols = EVENTS.GROUP_1_MANUAL
+    .concat(EVENTS.GROUP_2_MANUAL)
+    .concat(EVENTS.GROUP_3_MANUAL);
+
+  let deadCount = 0;
+  let deadWithManualData = 0;
+
+  opsRows.forEach(function (row) {
+
+    const key = String(row[EVENTS.KEY] || "").trim();
+
+    if (!key) return;
+    if (liveKeys[key.toLowerCase()]) return; // 살아있음 — 스킵
+
+    deadCount++;
+
+    const manualValues = {};
+    let hasManualData = false;
+
+    manualCols.forEach(function (col) {
+
+      const v = row[col];
+      manualValues[col] = v;
+
+      if (v !== "" && v !== 0 && v !== undefined && v !== null) {
+        hasManualData = true;
+      }
+
+    });
+
+    if (hasManualData) deadWithManualData++;
+
+    Logger.log(
+      (hasManualData ? "⚠️ [데이터 있음] " : "   [완전 공백] ") +
+      "\"" + key + "\"" +
+      (hasManualData ? "  " + JSON.stringify(manualValues) : "")
+    );
+
+  });
+
+  Logger.log("");
+  Logger.log(
+    "요약: 죽은 키 " + deadCount + "건 " +
+    "(수동 데이터 있음=" + deadWithManualData + ", 완전 공백=" + (deadCount - deadWithManualData) + ")"
+  );
+
+  Logger.log("======================================");
+  Logger.log("Audit Completed");
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Delete Dead Events_OPS Rows (수동 실행용)
+ *
+ * WHY
+ * runAuditEventsSegmentDeadKeys()로 확인된 죽은 키(Events_Engine에 더
+ * 이상 없는 Events_OPS 키) 중 수동 컬럼이 완전히 비어있는 행만 삭제한다
+ * (`runDeleteDeadContentOPSRows()`, CONTENT_002_Engine.js와 동일 패턴).
+ * 삭제 전 로그로 목록 전체 나열 — 실행 로그가 곧 감사 기록.
+ *
+ * ⚠️ 수동 데이터가 있는 죽은 키는 자동 삭제하지 않고 로그로만 표시 —
+ * 실제 캠페인 운영 데이터가 있을 수 있어 임의 삭제 금지, 발견되면 사용자
+ * 확인 후 별도 처리.
+ * ==========================================================
+ */
+function runDeleteDeadEventsOPSRows(force) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const engineSheet = ss.getSheetByName(EVENTS.SHEET.ENGINE);
+  const opsSheet = ss.getSheetByName(EVENTS.SHEET.OPS);
+
+  if (!opsSheet) {
+    Logger.log(EVENTS.SHEET.OPS + " sheet not found.");
+    return;
+  }
+
+  const liveKeys = {};
+
+  if (engineSheet) {
+
+    sheetToObjects(engineSheet).forEach(function (r) {
+      const key = String(r[EVENTS.KEY] || "").trim().toLowerCase();
+      if (key) liveKeys[key] = true;
+    });
+
+  }
+
+  const manualCols = EVENTS.GROUP_1_MANUAL
+    .concat(EVENTS.GROUP_2_MANUAL)
+    .concat(EVENTS.GROUP_3_MANUAL);
+
+  const values = opsSheet.getDataRange().getValues();
+  const headers = values[EVENTS.ROWS.HEADER - 1];
+  const keyColIndex = headers.indexOf(EVENTS.KEY);
+
+  const rowsToDelete = [];
+  const skippedWithManualData = [];
+
+  for (let r = EVENTS.ROWS.DATA_START - 1; r < values.length; r++) {
+
+    const key = String(values[r][keyColIndex] || "").trim();
+
+    if (!key) continue;
+    if (liveKeys[key.toLowerCase()]) continue; // 살아있음 — 스킵
+
+    let hasManualData = false;
+
+    manualCols.forEach(function (col) {
+
+      const colIndex = headers.indexOf(col);
+      if (colIndex === -1) return;
+
+      const v = values[r][colIndex];
+
+      if (v !== "" && v !== 0 && v !== undefined && v !== null) {
+        hasManualData = true;
+      }
+
+    });
+
+    if (hasManualData && !force) {
+      skippedWithManualData.push(key);
+      continue;
+    }
+
+    rowsToDelete.push(r + 1); // 1-based 시트 행 번호
+
+  }
+
+  Logger.log("======================================");
+  Logger.log("Delete Dead Events_OPS Rows" + (force ? " (force=true — 수동 데이터 있어도 삭제)" : ""));
+  Logger.log("======================================");
+  Logger.log("Events_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - EVENTS.ROWS.DATA_START + 1));
+
+  if (skippedWithManualData.length > 0) {
+
+    Logger.log("");
+    Logger.log("⚠️ 수동 데이터가 있어 삭제 스킵된 죽은 키 (" + skippedWithManualData.length + "건, 별도 확인 필요):");
+    skippedWithManualData.forEach(function (key) { Logger.log("  " + key); });
+
+  }
+
+  if (rowsToDelete.length === 0) {
+    Logger.log("");
+    Logger.log("삭제할 죽은 키 없음.");
+    return;
+  }
+
+  Logger.log("");
+  Logger.log("삭제 대상 행 수" + (force ? "(force — 수동 데이터 포함)" : "(완전 공백)") + " : " + rowsToDelete.length);
+  Logger.log("삭제 대상 시트 행 번호(오름차순): " + rowsToDelete.join(", "));
+
+  rowsToDelete
+    .sort(function (a, b) { return b - a; }) // 내림차순 — 삭제 시 인덱스 안 밀리도록
+    .forEach(function (rowIndex) {
+      opsSheet.deleteRow(rowIndex);
+    });
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "삭제 완료 — " + rowsToDelete.length + "개 행 제거됨. " +
+    "Events_OPS 현재 행 수(헤더 제외): " + (opsSheet.getLastRow() - EVENTS.ROWS.DATA_START + 1)
+  );
+
+  Logger.log("======================================");
+
+}
+
+
+/**
+ * ==========================================================
+ * Run Delete Dead Events_OPS Rows — Force (수동 실행 전용 wrapper)
+ *
+ * WHY
+ * Apps Script 편집기의 Run 버튼은 함수에 인자를 넘길 수 없어
+ * runDeleteDeadEventsOPSRows(true)를 직접 실행할 방법이 없음 —
+ * `runDeleteDeadContentOPSRowsForce()`(CONTENT_002_Engine.js)와 동일한
+ * 인자 없는 진입점.
+ *
+ * ⚠️ 수동 컬럼(PIC/Speaker/Mkt Reg. 등) 데이터가 있어도 전부 삭제한다 —
+ * 되돌릴 수 없음.
+ * ==========================================================
+ */
+function runDeleteDeadEventsOPSRowsForce() {
+
+  runDeleteDeadEventsOPSRows(true);
 
 }

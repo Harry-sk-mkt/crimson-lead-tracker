@@ -360,14 +360,24 @@
     `runCompareSMRepNewP1WeekAgainstSalesforce()` 재실행 결과 **75건 전체 정상 일치, 누락
     0건**으로 완전히 해소. S&M_REP 화면 재Generate로 Event/BOFU/Content/Organic 30/5/35/3
     최종 확인은 사용자 진행.
-28. **Events_OPS 기존 데이터 오염 여부 미확인(2026-08-25)** — Content_OPS에서 발견된
-    "Deal Tracker 집계 Business Segment 필터 누락" 버그(`computeContentDealAggregates_()`)와
-    동일한 패턴이 `computeEventsDealAggregates_()`(`EVENTS_002_Engine.js`)에도 있어 코드는
-    함께 수정 완료(v1.17.0, `EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1`이면 제외).
-    다만 **Content_OPS처럼 이미 오염된 행이 Events_OPS에 쌓여있는지는 아직 감사 전** —
-    Content용으로 만든 `runAuditContentSegmentDeadKeys()`/`runDeleteDeadContentOPSRows()`
-    (`CONTENT_002_Engine.js`)와 동일한 패턴의 Events 전용 함수가 아직 없음. 다음 세션에
-    필요 시 Events 버전을 만들어 확인할 것 — 임의로 처리하지 말 것.
+28. ~~Events_OPS 기존 데이터 오염 여부 미확인~~ — **✅ 감사 완료, 오염 없음 확인
+    (2026-09-05)**. Content_OPS에서 발견된 "Deal Tracker 집계 Business Segment 필터
+    누락" 버그(`computeContentDealAggregates_()`)와 동일한 패턴이
+    `computeEventsDealAggregates_()`(`EVENTS_002_Engine.js`)에도 있어 코드는 함께 수정
+    완료(v1.17.0, `EVENTS.SEGMENTS.indexOf(row.businessSegment) === -1`이면 제외).
+    감사 도구 신규: `CONTENT_002_Engine.js`의 `runAuditContentSegmentDeadKeys()`/
+    `runDeleteDeadContentOPSRows()`와 동일 패턴을 `EVENTS_002_Engine.js` v1.21.0에
+    그대로 복제 — `runAuditEventsSegmentDeadKeys()`(진단, 죽은 키 목록 + 수동 데이터
+    존재 여부 로그)/`runDeleteDeadEventsOPSRows(force)`/
+    `runDeleteDeadEventsOPSRowsForce()`(수동 데이터 있어도 강제 삭제) 신규. Events는
+    `GROUP_3_MANUAL`이 빈 배열이고 "Channel" 컬럼 자체가 없어 Content/BOFU의 Channel
+    기본값 예외 처리는 필요 없어 그 부분만 제외. `check-syntax`/`check-naming`/
+    `check-version-header`/`check-duplicate-declarations` 전부 통과, 순수 I/O 진단
+    유틸리티라 Content 쪽 선례와 동일하게 별도 단위 테스트는 없음.
+    **✅ 사용자 실행 결과(2026-09-05)**: `runAuditEventsSegmentDeadKeys()` 실행 —
+    죽은 키 0건(수동 데이터 있음=0, 완전 공백=0). Events_OPS는 Content_OPS와 달리
+    이 구조적 문제의 영향을 받은 적이 없는 것으로 확인 — `runDeleteDeadEventsOPSRows()`
+    실행 자체가 불필요, 삭제할 대상 없음. 이 항목 완결.
 29. ~~`getBusinessSegment()` leadSource="Paid Social" 관련 회귀 테스트 3개 FAIL~~ — **✅ 원인
     확정·수정 완료(2026-09-04)**. 원인: `SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES["paid social"/
     "affiliate organization"/"offline outreach"] = "Other"`(2026-07-29 추가)가 campaign의
@@ -763,8 +773,28 @@
     그럴 수 있다"(Salesforce Lead→Account/Contact 전환 시 더 이상 "Lead" 레코드가 아니게 되어
     Leads_Raw export에 안 잡히지만, Deal Tracker엔 그 Email로 딜이 남아있는 경우). 그럴듯한
     설명이나 실측 확인 전 — 78건 중 실제로 이 케이스가 몇 건이고, 진짜 놓친 리드(이메일
-    대소문자/공백 불일치 등 버그)가 섞여있는지는 확인 안 됨. 임의로 처리하지 말 것, 다음
-    세션에서 78건 이메일 샘플 + Lead Source/Close FY를 덤프하는 임시 조사 스크립트로 확인.
+    대소문자/공백 불일치 등 버그)가 섞여있는지는 확인 안 됨. 임의로 처리하지 말 것.
+    **✅ 진단 스크립트 신규 + 실행 완료, 원인 확정(2026-09-05)**:
+    `TEMPQA_050_DealTrackerRevenueUnmatchedEmailTrace.js`(읽기 전용) —
+    `runTraceDealTrackerUnmatchedEmails()`가 Deal Tracker 고유 Email(122개) 중
+    Leads_OPS 미매칭분을 Email/#Deals/Revenue/Lead Source/Close FY/Business
+    Segment와 함께 로그로 나열하고, 각각 Leads_Master에도 없는지(=Import 공백/Account
+    전환 후보) 아니면 Leads_Master엔 있는데 Leads_OPS엔만 없는지(=mergeOPS()
+    earliest-wins 배제 가능성, #20 redrock333 케이스와 동일 패턴이면 진짜 버그)로
+    분류해 요약 카운트까지 출력. `computeRevenueByEmail_()`(`MASTER_011_RevenueSync.js`)
+    와 동일한 Email 정규화(trim+lowercase) 규칙을 그대로 사용 — 그쪽 매칭 결과와
+    1:1 비교 가능. **실행 결과(사용자 실행, 2026-09-05)**: 미매칭 78건 **전부**
+    Leads_Master에도 존재하지 않음(78/78) — "Leads_Master엔 있는데 Leads_OPS엔만
+    없음"(mergeOPS 배제) 케이스는 **0건**. 즉 mergeOPS()나 다른 파이프라인 로직이
+    이 78건을 누락시킨 게 아니라, 애초에 Salesforce Leads export(Leads_Master의
+    소스)에 이 Email이 한 번도 없었던 것 — **사용자의 "Account로 병합(convert)된
+    리드는 Leads 리포트에서 안 보인다" 가설과 정확히 부합**, 코드 버그 가설(이메일
+    대소문자/공백 불일치 등)은 기각. Lead Source는 paid social/paid search/organic/
+    referral 등 정상 마케팅 소스라 Deal Tracker 데이터 자체의 이상은 없어 보임,
+    Close FY는 대부분 26(현재 진행 FY)·일부 27(미래)·2건 25. **잔여(코드 조치 불필요,
+    사용자 선택 사항)**: 실제로 Account 전환 케이스인지는 Salesforce에서 몇 건
+    직접 열어 확인해야 최종 확정되나, 코드/파이프라인 측면에서는 이 항목의 조사가
+    끝남 — mergeOPS() 관련 버그는 아니라는 게 확정됐으므로 추가 코드 조치는 없음.
 40. **GAS 백엔드 설계 — GitHub 상위 스타 저장소 분석 대비 격차 검토, 기록만 완료(TODO, 구현
     착수 전)** — 2026-09-02 사용자가 외부에서 작성해온 분석 문서("GAS 백엔드 설계 — GitHub
     상위 스타 저장소 분석 & crimson-lead-tracker 적용안")를 실제 코드와 대조 검증. 문서 자체가
@@ -937,7 +967,14 @@
       커서로 "어디까지 처리했는지" 기억)와 같은 원칙을 Report 레이어에도 적용하는 셈.
       경계 조건(무엇을 "확정된 과거"로 볼지, Revenue 역싱크 지연이 걸리는 구간을 어떻게
       다룰지)은 설계 단계에서 반드시 확정 필요 — 임의로 처리하지 말 것.
-43. **Lead Priority(P1) 기준 리스트 기반 자동 Flagging — 아이디어만 기록, 미착수(TODO)**
+43. ~~Lead Priority(P1) 기준 리스트 기반 자동 Flagging~~ — **✅ #48로 구현 완료 확인
+    (2026-09-05 정리)**. 아래 아이디어 등록(2026-09-03) 당시엔 별개 미착수 TODO였으나,
+    같은 날 별도 번호로 등록된 #48(외부 P1 School List 기반 Lead Priority 불일치
+    검출·플래깅)이 정확히 이 아이디어를 구현 — 외부 P1 School List 스프레드시트로 리스트
+    소재 확정, `P1_School_Mismatch_QA` 시트로 노출 위치 확정, `runLeadsPipelineTail()`
+    자동 편입까지 전부 여기서 "미정"이라 적어둔 항목의 실제 답. 즉 신규 작업이 아니라
+    #48과의 중복 등록이었던 것으로 확인 — 별도로 손댈 것 없음, #48의 잔여 검증(실 Import
+    자동 편입 확인)만 남아있음. 아래는 최초 등록 원문(참고용, 보존).
     (2026-09-03) — S&M_REP 성능 개선 설계 논의 중 발견: `Lead Priority`가 리드 유입 후
     바뀔 수 있는 이유는 Salesforce 자동 재분류가 아니라 **실무자가 P1 기준(연 학비
     2500만원 이상 학교) 대비 수기 검수 후 정정**하는 것(사용자 확인) — 그리고 이 P1
