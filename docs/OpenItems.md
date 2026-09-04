@@ -602,8 +602,17 @@
     `runCheckProgramSegmentDictionaryAnomalies()` 재실행)**: 에러 없이 정상 완료 — Program
     148개 anomaly가 UTM 단위로 517행까지 explode, override로 제외된 13행(기존에 확정해둔
     3개 Program에 속한 UTM들 — 버그 수정이 실제로 작동함을 실측으로 재확인), 최종 504행
-    플래깅. **잔여**: `LOW_CONFIDENCE_THRESHOLD`(70%) 자체가 적정한지, 드롭다운 선택 →
-    override 반영이 실제로 매끄러운지는 계속 사용해보며 판단.
+    플래깅. **✅ 전체 소진 완료(2026-09-04, 같은 세션)** — 사용자가 517개 UTM 단위 행 전체에
+    드롭다운으로 override를 채워넣고 재실행 → 516행 제외(신규 Program 27건/UTM 476건), 최종
+    1행만 잔존. 그 1건(UTM 매칭 없는 Program)의 실제 리드 Email 확인용
+    `TEMPQA_049_MarketoQARemainingRowEmailLookup.js`(읽기 전용) 신규 — Marketo_QA 잔여 행의
+    Program/UTM으로 Leads_Master/MTA_Master를 매칭해 Email 조회. 추가 요청으로
+    `Program_Segment_Override`/`UTM_Segment_Override` 두 시트를 `ensureOverrideSheetExists_()`
+    가 기존/신규 무관하게 매번 `hideSheet()`로 숨김 처리하도록 수정(`UTIL_004_DictionaryQA.js`
+    v2.1.0) — 이제 사람이 직접 편집하지 않는 내부 자동 동기화 저장소로 성격 확정. 사용자가
+    마지막 1건까지 override 처리 완료해 #34 전체 종료. **잔여**: `LOW_CONFIDENCE_THRESHOLD`
+    (70%) 자체가 적정한지는 다음 딕셔너리 갱신 사이클(12시간 주기)에서 신규 플래깅이 얼마나
+    나오는지 보며 계속 판단.
 35. **New P1 8월 갭(279 vs 267) — `Lead Priority` 필드 스냅샷 지연 확인·부분 해결(2026-08-28),
     나머지는 사용자 액션 대기(TODO)** — 사용자가 제공한 Salesforce 8월 New Leads CSV(739건,
     Priority 1=279건)를 `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`로 대조한 결과 10건이

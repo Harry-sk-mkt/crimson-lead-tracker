@@ -77,9 +77,16 @@
  *   값이 반영 전에 그대로 날아간다**
  *
  * Version
- * v2.0.0
+ * v2.1.0
  *
  * Change Log
+ * v2.1.0 (2026-09-04)
+ * - **`ensureOverrideSheetExists_()` — Program_Segment_Override/
+ *   UTM_Segment_Override 숨김 처리**(사용자 요청 — "Program_Segment_Override는
+ *   숨김처리해주고"). 사람이 이제 이 시트를 직접 편집하는 게 주 워크플로우가
+ *   아니라 Marketo_QA 컬럼에서 자동 동기화되는 내부 저장소이므로, 신규 생성
+ *   시뿐 아니라 이미 존재하는 시트(과거 세션에 visible로 만들어졌을 수 있음)
+ *   도 매번 `hideSheet()`로 맞춤.
  * v2.0.0 (2026-09-04)
  * - **UTM 단위 explode + override selector 드롭다운 추가**(사용자 요청 —
  *   실제 예시로 `ca_cgahq_2024-03-06_search-curriculum-courses_contact` 등
@@ -757,7 +764,15 @@ function ensureOverrideSheetExists_(sheetName, keyColumnLabel){
 
   let sheet = ss.getSheetByName(sheetName);
 
-  if(sheet) return;
+  if(sheet){
+    // 2026-09-04 추가(사용자 요청 — "Program_Segment_Override는 숨김처리해주고")
+    // — 이제 사람이 직접 이 시트를 편집하는 게 주 워크플로우가 아니라
+    // Marketo_QA 컬럼에서 자동 동기화되는 내부 저장소이므로, 이미 존재하는
+    // 시트도(과거 세션에 visible로 만들어졌을 수 있음) 매번 숨김 상태로
+    // 맞춰준다 — hideSheet()는 이미 숨겨져 있어도 안전(idempotent).
+    sheet.hideSheet();
+    return;
+  }
 
   sheet = ss.insertSheet(sheetName);
 
@@ -766,6 +781,7 @@ function ensureOverrideSheetExists_(sheetName, keyColumnLabel){
     .setFontWeight("bold");
 
   sheet.setFrozenRows(1);
+  sheet.hideSheet();
 
   SpreadsheetApp.flush();
 
@@ -786,9 +802,9 @@ function runEnsureOverrideSheets(){
 
   Logger.log(
     CONFIG.LOG.PREFIX + " " + CONFIG.MARKETO_QA.OVERRIDE_SHEET + " / " +
-    CONFIG.MARKETO_QA.UTM_OVERRIDE_SHEET + " 시트 준비 완료 — 평소엔 " +
+    CONFIG.MARKETO_QA.UTM_OVERRIDE_SHEET + " 시트 준비 완료(숨김 상태) — 평소엔 " +
     CONFIG.MARKETO_QA.SHEET + "의 \"Override (직접 입력)\" 드롭다운에서 선택하면 " +
-    "자동으로 이 시트들에 동기화됨(직접 편집도 가능)."
+    "자동으로 이 시트들에 동기화됨(직접 편집도 가능, 필요하면 시트 목록에서 숨김 해제 후 열람)."
   );
 
 }

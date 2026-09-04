@@ -103,6 +103,17 @@ Override)으로 표시 간소화, (3) 여러 UTM Campaign이 하나의 Program(d
 최종 504행 플래깅, 에러 없이 정상 완료. override 입력→캡처→딕셔너리 반영→재플래깅 제외 전체 왕복
 흐름도 사용자가 직접 3건 입력해 실사용 검증 완료.
 
+**같은 세션 마무리 라운드**: 사용자가 517개 UTM 단위 행 전체에 override를 대량으로 채워넣고
+재실행 — 신규 캡처 Program 27건/UTM 476건(기존 13건과 합쳐 516건 제외), 최종 1행만 잔존. 그
+1건(UTM 매칭이 아예 없는 Program)의 실제 리드 Email을 Salesforce에서 직접 확인하고 싶다는 요청으로
+`TEMPQA_049_MarketoQARemainingRowEmailLookup.js` 신규(읽기 전용) — Marketo_QA에 남은 행의
+Program/UTM으로 Leads_Master/MTA_Master를 매칭해 Email을 로그로 출력. 추가로 "Program_Segment_Override
+는 숨김처리해달라"는 요청으로 `ensureOverrideSheetExists_()`가 신규 생성 시뿐 아니라 이미 존재하는
+Program_Segment_Override/UTM_Segment_Override 시트도 매번 `hideSheet()`로 맞추도록 수정
+(`UTIL_004_DictionaryQA.js` v2.1.0) — 이제 사람이 직접 편집하는 시트가 아니라 Marketo_QA 컬럼에서
+자동 동기화되는 내부 저장소로 성격이 완전히 굳어졌기 때문. 사용자가 마지막 1건까지 override 처리
+완료해 이번 세션 #34 작업 전체 종료.
+
 # Changelog — 2026-09-03
 
 ## 파이프라인 성능 및 구조 비효율 개선 계획 수립 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)
