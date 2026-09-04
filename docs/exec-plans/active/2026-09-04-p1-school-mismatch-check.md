@@ -2,14 +2,21 @@
 
 **관련 로드맵 항목**: `docs/OpenItems.md` #48 (2026-09-03 등록)
 **시작일**: 2026-09-04
-**상태**: 코드 작성 + clasp push + 수동 실행/육안 검증 전부 완료(2026-09-04) —
-남은 건 실제 Leads Import 1회로 파이프라인 자동 편입 단계 확인뿐.
+**상태**: 정방향 체크(P1_School_Mismatch_QA) 코드 작성 + clasp push + 수동 실행/육안 검증
+완료(2026-09-04). 같은 세션 후속 요청으로 역방향 체크(Not_Striked, 신규 학교 후보 검출)도
+코드 작성 완료 — 아직 clasp push/실행 전. 남은 건 (1) 역방향 체크 clasp push, (2) 실제 Leads
+Import 1회로 두 방향 다 파이프라인 자동 편입 확인.
 
 ## Goal
 
 외부 "P1 School List" 스프레드시트(담당팀이 P1으로 확정한 학교 목록, 오기입 변형 표기 포함)와
-Leads_OPS를 매 Leads Import마다 자동으로 대조해, 리스트엔 P1 학교로 등록돼 있는데 파이프라인
-상 effective Priority가 다르게 지정된 리드를 시트에 플래깅한다(이메일 알림 없음).
+Leads_OPS를 매 Leads Import마다 자동으로 양방향 대조한다(이메일 알림 없음, 전부 시트 내
+플래깅):
+1. 리스트엔 P1 학교로 등록돼 있는데 파이프라인상 effective Priority가 다르게 지정된 리드 →
+   `P1_School_Mismatch_QA`(visible)
+2. (2026-09-04 후속 요청, 역방향) 2026-09-04 이후 신규 리드 중 파이프라인상 effective
+   Priority는 이미 P1인데 School Name이 리스트에 없는 학교 → `Not_Striked`(항상 숨김),
+   학교 단위로 집계 — 리스트에 추가할 후보 검토용.
 
 ## 사용자 확정 사항 (2026-09-04)
 
@@ -49,10 +56,21 @@ Leads_OPS를 매 Leads Import마다 자동으로 대조해, 리스트엔 P1 학�
       P1_School_Mismatch_QA에 기록", 에러 없음. 사용자가 상위 10건 육안 대조 —
       "전부 있는학교 맞아"(School Name 매칭 정확도 확인, 오탐 없음). 불일치 건수(2116/36628,
       약 5.8%)는 오래 누적된 미교정 리드로 판단, 매칭 로직 문제 아님.
+- [x] **역방향 체크 신규 구현(2026-09-04, 사용자 후속 요청)** — "오늘부터 새로 들어오는
+      리드에서 P1으로 들어온 학교 중 외부시트에 없는 학교 리스트업" 요청. 출력 형태(학교
+      단위 집계 vs 리드 단위 나열)/실행 방식(자동 편입 vs 수동) 확인 후 사용자 확정: 학교
+      단위 집계 + 자동 파이프라인 편입(기존 #48 체크가 이미 읽은 Leads_OPS/외부 리스트를
+      재사용하므로 추가 Sheet I/O 없이 근소한 시간만 추가된다고 설명 후 승인). 탭 이름은
+      사용자 지정 — "Not_Striked", 항상 숨김(P1_School_Mismatch_QA와 달리). `OPS_001_Config.js`
+      (v2.9) `MISSING_SCHOOL_TRACKING`(START_DATE=2026-09-04, OUTPUT_SHEET="Not_Striked")
+      신규, `OPS_007_P1SchoolMismatch.js`(v1.1.0)의 `computeMissingP1Schools_()`(순수 함수,
+      node 단위 테스트 PASS)/`writeMissingP1SchoolsResults_()` 신규 —
+      `performP1SchoolMismatchCheck_()`가 기존 opsRecords/p1SchoolSet을 그대로 재사용.
 - [ ] **남은 검증**: 실제 Leads Import 한 번 실행해 `runLeadsPipelineTail()`의
-      `checkP1SchoolMismatch_` 단계가 자동으로 정상 동작하는지 확인(README Pipeline
-      Status 또는 Execution 로그) — 지금까지는 수동 진입점(`runCheckP1SchoolMismatch()`)
-      만 검증됨, 파이프라인 자동 편입 자체는 아직 실측 전.
+      `checkP1SchoolMismatch_` 단계가 두 방향(P1_School_Mismatch_QA + Not_Striked) 전부
+      자동으로 정상 동작하는지 확인(README Pipeline Status 또는 Execution 로그) — 지금까지는
+      수동 진입점(`runCheckP1SchoolMismatch()`)만 검증됨, 파이프라인 자동 편입 자체와 역방향
+      체크(Not_Striked)는 실 Leads Import로 아직 검증 전(다음 주 월요일 2026-09-07 예정).
 
 ## Surprises & Discoveries
 

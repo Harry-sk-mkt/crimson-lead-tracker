@@ -5,16 +5,24 @@
  *
  * Responsibility
  * 외부 "P1 School List" 스프레드시트(사용자/담당팀이 확정한 P1 학교 목록,
- * 오기입 변형 표기 포함)와 Leads_OPS를 대조해, 리스트엔 P1 학교로 등록돼
- * 있는데 Leads_OPS 상 effective Priority(Priority Override 우선, 없으면
- * Lead Priority — ACQREP_001_Report.js의 isEffectiveP1_() 재사용)가
- * "Priority 1"이 아닌 리드를 검출·플래깅한다.
+ * 오기입 변형 표기 포함)와 Leads_OPS를 양방향으로 대조한다:
+ * (1) 리스트엔 P1 학교로 등록돼 있는데 Leads_OPS 상 effective Priority
+ *     (Priority Override 우선, 없으면 Lead Priority — ACQREP_001_Report.js의
+ *     isEffectiveP1_() 재사용)가 "Priority 1"이 아닌 리드를 검출·플래깅
+ *     (`P1_School_Mismatch_QA` 시트).
+ * (2) (역방향, 신규 리드 대상) 2026-09-04 이후 Create Date인
+ *     리드 중 effective Priority는 P1인데 School Name이 리스트에 없는 경우를
+ *     학교 단위로 집계 — 리스트에 추가할 학교 후보(`Not_Striked` 시트, 항상
+ *     숨김).
  *
  * WHY (도입 배경, 2026-09-04)
  * `docs/OpenItems.md` #48 — 담당팀이 P1으로 확정한 학교 리드가 파이프라인
  * 상에서는 다른 Priority로 남아있는 경우가 종종 있어, 매 Leads Import마다
  * 자동으로 대조해 알려달라는 요청(사용자 확정 — 시트 내 플래깅, 이메일 없이 /
- * Leads Import 파이프라인에 자동 편입).
+ * Leads Import 파이프라인에 자동 편입). 역방향 체크는 같은 세션 후속 요청 —
+ * 반대로 파이프라인상 이미 P1인데 리스트가 아직 못 따라온 신규 학교도
+ * 리스트업. 과거 누적 리드 전체로 확장하면 노이즈가 커져 "오늘부터
+ * 새로 들어오는 리드"로 한정(사용자 확정).
  *
  * `runOPSQA_()`(OPS_006_QA.js)와 별개 — `runOPSQA_()`는 `buildLeadsOPS(true)`
  * (skipQA=true)로 매 자동 Import마다 스킵되므로, 이 체크는 그 스킵과 무관하게
@@ -24,16 +32,22 @@
  *
  * Must NOT
  * - Leads_OPS/Leads_Master 값을 직접 수정하지 않음(검출·기록만, 실제 Priority
- *   교정은 사용자가 이 결과를 보고 수동으로 처리)
+ *   교정/P1 School List 추가는 사용자가 이 결과를 보고 수동으로 처리)
  * - isEffectiveP1_() 판정 로직을 다시 구현하지 않음(ACQREP_001_Report.js 재사용)
  *
  * Stage
  * OPS (Leads_OPS Build 도메인 — Leads_OPS를 읽어 대조하는 후속 체크)
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-09-04)
+ * - **역방향 체크 신규**(사용자 후속 요청) — `computeMissingP1Schools_()`(순수
+ *   함수)/`writeMissingP1SchoolsResults_()` 신규, `performP1SchoolMismatchCheck_()`가
+ *   기존에 읽은 opsRecords/p1SchoolSet을 그대로 재사용(추가 Sheet I/O 없음).
+ *   결과는 `OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.OUTPUT_SHEET`
+ *   ("Not_Striked", 항상 숨김, OPS_001_Config.js v2.9)에 학교 단위로 집계.
  * v1.0.0 (2026-09-04)
  * - 최초 구현. `docs/OpenItems.md` #48.
  * ==========================================================
@@ -274,6 +288,120 @@ function testComputeP1SchoolMismatches(){
 
 /**
  * ==========================================================
+ * Compute Missing P1 Schools (순수 함수 — 역방향 체크)
+ *
+ * WHY (2026-09-04, 사용자 후속 요청)
+ * `computeP1SchoolMismatches_()`의 반대 방향 — School Name이 P1 School
+ * List에 없는데 Leads_OPS 상 effective Priority는 이미 P1인 "리스트에
+ * 아직 없는 학교"를 찾아 P1 School List에 추가할지 판단할 수 있게 한다.
+ * `startDate`(포함) 이후 Create Date인 리드만 대상 — 과거 누적 리드
+ * 전체로 확장하면 노이즈가 커짐(사용자 확정, "오늘부터 새로 들어오는
+ * 리드"). School 단위로 집계(리드 단위 아님) — 같은 학교의 여러 리드는
+ * 카운트만 늘리고 한 행으로 합쳐짐.
+ *
+ * @param {Object[]} opsRecords  sheetToObjects(Leads_OPS) 결과
+ * @param {Object} p1SchoolNormalizedSet  computeP1SchoolNormalizedSet_() 결과
+ * @param {Date} startDate  이 날짜(포함) 이후 Create Date만 대상
+ * @return {Object[]}  {schoolName, count, exampleLeadId, exampleEmail, firstSeenDate}
+ *
+ * TEST
+ * computeMissingP1Schools_(
+ *   [
+ *     {"Lead ID":"1","Email":"a@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,5)},
+ *     {"Lead ID":"2","Email":"b@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,6)},
+ *     {"Lead ID":"3","Email":"c@x.com","School Name":"ABC School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,5)},
+ *     {"Lead ID":"4","Email":"d@x.com","School Name":"New School","Lead Priority":"Priority 2","Priority Override":"","Create Date":new Date(2026,8,5)},
+ *     {"Lead ID":"5","Email":"e@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,3)}
+ *   ],
+ *   {"abc school": true},
+ *   new Date(2026,8,4)
+ * ) => [{schoolName:"New School", count:2, exampleLeadId:"1", exampleEmail:"a@x.com", firstSeenDate: 2026-09-05}]
+ *   (3번은 이미 리스트에 있는 학교, 4번은 P1 아님, 5번은 startDate 이전이라 전부 제외)
+ * ==========================================================
+ */
+function computeMissingP1Schools_(opsRecords, p1SchoolNormalizedSet, startDate){
+
+  const bySchool = {};
+
+  opsRecords.forEach(function(record){
+
+    const createDate = record["Create Date"];
+
+    if(!(createDate instanceof Date) || isNaN(createDate.getTime())) return;
+    if(createDate.getTime() < startDate.getTime()) return;
+
+    const leadPriority = record["Lead Priority"] || "";
+    const priorityOverride = record["Priority Override"] || "";
+
+    if(!isEffectiveP1_(leadPriority, priorityOverride)) return;
+
+    const schoolName = String(record["School Name"] || "").trim();
+
+    if(!schoolName) return;
+
+    const key = schoolName.toLowerCase();
+
+    if(p1SchoolNormalizedSet[key]) return;
+
+    if(!bySchool[key]){
+      bySchool[key] = {
+        schoolName: schoolName,
+        count: 0,
+        exampleLeadId: record["Lead ID"] || "",
+        exampleEmail: record["Email"] || "",
+        firstSeenDate: createDate
+      };
+    }
+
+    bySchool[key].count++;
+
+    if(createDate.getTime() < bySchool[key].firstSeenDate.getTime()){
+      bySchool[key].firstSeenDate = createDate;
+    }
+
+  });
+
+  return Object.keys(bySchool).map(function(key){
+    return bySchool[key];
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeMissingP1Schools_()
+ * ==========================================================
+ */
+function testComputeMissingP1Schools(){
+
+  const opsRecords = [
+    {"Lead ID":"1","Email":"a@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,5)},
+    {"Lead ID":"2","Email":"b@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,6)},
+    {"Lead ID":"3","Email":"c@x.com","School Name":"ABC School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,5)},
+    {"Lead ID":"4","Email":"d@x.com","School Name":"New School","Lead Priority":"Priority 2","Priority Override":"","Create Date":new Date(2026,8,5)},
+    {"Lead ID":"5","Email":"e@x.com","School Name":"New School","Lead Priority":"Priority 1","Priority Override":"","Create Date":new Date(2026,8,3)}
+  ];
+
+  const p1SchoolSet = {"abc school": true};
+
+  const result = computeMissingP1Schools_(opsRecords, p1SchoolSet, new Date(2026,8,4));
+
+  const pass =
+    result.length === 1 &&
+    result[0].schoolName === "New School" &&
+    result[0].count === 2 &&
+    result[0].exampleLeadId === "1" &&
+    result[0].firstSeenDate.getTime() === new Date(2026,8,5).getTime();
+
+  Logger.log("computeMissingP1Schools_ result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Write P1 School Mismatch Results (IO 래퍼)
  *
  * WHY
@@ -328,6 +456,60 @@ function writeP1SchoolMismatchResults_(mismatches){
 
 /**
  * ==========================================================
+ * Write Missing P1 Schools Results (IO 래퍼 — 역방향 체크)
+ *
+ * WHY
+ * `writeP1SchoolMismatchResults_()`와 달리 항상 숨김(사용자 확정) — 담당팀이
+ * 정기적으로 열어 P1 School List에 추가할 학교를 검토하는 용도.
+ * ==========================================================
+ */
+const MISSING_P1_SCHOOL_HEADERS = [
+  "School Name", "P1 Lead Count", "Example Lead ID", "Example Email",
+  "First Seen Date", "Checked At"
+];
+
+function writeMissingP1SchoolsResults_(missingSchools){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let sheet = ss.getSheetByName(OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.OUTPUT_SHEET);
+
+  if(!sheet){
+    sheet = ss.insertSheet(OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.OUTPUT_SHEET);
+  }
+
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, MISSING_P1_SCHOOL_HEADERS.length)
+    .setValues([MISSING_P1_SCHOOL_HEADERS])
+    .setFontWeight("bold");
+
+  if(missingSchools.length > 0){
+
+    const checkedAt = Utilities.formatDate(new Date(), CONFIG.DATE.TIMEZONE, "yyyy-MM-dd HH:mm");
+
+    const rows = missingSchools.map(function(m){
+      return [
+        m.schoolName, m.count, m.exampleLeadId, m.exampleEmail,
+        Utilities.formatDate(m.firstSeenDate, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd"),
+        checkedAt
+      ];
+    });
+
+    sheet.getRange(2, 1, rows.length, MISSING_P1_SCHOOL_HEADERS.length).setValues(rows);
+
+  }
+
+  sheet.setFrozenRows(1);
+  sheet.hideSheet();
+
+  SpreadsheetApp.flush();
+
+}
+
+
+/**
+ * ==========================================================
  * Perform P1 School Mismatch Check (오케스트레이션)
  * ==========================================================
  */
@@ -350,6 +532,22 @@ function performP1SchoolMismatchCheck_(){
     "[P1SchoolMismatch] P1 학교 " + Object.keys(p1SchoolSet).length +
     "개(별칭 포함) / Leads_OPS " + opsRecords.length + "건 대조 — 불일치 " +
     mismatches.length + "건 " + OPS.P1_SCHOOL_MISMATCH.OUTPUT_SHEET + "에 기록."
+  );
+
+  // 2026-09-04 — 역방향 체크(사용자 후속 요청). 위에서 이미 읽은 opsRecords/
+  // p1SchoolSet을 그대로 재사용 — 추가 Sheet I/O 없이 메모리 연산만 더함.
+  const missingSchools = computeMissingP1Schools_(
+    opsRecords, p1SchoolSet, OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.START_DATE
+  );
+
+  writeMissingP1SchoolsResults_(missingSchools);
+
+  Logger.log(
+    "[P1SchoolMismatch] " +
+    Utilities.formatDate(
+      OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.START_DATE, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd"
+    ) + " 이후 신규 P1 리드 중 리스트에 없는 학교 " + missingSchools.length + "개 " +
+    OPS.P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING.OUTPUT_SHEET + "에 기록."
   );
 
   return mismatches;

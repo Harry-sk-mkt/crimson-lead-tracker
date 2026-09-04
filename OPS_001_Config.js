@@ -7,9 +7,15 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.8
+ * v2.9
  *
  * Change Log
+ * v2.9 (2026-09-04)
+ * - **`P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING` 신규**(`docs/OpenItems.md`
+ *   #48 후속 요청, 역방향 체크) — 2026-09-04 이후 신규 리드 중 effective
+ *   Priority가 P1인데 School Name이 P1 School List에 없는 경우를 학교
+ *   단위로 집계, 항상 숨김 탭("Not_Striked")에 기록. `OPS_007_P1SchoolMismatch.js`가
+ *   소비.
  * v2.8 (2026-09-04)
  * - **`P1_SCHOOL_MISMATCH` 신규**(`docs/OpenItems.md` #48) — 외부 "P1 School
  *   List" 스프레드시트 위치/컬럼 구조(EXTERNAL) + 결과 기록 대상 시트
@@ -298,7 +304,30 @@ const OPS = {
     // 결과 기록 시트(Leads_OPS_QA와 별개 — runOPSQA_()는 buildLeadsOPS(true)로
     // 매 Import마다 스킵되므로(skipQA), 이 체크는 항상 도는 독립 파이프라인
     // 단계로 별도 시트에 씀. 사용자 확인 후 직접 열어보는 용도라 숨기지 않음)
-    OUTPUT_SHEET : "P1_School_Mismatch_QA"
+    OUTPUT_SHEET : "P1_School_Mismatch_QA",
+
+    /*
+    ==========================================================
+    MISSING SCHOOL TRACKING (역방향 체크, 2026-09-04 신규)
+
+    위와 반대 방향 — Leads_OPS 상 effective Priority가 이미 P1인데 School
+    Name이 외부 P1 School List(별칭 포함)에 없는 경우를 검출. "오늘부터
+    새로 들어오는 리드"만 대상(사용자 확정) — 오래 누적된 과거 리드 전체에
+    적용하면 아직 리스트에 반영 안 된 정상적인 과거 케이스가 너무 많아
+    노이즈가 커짐. School 단위로 집계(사용자 확정, 리드 단위 아님) — "이
+    학교를 P1 School List에 추가해야 하는지" 판단 용도.
+    ==========================================================
+    */
+    MISSING_SCHOOL_TRACKING : {
+
+      // 이 날짜(포함) 이후 Create Date인 리드만 대상 — 2026-09-04(이 기능
+      // 도입일) 사용자 확정 "오늘부터"
+      START_DATE : new Date(2026, 8, 4),
+
+      // Leads_OPS_QA/P1_School_Mismatch_QA와 달리 항상 숨김(사용자 확정)
+      OUTPUT_SHEET : "Not_Striked"
+
+    }
 
   },
 
