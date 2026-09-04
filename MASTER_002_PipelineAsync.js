@@ -22,9 +22,15 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.27.0
+ * v1.28.0
  *
  * Change Log
+ * v1.28.0 (2026-09-04)
+ * - **`runLeadsPipelineTail()`에 `checkP1SchoolMismatch_()` 신규 단계 추가**
+ *   (`docs/OpenItems.md` #48, `OPS_007_P1SchoolMismatch.js`) — `buildLeadsOPS`
+ *   직후, 외부 P1 School List와 Leads_OPS를 대조해 불일치 리드를
+ *   `P1_School_Mismatch_QA` 시트에 플래깅. `refreshCampaignSpend_()`와 동일한
+ *   실패 격리 원칙(내부 try/catch, 실패해도 나머지 파이프라인은 계속).
  * v1.27.0 (2026-09-03)
  * - **Revenue 파이프라인 트리거 재설계(`docs/OpenItems.md` #47,
  *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
@@ -2079,6 +2085,10 @@ function runLeadsPipelineTail(){
     advancePipelineStage_(type, state, "buildLeadsOPS", function(){
       buildLeadsOPS(true);
     }, ["leadsOps"]);
+
+    advancePipelineStage_(
+      type, state, "checkP1SchoolMismatch_", checkP1SchoolMismatch_
+    );
 
     advancePipelineStage_(
       type, state, "rebuildDealTrackerEngine_", rebuildDealTrackerEngine_

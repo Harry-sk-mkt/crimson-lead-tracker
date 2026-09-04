@@ -7,9 +7,13 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.7
+ * v2.8
  *
  * Change Log
+ * v2.8 (2026-09-04)
+ * - **`P1_SCHOOL_MISMATCH` 신규**(`docs/OpenItems.md` #48) — 외부 "P1 School
+ *   List" 스프레드시트 위치/컬럼 구조(EXTERNAL) + 결과 기록 대상 시트
+ *   (OUTPUT_SHEET). `OPS_007_P1SchoolMismatch.js`가 소비.
  * v2.7 (2026-09-03)
  * - **"SAL Segment" 신규 컬럼**(HEADER + SYNC_COLUMNS) — ACQ_REP은 코호트가
  *   아니라 이벤트 기준 리포트라, SAL도 Lead 생성 시점 First Touch로 고정된
@@ -256,6 +260,47 @@ const OPS = {
     "Notes"
 
   ],
+
+  /*
+  ==========================================================
+  P1 SCHOOL MISMATCH (2026-09-04 신규, docs/OpenItems.md #48)
+
+  외부 "P1 School List" 스프레드시트(사용자가 관리, 담당팀이 P1으로 확정한
+  학교 목록)와 Leads_OPS를 대조해, 리스트엔 P1 학교로 등록돼 있는데
+  Leads_OPS 상 effective Priority(Priority Override 우선, 없으면 Lead
+  Priority — ACQREP_001_Report.js의 isEffectiveP1_() 재사용)가 "Priority 1"이
+  아닌 리드를 검출한다. OPS_007_P1SchoolMismatch.js 참고.
+  ==========================================================
+  */
+
+  P1_SCHOOL_MISMATCH : {
+
+    EXTERNAL : {
+      // 2026-09-04 사용자 공유 —
+      // https://docs.google.com/spreadsheets/d/15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q
+      SPREADSHEET_ID : "15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q",
+
+      TAB_NAME : "P1 School List",
+
+      // 실제 데이터는 4행부터 시작(1~3행은 헤더/안내, 사용자 확인)
+      DATA_START_ROW : 4,
+
+      // E열 — 대표 학교명(사용자 확인)
+      SCHOOL_COLUMN : 5,
+
+      // N열부터 — 같은 학교의 오기입/변형 표기(사용자 확인: "시스템적으로
+      // 사용자가 오기입해서 다른 학교로 분류되는 학교들", 행마다 개수가
+      // 다를 수 있어 이 열부터 끝까지 비어있지 않은 셀을 전부 별칭으로 포함)
+      ALIAS_START_COLUMN : 14
+
+    },
+
+    // 결과 기록 시트(Leads_OPS_QA와 별개 — runOPSQA_()는 buildLeadsOPS(true)로
+    // 매 Import마다 스킵되므로(skipQA), 이 체크는 항상 도는 독립 파이프라인
+    // 단계로 별도 시트에 씀. 사용자 확인 후 직접 열어보는 용도라 숨기지 않음)
+    OUTPUT_SHEET : "P1_School_Mismatch_QA"
+
+  },
 
   /*
   ==========================================================
