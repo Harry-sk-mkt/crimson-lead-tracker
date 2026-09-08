@@ -22,9 +22,17 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.29.0
+ * v1.30.0
  *
  * Change Log
+ * v1.30.0 (2026-09-08)
+ * - **`periodicRefreshRevenue_()` self-rescheduling 체인 끊김 버그 수정**
+ *   — `runRevenuePipelineTail()` 실패 시 재예약 호출까지 도달 못 해 Revenue
+ *   2시간 주기 트리거가 영구히 멈추던 문제. 실행부를 try/catch로 감싸고
+ *   `scheduleNextRevenuePeriodicRefresh_()`를 `finally`로 옮겨 성공/실패
+ *   무관하게 항상 재예약되도록 수정(`periodicRefreshAllReports_()`와 동일
+ *   원칙). 실사용 중 트리거가 Executions에서 사라진 것을 계기로 발견.
+ *
  * v1.29.0 (2026-09-05)
  * - **`isPipelineTailRunning_()` 신규(`docs/OpenItems.md` #46)** — Report
  *   Generate installable onEdit 트리거(`handleReportGenerateEdit`,
@@ -1882,26 +1890,51 @@ function scheduleNextRevenuePeriodicRefresh_(){
  * 이어서 실행). 락 획득/미획득과 무관하게 매번 다음 2시간 주기를 재예약 —
  * 대기열에만 의존하면 그사이 다른 파이프라인이 전혀 안 도는 조용한 기간에
  * Revenue가 영원히 안 도는 사각지대가 생기기 때문.
+ *
+ * 2026-09-08 버그 수정(docs/OpenItems.md 항목 미등록, 발견 즉시 수정) —
+ * `runRevenuePipelineTail()`은 실패 시 정리(`releasePipelineLockAndProcessQueue_()`)
+ * 후 에러를 다시 던지는데(`throw err`), 이 호출을 try/catch 없이 직접
+ * 부르고 있어 Revenue tail이 단 한 번이라도 실패하면(예: Deal Tracker
+ * 외부 API 일시 지연) 예외가 아래 `scheduleNextRevenuePeriodicRefresh_()`
+ * 호출까지 도달하지 못해 self-rescheduling 체인이 영구히 끊기는 문제가
+ * 실사용 중 발견됨(트리거 설치 후 며칠 뒤 Executions에서 자체가 사라짐).
+ * `periodicRefreshAllReports_()`가 이미 쓰는 것과 동일한 원칙(각 실행을
+ * try/catch로 격리해 재예약 자체는 항상 도달하게)으로 재예약을 `finally`로
+ * 옮겨 수정.
  * ==========================================================
  */
 function periodicRefreshRevenue_(){
 
-  if(acquirePipelineLock_(CONFIG.PIPELINE.TYPES.REVENUE)){
+  try{
 
-    runRevenuePipelineTail();
+    if(acquirePipelineLock_(CONFIG.PIPELINE.TYPES.REVENUE)){
 
-  } else {
+      runRevenuePipelineTail();
 
-    enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+    } else {
+
+      enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE);
+
+      Logger.log(
+        CONFIG.LOG.PREFIX +
+        " Revenue 주기적 Refresh — 다른 파이프라인 실행 중, 대기열에 편입."
+      );
+
+    }
+
+  } catch(err){
 
     Logger.log(
       CONFIG.LOG.PREFIX +
-      " Revenue 주기적 Refresh — 다른 파이프라인 실행 중, 대기열에 편입."
+      " periodicRefreshRevenue_ 실행 실패(다음 2시간 주기는 계속 예약됨) — " +
+      (err && err.message ? err.message : err)
     );
 
-  }
+  } finally {
 
-  scheduleNextRevenuePeriodicRefresh_();
+    scheduleNextRevenuePeriodicRefresh_();
+
+  }
 
 }
 

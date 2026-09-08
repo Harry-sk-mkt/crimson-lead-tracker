@@ -61,6 +61,62 @@ clobber 위험 없이 merge)로 7건을 `Program_Segment_Override`에 "Content"�
 정식 등록 — 2026-09-08 실 Import 실측(`buildLeadsOPS()` 61건 신규 처리에 101.18초, 신규
 건수와 무관하게 전체 재스캔 비용 고정)을 근거로 기록. 설계/구현은 미착수, 임의로 착수하지 말 것.
 
+## 성능 최적화 exec-plan 항목 4(딕셔너리 증분) 부분 검증
+
+Executions 로그로 `periodicRefreshDictionaries_`(2026-08-26부터 설치된 12시간 주기 트리거)의
+01:04:25 실행 확인 — 에러 없음, 기대 로그 포맷("Leads 신규 N행 / MTA 신규 N행 반영(전체
+재채굴 아님)")도 정확히 찍힘. 다만 이번 사이클은 "신규 0행"이라 신규 행을 실제로 올바르게
+채굴하는지는 미확인(당일 Leads Import 이전 실행) — 다음 사이클 로그로 이어서 확인 필요.
+
+## Revenue 주기적 Refresh(`periodicRefreshRevenue_`) self-rescheduling 체인 끊김 버그 발견·수정
+
+파이프라인 refresh 재설계 exec-plan(`2026-09-02-pipeline-refresh-time-redesign.md`)의 마지막
+실사용 검증 항목을 확인하던 중, 사용자가 Executions에서 `periodicRefreshRevenue_` 자체를 찾을
+수 없다고 보고 — 조사 결과 `periodicRefreshRevenue_()`가 `runRevenuePipelineTail()`을
+try/catch 없이 직접 호출하는데, 그 함수는 실패 시 정리(`releasePipelineLockAndProcessQueue_()`)
+후 에러를 다시 던지도록(`throw err`) 짜여 있어 Revenue tail이 한 번이라도 실패하면(외부 Deal
+Tracker API 일시 지연 등) 예외가 `scheduleNextRevenuePeriodicRefresh_()` 호출까지 도달하지
+못해 2시간 주기 self-rescheduling 체인이 영구히 끊기는 구조였음. 옆의 `periodicRefreshAllReports_()`는
+각 리포트를 개별 try/catch로 격리해 이 문제가 없는데 Revenue만 보호가 빠져 있었음. `MASTER_002_
+PipelineAsync.js`(v1.30.0)에서 실행부를 try/catch/finally로 감싸 재예약을 `finally`로 이동,
+성공/실패 무관하게 항상 재예약되도록 수정. 사용자가 `runInstallRevenuePeriodicRefreshTrigger()`
+재실행 후 트리거 재설치 확인(로그: "Revenue 주기적 Refresh 다음 실행 예약: 2026-09-08 12:49
+KST") — 2연속 정상 실행 여부는 다음 세션에서 계속 확인.
+
+## SAL 델타 refresh(`refreshACQSummarySALDelta_`) 실사용 검증 완료
+
+같은 exec-plan의 남은 검증 항목 — 오늘 SAL Import(`runSALPipelineTail`) 로그로 확인: 기존
+6개 Engine 전체 재실행 대신 "[Marketing 2.0] ACQ Summary SAL-Delta Refresh Started" →
+"Completed : 10 leads changed (3.24s)" 한 줄로 정확히 끝남, 설계대로 동작 확인.
+
+## 캠페인 지출 통합 exec-plan(`2026-07-30-campaign-spend-integration.md`) 문서 정정
+
+사용자가 "카카오랑 네이버는 다 연동된거아니야?"로 지적 — 큰 파일 안에 7/31일자 "권한 승인
+대기 중" 블로커 기록만 보고 미완료로 잘못 판단했던 걸 정정. 실제로는 Naver Search Ads/Kakao
+Moments 둘 다 API 연동 완료돼 자동 파이프라인(`refreshCampaignSpend_()` + 4시간 주기
+`periodicRefreshAdSpendCache_()`)으로 운영 중임을 확인 — 해당 승인/구현 작업은 별도 exec-plan
+(`2026-08-04-kakao-moments-api-integration.md`)에서 이미 완료됐던 것이고 이 파일 체크리스트만
+갱신 안 됐던 상태. 파일 상단에 정정된 상태 요약 추가, Kakao Moments 섹션의 stale 블로커
+기록 옆에 해소 확인 노트 추가. 미착수(우선순위 미정, 백로그로 남기기로 확정)로 확인된 건
+Naver GFA/Google Display/Naver Offline Cafe 3개 플랫폼뿐.
+
+## FY_REP August Spend 누락 버그 수정 (`docs/exec-plans/completed/2026-08-07-fy-rep-implementation.md`)
+
+사용자 리포트 "fy report에 AUG spending이 없어" — 조사 결과 `CONFIG.FYREP.MARKETING_SOURCE.TABS`
+(CORE_001_Config.js)에 FY24/25/26만 등록돼 있고 FY27이 아예 없어(사용자가 외부
+`perfTrackerByFY`에 FY27 탭을 새로 만들었으나 CONFIG 갱신이 누락됨)
+`computeFYRepMarketingRowsForFY_()`가 FY27 전체를 빈 배열로 반환하던 게 원인. 신규 진단
+`TEMPQA_055_FYRepMarketingFY27TabInspect.js`로 실측(No Assumptions) — 처음엔 C열이
+"AUGUST" 텍스트가 아니라 Date 객체("Jul 31 2026")로 나와 컬럼이 밀린 것으로 의심했으나,
+사용자가 시트에서 직접 C27=8월 확인 + 코드가 헤더 행의 실제 텍스트/날짜 값이 아니라 컬럼
+"위치"만 쓴다는 걸 재확인해 무관함이 밝혀짐 — 진짜 확인 대상은 "Amount spent (total)" 라벨이
+이 탭에도 그대로 있는지였고, 새 지표(Channel Revenue/ROAS/Deals 등) 8개가 위에 끼워져
+그 행이 27→37행으로 내려갔을 뿐 라벨 자체는 그대로임을 확인(스캔 로직이 행 순서에
+안 의존하는 설계라 영향 없음). `CORE_001_Config.js`(v1.67.0)에 `TABS[27] =
+{NAME:"FY27",PLATFORM_HEADER_ROW:27}` 추가 — 사용자가 FY_REP 재생성 후 August Spend
+정상 반영 확인. exec-plan을 `completed/`로 이동, Outcomes 작성(매년 새 FY 탭 추가 시
+헤더 행 실측 확인 후 CONFIG 등록하는 절차가 필요함을 기록).
+
 # Changelog — 2026-09-04
 
 ## 파이프라인 성능 최적화 exec-plan 5개 항목 구현 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)

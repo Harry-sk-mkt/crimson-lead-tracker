@@ -212,6 +212,34 @@ FY_REP/S&M_REP이 과거 확정 구간을 매번 재계산하지 않고 증분�
     정상인지) 확인. (b) 다음 SAL Import 때 로그에 기존 6개 Engine refresh 대신
     "ACQ Summary SAL-Delta Refresh Completed" 한 줄만 뜨는지, ACQ_Summary/Weekly
     시트의 SAL 카운트가 실제로 정확히 반영되는지(예: S&M_REP 등에서 육안 대조).
+  - **🐛 버그 발견·수정(2026-09-08)** — (a) 검증 중 사용자가 Executions에서
+    `periodicRefreshRevenue_` 자체를 찾을 수 없다고 보고, 조사 결과 코드 버그
+    확인: `periodicRefreshRevenue_()`가 `runRevenuePipelineTail()`을 try/catch
+    없이 직접 호출하는데, 그 함수는 실패 시 정리(`releasePipelineLockAndProcessQueue_()`)
+    후 에러를 다시 던지도록(`throw err`) 짜여 있어 — Revenue tail이 한 번이라도
+    실패하면(외부 Deal Tracker API 일시 지연 등) 예외가 그대로 `scheduleNextRevenuePeriodicRefresh_()`
+    호출까지 도달하지 못하고 self-rescheduling 체인이 영구히 끊기는 구조였음.
+    옆의 `periodicRefreshAllReports_()`(리포트별 개별 try/catch로 격리)와 달리
+    이 함수만 보호가 빠져 있었음 — 함수 자체 주석("락 획득/미획득과 무관하게
+    매번 다음 주기를 재예약")과도 실제 동작이 어긋났던 버그. `MASTER_002_
+    PipelineAsync.js` v1.30.0에서 try/catch/finally로 감싸 재예약을 `finally`로
+    이동, 성공/실패 무관하게 항상 재예약되도록 수정 — `safe-clasp-push.sh`로
+    push 완료. **✅ 트리거 재설치 확인(2026-09-08 10:49:56)** — 사용자가
+    `runInstallRevenuePeriodicRefreshTrigger()` 재실행, 로그 "Revenue 주기적
+    Refresh 다음 실행 예약: 2026-09-08 12:49 KST" 확인, 에러 없이 Completed.
+    **TODO**: 12:49 KST 이후 Executions에서 `periodicRefreshRevenue_`가 실제로
+    자동 실행됐는지, 그다음 재예약 로그(14:49 KST)까지 이어지는지 확인 —
+    이번 버그가 "1회 실행 후 재예약 실패"였으므로 최소 2회 연속 성공까지
+    봐야 self-rescheduling 체인이 실제로 복구됐다고 확신 가능.
+  - **✅ (b) SAL 델타 refresh 실사용 검증 완료(2026-09-08 06:07 KST)** —
+    같은 날 `runICFunnelPipelineTail`과 락 경합 후 재시도된 `runSALPipelineTail`
+    로그로 확인: SAL_Raw 8179건 신규 처리(최초 실행이라 전체) 후 기존 6개
+    Engine 재실행 대신 **"[Marketing 2.0] ACQ Summary SAL-Delta Refresh
+    Started" → "Completed : 10 leads changed (3.24s)"** 한 줄로 정확히 끝남 —
+    설계대로 동작 확인. SAL Sync 자체는 최초 체크포인트라 1055.42초 걸렸지만
+    (항목 3에서 이미 확인된 "최초 1회 한정" 전체 처리 비용과 동일 현상),
+    ACQ Summary 갱신 부분만 놓고 보면 델타 방식으로 3.24초 만에 끝나 기존
+    "6개 Engine 전체 재계산" 대비 목표한 절감 효과 실측 확인.
 
 ## Outcomes & Retrospective
 

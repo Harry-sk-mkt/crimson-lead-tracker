@@ -3,6 +3,15 @@
 **관련 로드맵 항목**: `docs/Roadmap.md` End Goal Phase 1 — "외부 캠페인 지출 데이터 통합
 (CPNP1 실적 계산 기반)"
 **시작일**: 2026-07-30
+**상태(2026-09-08 정리)**: **Meta(수동)/Naver Search Ads(API)/Kakao Moments(API)/Kakao
+Channel(레거시)/Google Search(수동 붙여넣기, Search_OPS 반영까지) 5개 플랫폼 완료, 자동
+파이프라인(`refreshCampaignSpend_()`, Leads/MTA tail마다 + `periodicRefreshAdSpendCache_()`
+4시간마다)에 편입돼 운영 중.** 아래 "Kakao Moments" 섹션의 7/31일자 "권한 승인 대기" 블로커
+기록들은 stale — 실제 승인·구현·배포는 별도 exec-plan
+(`docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md`, `docs/OpenItems.md`
+#19)에서 2026-08-04~08 완료됐고 이 파일 체크리스트만 갱신 안 된 상태였음(2026-09-08 발견,
+사용자 확인 후 정정). **미착수(우선순위 미정)**: Naver GFA/Google Display/Naver Offline
+Cafe — 착수 여부는 사용자 결정 필요.
 
 ## Goal
 
@@ -430,6 +439,11 @@
       결과 나올 때까지 Kakao Moments 구현 작업 대기.
 - [ ] Kakao 로그인 상품 활성화 + Redirect URI 등록(권한 확보 후 진행) — Redirect URI는
       Apps Script Web App 배포로 해결 예정(제안만 한 상태, 실제 진행 안 함)
+
+**✅ 위 블로커 전부 해소, Kakao Moments API 연동 완료(2026-08-04~08)** — 권한 승인 이후
+실제 구현/OAuth/실 API 검증/자동 파이프라인 편입까지 전부 별도 exec-plan
+`docs/exec-plans/active/2026-08-04-kakao-moments-api-integration.md`에서 진행·완료됨(이
+섹션 체크리스트는 당시 착수 전 기록이라 갱신 안 된 채 남아있었음, 2026-09-08 발견·정정).
 
 ### Kakao Channel (기존 수기 데이터, 모먼트 권한 대기 중 병행 착수, 2026-07-31)
 

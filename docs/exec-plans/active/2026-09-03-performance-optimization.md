@@ -4,8 +4,14 @@
 **시작일**: 2026-09-03  
 **상태**: 항목 1~5 전부 코드 작성 완료(2026-09-04), 순수 함수 단위 테스트 전부 PASS. **항목
 1/2/3/5는 2026-09-07~08 실 Import(MTA/Leads/SAL/IC Funnel)로 동작 자체는 확인 완료** — 상세는
-각 항목 참고. **항목 4(딕셔너리 증분)만 여전히 미검증** — 12시간 주기 트리거라 다음 주기 실행
-로그 확인 필요. 항목 5는 사용자 확정으로 청크 처리만 적용, Leads_OPS 증분 병합은 별도 설계/검증
+각 항목 참고. **항목 4(딕셔너리 증분)는 부분 검증(2026-09-08)** — Executions 로그로
+`periodicRefreshDictionaries_`가 Time-Driven 트리거로 정상 실행됨(01:04:25, 31.1초, 에러
+없음) 확인, 기대 로그 포맷("Leads 신규 N행 / MTA 신규 N행 반영(전체 재채굴 아님)")도 정확히
+찍힘 — **증분 경로를 타는 것 자체는 확인됨**. 다만 이 사이클은 "Leads 신규 0행 / MTA 신규
+0행"이라 신규 행을 실제로 올바르게 채굴하는지는 아직 미확인(이 실행이 당일 Leads Import보다
+먼저 돎). **TODO — 오늘(2026-09-08) 오후 1시경 다음 사이클 로그를 사용자가 공유하면, 당일
+Leads Import분이 0이 아닌 값으로 정확히 반영됐는지 확인 후 항목 4를 완료 처리할 것.** 항목
+5는 사용자 확정으로 청크 처리만 적용, Leads_OPS 증분 병합은 별도 설계/검증
 필요해 범위 밖으로 보류(아래 항목 5 "미착수" 참고). **✅ 원인 확정(2026-09-08, 사용자 재현
 테스트)** — SAL 직후 겹쳐 실행됐을 때 `runICFunnelPipelineTail`이 1790초(≈29.8분, 30분 제한
 근접), `generateTargetReport_`만 916초 소요. 같은 날 락 충돌 없이 **단독으로 IC Funnel Import
@@ -108,9 +114,13 @@
       (`runRefreshUtmProgramDictionary()`/`runRefreshProgramSegmentDictionary()`)은
       함수명/시그니처/가시적 출력 무변경으로 유지(안전장치), 내부만 hidden
       컬럼 기록+체크포인트 리셋을 하도록 갱신해 두 경로가 캐시 시트를 공유해도
-      어긋나지 않게 함. **아직 실 트리거 실행으로 검증 안 함** — 다음
-      `periodicRefreshDictionaries_()` 자동 실행(또는 수동 Run) 시 Logger 로그의
-      "Leads 신규 N행 / MTA 신규 N행 반영(전체 재채굴 아님)"으로 확인 필요.
+      어긋나지 않게 함. **부분 검증(2026-09-08)** — Executions 로그로
+      `periodicRefreshDictionaries_`의 01:04:25 Time-Driven 실행(31.1초, 에러 없음) 확인,
+      기대 로그 포맷("Leads 신규 N행 / MTA 신규 N행 반영(전체 재채굴 아님)")도 정확히
+      찍힘(UTM_Program_Dictionary/Program_Segment_Dictionary 둘 다) — 증분 경로 진입
+      자체는 확인됨. 이 사이클은 "신규 0행"이라(당일 Leads Import 이전 실행) 신규 행을
+      실제로 올바르게 채굴하는지는 미확인 — **TODO: 오늘 오후 1시경 다음 사이클 로그를
+      사용자가 공유하면(당일 Leads Import분 반영 여부) 확인 후 완료 처리.**
       Business Segment 분류 결과(`resolveBusinessSegment_()` 등 소비 측)는 캐시
       시트의 핵심 4개 컬럼 의미/위치가 그대로라 회귀 없음 — 그래도 다음 Import 후
       Business Segment 분류가 기존과 동일하게 나오는지 육안 확인 권장.

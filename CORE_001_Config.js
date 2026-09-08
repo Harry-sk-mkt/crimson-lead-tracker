@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.66.0
+ * v1.67.0
  *
  * Change Log
+ * v1.67.0 (2026-09-08)
+ * - **`FYREP.MARKETING_SOURCE.TABS`에 27 추가**(사용자 리포트 — "FY_REP에
+ *   AUG spending이 없어") — FY27 탭이 아예 등록 안 돼 있어
+ *   `computeFYRepMarketingRowsForFY_()`가 빈 배열을 반환하던 게 원인.
+ *   TEMPQA_055로 실측 확인 후(헤더 행/컬럼 배치 FY26과 동일, Amount spent
+ *   (total) 라벨도 그대로) 27행/`{NAME:"FY27",PLATFORM_HEADER_ROW:27}` 추가.
  * v1.66.0 (2026-09-04)
  * - **`MARKETO_QA.UTM_OVERRIDE_SHEET`/`BUSINESS_SEGMENT_OPTIONS` 신규**
  *   (`docs/OpenItems.md` #34 후속, 사용자 요청) — (1) 여러 UTM이 하나의
@@ -1512,7 +1518,14 @@ const CONFIG = {
       TABS: {
         24: { NAME: "FY24", PLATFORM_HEADER_ROW: 25 },
         25: { NAME: "FY25", PLATFORM_HEADER_ROW: 25 },
-        26: { NAME: "FY26", PLATFORM_HEADER_ROW: 27 }
+        26: { NAME: "FY26", PLATFORM_HEADER_ROW: 27 },
+        // FY27 — 2026-09-08 실측 확인(TEMPQA_055): 헤더 행 위치(27행)/컬럼
+        // 배치(C=Aug~N=Jul)는 FY26과 동일, 새 지표(Channel Revenue/ROAS/Deals
+        // 등)가 Amount spent (total) 위에 끼워져 그 행이 27→37행으로
+        // 내려갔을 뿐 라벨 자체("Amount spent (total) (NZD)")는 그대로라
+        // 매칭 로직 변경 불필요(scanFYRepMarketingPlatformBlocks_는 블록
+        // 내 행 순서에 의존하지 않음).
+        27: { NAME: "FY27", PLATFORM_HEADER_ROW: 27 }
       },
 
       // 플랫폼 블록의 월 데이터는 항상 헤더행 기준 3~14열(8월~7월) — 탭마다

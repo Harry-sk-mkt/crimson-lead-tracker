@@ -147,7 +147,7 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
       FYREP_003_Styles.js). CONFIG.FYREP는 기존 방침대로 00_Config.js에 계속 유지
       (AD_001_Config.js처럼 분리하지 않음 — 이미 그렇게 구현돼 있었고 이번 결정은
       Engine/Report/Styles 파일에만 해당).
-- [ ] 실 시트 검증 (사용자 확인) — 진행 중, Report/Write 레이어가 3차례
+- [x] 실 시트 검증 (사용자 확인, 2026-09-08 완료) — Report/Write 레이어가 3차례
       재설계됨(Engine 레이어는 전혀 안 바뀜):
       1차: 체크박스 기본값 버그 발견·수정(FYREP_002_Report.js v2.1.0).
       2차: Revenue Actual을 Created Date 코호트→Close Date 기준 그 달 실제
@@ -221,7 +221,19 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
       `FYREP_001_Engine.js` v1.7.0, `TARGET_003_Styles.js` v1.8.2,
       `CORE_001_Config.js` v1.42.0). 1회성 값 입력용
       `TEMPQA_022_TargetEngineTotalRevenueSeed.js`(`runSeedTargetEngineTotalRevenueRow()`)
-      신규. **재실행 결과 아직 미확인, 완료로 간주하지 말 것.**
+      신규. ~~재실행 결과 아직 미확인, 완료로 간주하지 말 것.~~
+
+      **12차(2026-09-08, 별개 버그 발견·수정)**: 사용자가 "FY_REP에 AUG spending이
+      없어" 리포트 — 조사 결과 `CONFIG.FYREP.MARKETING_SOURCE.TABS`(CORE_001_Config.js)에
+      24/25/26만 등록돼 있고 FY27이 아예 없어 `computeFYRepMarketingRowsForFY_()`가
+      FY27 전체를 빈 배열로 반환하던 게 원인(사용자가 perfTrackerByFY에 FY27 탭을
+      새로 만들었으나 CONFIG 갱신이 누락됨). `TEMPQA_055_FYRepMarketingFY27TabInspect.js`
+      신규 진단으로 실측(No Assumptions) — 헤더 행 위치(27행)/컬럼 배치(C=Aug~N=Jul)는
+      FY26과 동일, "Amount spent (total) (NZD)" 라벨도 그대로 존재(위에 신규 지표
+      8개가 끼워져 27→37행으로 내려갔을 뿐, 매칭 로직은 행 순서 무관이라 영향 없음)
+      확인 후 `CORE_001_Config.js`(v1.67.0)에 `TABS[27] = {NAME:"FY27",
+      PLATFORM_HEADER_ROW:27}` 추가. **✅ 사용자가 FY_REP 재생성 후 August Spend
+      정상 반영 확인(2026-09-08).**
 
 ## Surprises & Discoveries
 
@@ -259,4 +271,13 @@ FY24/FY25/FY26을 월별로 나란히 비교할 수 있는 신규 시트 `FY_REP
 
 ## Outcomes & Retrospective
 
-(작업 완료 후 작성)
+**완료(2026-09-08)**. FY24/25/26 3개 FY로 시작해 `computeFYRepDefaultFYList_()`로 매년
+자동 확장되도록 설계돼, 회계연도가 FY27로 넘어가자마자 Marketing 섹션만 별도 CONFIG 등록이
+빠져 있었음(ACQ/Pipeline/Revenue는 Leads_OPS/Deal Tracker 라이브 데이터라 자동으로 FY27도
+정상 표시 — 설계 당시 예견했던 대로). 외부 `perfTrackerByFY`에 새 FY 탭이 매년 추가될
+때마다 `CONFIG.FYREP.MARKETING_SOURCE.TABS`에 헤더 행 번호를 실측 확인 후 등록해야 한다는
+운영 절차가 이번에 드러남 — 헤더 행 위치는 FY24/25=25행, FY26=27행, FY27=27행으로 매년
+바뀔 수 있어 자동화하지 않고 매번 실측(TEMPQA 진단 함수) 확인 필요. Marketing 섹션의
+지표 라벨/행 순서 자체는(새 지표가 위에 끼워지는 식으로) 매년 바뀔 수 있지만 매칭 로직이
+행 순서에 의존하지 않게 설계돼 있어(라벨 접두사 매칭) 이번엔 코드 변경 없이 CONFIG 등록만
+으로 해결됨 — 설계가 견고했음을 보여준 사례.
