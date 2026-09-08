@@ -2,10 +2,19 @@
 
 **관련 로드맵 항목**: 파이프라인 성능 최적화 및 구조 효율화  
 **시작일**: 2026-09-03  
-**상태**: 항목 1~5 전부 코드 작성 완료(2026-09-04), 순수 함수 단위 테스트 전부 PASS —
-**실 Import/실 트리거 실행 검증은 전부 아직**(다음 세션 우선순위). 항목 5는 사용자 확정으로
-청크 처리만 적용, Leads_OPS 증분 병합은 별도 설계/검증 필요해 범위 밖으로 보류(아래 항목 5
-"미착수" 참고).
+**상태**: 항목 1~5 전부 코드 작성 완료(2026-09-04), 순수 함수 단위 테스트 전부 PASS. **항목
+1/2/3/5는 2026-09-07~08 실 Import(MTA/Leads/SAL/IC Funnel)로 동작 자체는 확인 완료** — 상세는
+각 항목 참고. **항목 4(딕셔너리 증분)만 여전히 미검증** — 12시간 주기 트리거라 다음 주기 실행
+로그 확인 필요. 항목 5는 사용자 확정으로 청크 처리만 적용, Leads_OPS 증분 병합은 별도 설계/검증
+필요해 범위 밖으로 보류(아래 항목 5 "미착수" 참고). **✅ 원인 확정(2026-09-08, 사용자 재현
+테스트)** — SAL 직후 겹쳐 실행됐을 때 `runICFunnelPipelineTail`이 1790초(≈29.8분, 30분 제한
+근접), `generateTargetReport_`만 916초 소요. 같은 날 락 충돌 없이 **단독으로 IC Funnel Import
+재실행**(월요일치 소량, 4건 신규)한 결과 `generateTargetReport_` **35.6초**(베이스라인 25.6s와
+동일 범위), 전체 `runICFunnelPipelineTail`도 329.9초(5.5분)로 정상 — **Target_REP 코드 버그가
+아니라 파이프라인 겹침(락 충돌 재시도)이 외부 스프레드시트(Deal Tracker) API 호출을 지연시키는
+현상으로 확정**. 조치는 별도 결정 필요(자주 발생하는 패턴이 아니라 낮은 우선순위로 분류 가능하나,
+겹치면 30분 제한에 근접하는 건 사실이므로 완전히 무시하지 말 것) — `docs/OpenItems.md`에 별도
+항목으로 기록.
 
 ---
 
@@ -19,9 +28,10 @@
       `OPS_006_QA.js`(v1.8.1)의 중복행 자동삭제 함수 헤더 주석("매 append마다 재정렬되므로
       정렬 부작용 없음")이 stale해져 함께 갱신(카운터 무관 결론 자체는 그대로 유효).
       `docs/OpenItems.md` #18 하위 TODO, `docs/ImportPipeline.md` 파일 목록도 갱신.
-      **아직 실 Import로 검증 안 함** — 다음 실제 Leads/MTA Import 실행 시 (1) Master가
-      append 순서 그대로 쌓이는지, (2) 다운스트림(OPS/리포트)이 정렬 제거로 인한 영향이
-      없는지 확인 필요.
+      **간접 검증(2026-09-07/08)** — 실 MTA/Leads Import 2건 모두 에러 없이 완주(다운스트림
+      OPS/리포트까지 정상 생성), append-only 전환으로 인한 부작용 없음. Master 행이 실제로
+      append 순서 그대로 쌓이는지(정렬 여부)까지 육안 대조는 안 함(낮은 우선순위, 필요 시
+      추가 확인).
 - [x] **항목 2 — `RawDeduplicator` 동적 윈도우 (2026-09-04, 코드 완료)**:
       `IMPORT_008_RawDeduplicator.js`(v1.2.0)의 `filterOutExactDuplicateRawRecords_()`에
       optional `dateFieldName` 추가 — 지정 시 그 컬럼만 먼저 읽어(`findRawDedupComparisonWindow_()`)
@@ -35,9 +45,12 @@
       `"Multi Touch Attribution: Created Date"` 전달. `writeICFunnelRaw()`/
       `writeSALRaw()`는 필수 날짜 필드가 없어(`REQUIRED_FIELDS`에 "Lead ID"만)
       의도적으로 미전달 — 기존 전체 스캔 그대로(No Assumptions, 대상 규모도
-      Leads/MTA보다 훨씬 작음). **아직 실 Import로 절감 효과/정합성 검증 안 함**
-      — 다음 실제 Import 실행 시 Logger 로그의 "비교 대상 N건 / 전체 M건"으로
-      확인 필요.
+      Leads/MTA보다 훨씬 작음). **✅ 실 Import로 검증 완료(2026-09-08)** — Logger
+      로그 확인: Leads `Raw dedup — 61건 중 0건 완전 동일 중복으로 skip, 61건 신규.
+      (비교 대상 0건 / 전체 37630건)`(겹치는 날짜 없어 비교 자체 스킵), MTA
+      `Raw dedup — 388건 중 97건 완전 동일 중복으로 skip, 291건 신규. (비교 대상
+      141건 / 전체 87342건)`(겹치는 구간 141건만 읽어 정확히 판정) — 둘 다 전체
+      스캔 대신 좁은 윈도우만 읽으면서 판정 정확도 그대로 유지됨을 실측 확인.
 - [x] **항목 3 — `ICFunnelSync`/`SALSync` Batch Direct Update (2026-09-04, 코드 완료)**:
       두 파일 다 기존엔 매번 Raw 전체(4만+ 행)를 읽어 전체 Lead ID의 "최신
       스냅샷"을 재계산하고, Leads_OPS도 전체 컬럼(3만5천+ 행)을 읽고/썼음.
@@ -57,7 +70,23 @@
       MASTER_009_ICFunnelSync.js v1.9.0/MASTER_010_SALSync.js v1.3.0.
       **주의(최초 1회 한정)**: 두 카운터 모두 0에서 시작하므로 배포 후 첫
       실행은 기존 Raw 전체를 "신규"로 처리(기존과 동일한 부하 1회) —
-      이후부터 배치 단위로 빨라짐. **아직 실 Import로 검증 안 함**.
+      이후부터 배치 단위로 빨라짐. **✅ 동작 확인(2026-09-08, 예상대로 최초
+      1회 전체 처리)** — Logger 로그: SAL `Compared window : 36574 rows (of
+      36628 total OPS rows)`(New 8179 = SAL_Raw 전체), IC Funnel `Compared
+      window : 36530 rows (of 36628 total OPS rows)`(New 42875 = ICFunnel_Raw
+      전체) — 둘 다 체크포인트 0 → 최초 실행이라 예상대로 OPS 거의 전체가
+      윈도우로 잡힘(버그 아님). **✅ 소규모 배치 재확인 완료(2026-09-08)** —
+      같은 날 IC Funnel을 락 충돌 없이 단독으로 한 번 더 Import(월요일치 소량,
+      신규 4건)한 결과 `Compared window : 33086 rows (of 36689 total OPS
+      rows)` — 배치가 4건뿐인데도 윈도우는 여전히 OPS 거의 전체(90%)에 가깝게
+      나옴. 이건 버그가 아니라 "연속 구간(min~max row span)" 설계 자체의
+      성질로 추정 — 이 4건의 대상 Lead ID들이 OPS 시트 전체에 흩어져 있으면
+      그 최소~최대 구간 자체가 넓어짐(정렬 순서와 Lead ID 매칭 위치는 무관).
+      다만 `syncICFunnelToOPS_` 자체 소요시간은 196.4초(최초 실행 690.5초 대비
+      대폭 감소)로 짧게 끝나 체감 절감 효과 자체는 확인됨 — "윈도우 폭"과
+      "실제 처리 시간"이 꼭 비례하진 않는다는 것도 함께 확인. 락 충돌 재시도
+      메커니즘(#9)도 이번에 실전 확인(SAL 실행 중 IC Funnel이 겹치자 자동
+      재시도 큐잉, 데이터 손실 없음).
 - [x] **항목 4 — `Program_Segment_Dictionary`(+`UTM_Program_Dictionary`도 동일 적용)
       증분 등록 (2026-09-04, 코드 완료)**: exec-plan 제목은 Program_Segment_
       Dictionary만 명시했지만, `periodicRefreshDictionaries_()`가 같은 실행에서
@@ -100,6 +129,9 @@
       - `OPS_005_Write.js`(v2.3) `writeOPS()`
       - `MASTER_005_DataReader.js`(v2.3.0) `readRawSheet()`
       - `MASTER_012_RawExternalMigration.js`(v1.1.0) `writeFullRawSnapshotToExternalSheet_()`
+      **간접 검증(2026-09-08)** — Leads_OPS(36,741행) 청크 처리 경유 read/write가 실 Import
+      파이프라인에서 에러 없이 완주(101.18초, Merged 36,689/New 61/Updated 36,628). 청크
+      경계 자체를 정밀 검증하진 않았으나 대용량 실데이터로 최소 1회 무결히 동작함은 확인.
       **미착수(향후 별도 검토 필요, 임의로 처리하지 말 것)**: `buildLeadsOPS()`의
       증분 병합(신규 Master 배치만 처리 + 기존 OPS 행과 날짜 비교) — 착수 시
       최소 다음을 설계해야 함: (1) 이메일이 이미 OPS에 있는데 새 배치 행의

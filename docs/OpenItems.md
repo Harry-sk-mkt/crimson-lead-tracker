@@ -61,8 +61,24 @@
     2026-09-04 해소: `docs/exec-plans/active/2026-09-03-performance-optimization.md` #1로
     `appendNewLeads()`/`appendNewMTA()`/`rebuildLeadsMaster()`/`rebuildMTAMaster()`의
     `sortSheetByDate()` 호출 전부 제거, Master를 순수 Append-only로 전환(`sortSheetByDate()`
-    자체와 그 파일 `IMPORT_007_SheetSorter.js`도 호출부가 없어져 삭제). 실 Import로
-    성능/정합성 검증은 아직 대기 중.
+    자체와 그 파일 `IMPORT_007_SheetSorter.js`도 호출부가 없어져 삭제). **2026-09-08 검증**:
+    실 MTA(2026-09-07)/Leads(2026-09-08) Import로 항목 1(정렬 제거)/2(RawDeduplicator 동적
+    윈도우, Logger 로그로 직접 확인)/5(OPS 청킹) 무에러 완주. **항목 3(IC Funnel/SAL Sync)도
+    2026-09-08 SAL/IC Funnel Import로 "Compared window" 로그 직접 확인** — 단, `SAL_LAST_ROW`/
+    `ICFUNNEL_LAST_ROW` 체크포인트가 이번이 배포 후 최초 실행이라 0에서 시작해 Raw 전체를
+    "신규"로 처리(예상된 최초 1회 비용), 그래서 윈도우가 OPS 전체(36628건 중 36530~36574건)에
+    가깝게 나옴. **✅ 소규모 배치도 같은 날 재확인** — 락 충돌 없이 단독으로 IC Funnel을 한 번 더
+    Import(신규 4건)한 결과 윈도우가 여전히 넓게 나오지만(33086/36689, "연속 구간" 설계상 대상
+    Lead ID가 흩어져 있으면 필연적) `syncICFunnelToOPS_` 자체 소요시간은 196.4초(최초 690.5초
+    대비 대폭 감소)로 절감 효과는 확인됨. **✅ 원인 확정** — `runICFunnelPipelineTail`이
+    1790초(≈29.8분, 30분 제한 근접)로 튄 건 `generateTargetReport_`가 916초 걸린 탓이었는데,
+    같은 날 락 충돌 없이 단독 실행하니 35.6초(베이스라인과 동일 범위)로 정상 — **Target_REP
+    코드 버그가 아니라 SAL 직후 파이프라인이 겹쳐 돌 때(락 충돌 재시도) 외부 스프레드시트(Deal
+    Tracker) API 호출이 지연되는 현상으로 사용자 재현 테스트를 통해 확정**. 자주 일어나는
+    패턴은 아니라 낮은 우선순위로 두되, 겹치면 30분 제한에 근접하는 건 사실이므로 완전히
+    무시하지 말 것 — 필요 시 파이프라인 큐잉 간 최소 대기시간 도입 등 후속 조치는 별도 결정
+    필요. **항목 4(딕셔너리 증분)만 이번 라운드 대상 트리거가 없어 여전히
+    미검증**(12시간 주기). 상세: `docs/exec-plans/active/2026-09-03-performance-optimization.md`.
 10. **SAL에 "Lead Status = Nurturing" 제외 조건 추가 필요 (데이터 대기, TODO)** — 6번에서 SAL을 `Sales Accepted Date` 이벤트 기준으로 전환했지만, `Lead Status`(Salesforce 표준 필드, `Sales Funnel Stage`와는 다른 별개 필드 — 픽리스트 순서: Nurturing → New (Not Contacted) → Attempting Contact → Contacted → Disqualified → IC Booked → Qualified)가 "Nurturing"인 리드도 Sales Accepted Date가 찍혀 SAL로 카운트되는 문제를 2026-07-25 사용자가 발견(Search 세그먼트 SAL 8건이 전부 IC Booked인 게 이상해서 개별 확인하다 발견). **확정된 처리 방식**: SAL 제외 조건은 `Lead Status === "Nurturing"` 하나뿐 — New/Attempting Contact/Contacted/Disqualified/IC Booked/Qualified는 전부 SAL로 그대로 카운트(사용자 확인, "New부터는 전부 SAL"). **막힌 지점**: `Lead: Lead Status` 필드가 아직 MTA export에 없어 파이프라인에 전혀 없는 상태 — Salesforce 리포트에 이 필드 추가 + 재export 되기 전까지 구현 불가. 필드 도착 시 `13_MTATransformer.js`에 매핑(리드 레벨 스냅샷이라 `computeMTAFunnelByLeadId_()`처럼 대표값 로직 필요할 수 있음) → `30_ACQReport.js`의 SAL 카운트 조건에 `leadStatus !== "Nurturing"` 추가. 임의로 처리하지 말 것.
 11. **Target_REP(주간 세그먼트 목표·달성률 리포트) 구현 완료, Generate 자동화 완료(2026-08-05) — 실사용 검증 진행 중, TODO** — 2026-07-27 설계 확정(`docs/TargetReportDesign.md`) 후 같은 날 구현 및 실 시트 검증 진행. New P1/CPNP1을 top-down(마케팅 Revenue 타겟 × 딜 비중 ÷ P1당 가치)으로 역산해 주간 목표를 세우고 실적과 대조. 구현 파일: `90_TargetEngine.js`(Block A~D 계산/작성, 주 캘린더 생성, 가중평균, 외부 채널시트/Naver gid 매칭), `91_TargetReport.js`(`setupTargetReport()`, `runGenerateTargetReport()`, `refreshTargetActuals_()` — 기존 `refreshACQSummary_()` 호출 4곳에 배선), `92_TargetStyles.js`, `CONFIG.TARGET`(`00_Config.js`). **막힌 지점 5개는 구현 착수 전 전부 해소됨**(상세는 `docs/Changelog.md` 2026-07-27 항목). **실행 중 실측 버그 2건 발견·수정**: (1) Block 0 입력값을 셀 단위로 개별 읽고/쓰던 게(최대 27회 왕복) 대용량 워크북에서 타임아웃 유발 → 배치 호출로 수정, 해결 확인. (2) **Generate를 체크박스+onEdit(Simple Trigger)로 구현했으나, Simple Trigger는 제한된 권한이라 `SpreadsheetApp.openById()`(외부 채널시트 참조)를 아예 호출할 수 없음이 실측 확인됨**("Specified permissions are not sufficient") — ACQ_REP/NewP1_REP는 외부 파일을 안 열어서 이 문제가 없었음, Target_REP만 해당. 사용자 확인 후 체크박스/onEdit 분기 제거, `runGenerateTargetReport()`를 Apps Script 편집기에서 직접 Run하는 방식으로 전환(직접 Run은 Full Authorization). **2026-08-05 자동화**: 사용자 요청("deal tracker도 import 체인에 포함시키자")으로 `generateTargetReport_()`를 `08_PipelineAsync.js`의 `refreshReportGenerate_()`(설치형 트리거, Full Authorization이라 Simple Trigger 제약 자체가 없음)에 추가 — 매 Leads/MTA 백그라운드 실행마다 자동 호출됨, 편집기 직접 Run은 재시도/디버깅용으로 계속 가능. **아직 검증 필요**: 자동 호출된 Target_REP 리포트 행/Target_Engine Block A~D 실제 값(특히 CPNP1 벤치마크가 외부 gid 매칭 성공해서 0이 아닌지) 확인 전까지 완료로 간주하지 말 것. 그 외 `docs/TargetReportDesign.md` §12 #6~8(개선계수 초기값 0.9 placeholder, Seminar/Webinar 분해 표시, 월 소계 행)은 실물 확인 후 결정 예정.
 12. ~~ACQ_REP Referral 세그먼트 Revenue가 Salesforce/딜트래커 대비 연간 기준 과소집계~~ — 2026-07-28 해소 확인(사용자 확인, FY26 전체 연간 대조 완료). 원래 발견: 이번 FY(FY26) 전체로 보면 ACQ_REP Referral 합계($2,157,628.79)가 딜트래커 Referral 합계($2,794,367.69)보다 **$636,739(약 22.8%) 적음**(당시 ACQ_REP은 Leads_OPS `Opportunity Won Date`/`Revenue` 기준이었음). 7번 항목의 2트랙 아키텍처 적용(Deal Tracker 기반 + 수동 Segment 컬럼 + 타임존 버그 수정)으로 ACQ_REP Revenue가 Deal Tracker와 정의상 같은 소스가 되면서 갭 해소 — 5·6·7월 개별 대조(7월 전체 $999,931.89 vs ACQ_REP $999,932) 및 FY26 전체 연간 대조 둘 다 사용자 확인 완료. **KRW/환율 관련 가설(별도 낮은 우선순위 항목으로 유지)**: Revenue를 KRW 원본 값으로 가져와서 일관된 환율로 NZD 변환하면 더 정확해질 수 있다는 가설은 미검증 상태로 남음 — 딜트래커 시트엔 KRW 원본 컬럼이 없고 `Revenue (NZD)`(이미 변환된 값)만 있음, Salesforce Opportunity 객체 자체에 KRW 원본 금액 필드가 있는지 확인 필요. Revenue 통화 처리 방식은 Target_REP뿐 아니라 ACQ_REP 등 여러 리포트에 걸친 문제라 별도 세션에서 다룰 것.
@@ -462,11 +478,35 @@
     구조적 한계)**. **(3)번 override 후보(BOFU 12건/Content 7건)는 이번 세션 범위
     밖 — Events_OPS 선례(`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`)와 동일한
     override 맵을 BOFU/Content에 도입할지는 여전히 사용자 결정 필요, 임의로 처리하지
-    말 것.** **남은 것(TODO)**: `runRefreshBOFUEngine()`/`runRefreshContentEngine()`
-    → `buildBOFUOPS()`/`buildContentOPS()` 순으로 재실행해 이번 수정으로 BOFU
-    1건/Content 9건의 Spent/Campaign/Off-On/Start Date/End Date/Impressions/
-    Reach/Link clicks/Results가 실제로 자동 채워지는지 확인 — 확인 전까지 완료로
-    간주하지 말 것.
+    말 것.** **✅ (5)번 잔여 완전 해소(2026-09-08)**: `runRefreshBOFUEngine()`/
+    `runRefreshContentEngine()` → `buildBOFUOPS()`/`buildContentOPS()` 재실행 후
+    `TEMPQA_051`을 다시 돌려보니 (5)번 버킷이 BOFU 1건/Content 9건에서 BOFU 1건/Content
+    6건으로만 줄어 완전히 안 없어짐 — 추가 조사 필요했음. `TEMPQA_052_ProgramSegmentDictionaryAmbiguityCheck.js`로
+    `Program_Segment_Dictionary` 원본 행을 직접 조회한 결과, 남은 7건 전부
+    `distinctSegmentCount=2`(다수결 제외 대상)인데 실제 다수결은 "Content"이고
+    비율이 59~99.7%로 압도적임을 확인 — 즉 (5)번 버킷 판정의 전제("확실한 후보인데
+    코드가 안 잡는다")가 틀렸고, 진짜 원인은 **딕셔너리 자체가 이 프로그램들을
+    "애매함"으로 정확히 판단해 제외한 것**(소수 의견이 하나만 있어도 무조건 제외하는
+    현재 임계값 때문). `TEMPQA_053_ProgramSegmentSplitTrace.js`로 MTA_Master/
+    Leads_Master 원본 터치를 UTM Campaign별로 쪼개본 결과, 소수 의견은 **완전히 무관한
+    다른 캠페인**임이 확정됨 — 예: "Army Infographic"(BOFU 목록에 있었음)의 Content
+    51건은 전부 진짜 에북 캠페인("hyperlocalised-army-infographic-mofu" 등)인데, BOFU
+    1건은 전혀 다른 캠페인("google-perfmax-acquisition-consult-bofu_contact")이 우연히
+    같은 Program 텍스트 라벨을 공유한 것 — 분류 로직 버그(#29류)가 아니라 Program
+    그룹핑 라벨이 서로 다른 캠페인을 우연히 묶는 데이터 구조상 노이즈. "RISE Academic
+    Foundation" 등 나머지 6건도 동일 패턴(다수 Content vs 소수 Search/기타, 전부 별개
+    캠페인). **✅ 해소(2026-09-08, 사용자 확인)**: 사용자가 데이터 근거를 확인한 후
+    Program_Segment_Override로 다수결 확정하기로 결정 — `TEMPQA_054_ProgramSegmentOverrideAdd.js`
+    (신규, 기존 `readProgramSegmentOverrideMap_()`/`writeOverrideMap_()`/
+    `mergeOverrideMaps_()` 그대로 재사용해 clobber 위험 없이 merge)로 7건을
+    `Program_Segment_Override`에 "Content"로 추가(기존 30건 → 37건). Engine/OPS
+    재실행 후 `TEMPQA_051` 재검증: **Content 매칭 성공 61→67건(정확히 +6, (5)번
+    버킷 0으로 완전 해소)**. BOFU (5)번은 "Army Infographic" 1건이 여전히 표시되지만
+    이건 실제 버그가 아니라 진단 스크립트의 한계 — 이제 이 프로그램은 (의도대로) BOFU가
+    아니라 Content로 정확히 재분류됐으므로 BOFU 쪽 미매칭은 올바른 동작이고,
+    `TEMPQA_051`의 (5)번 판정 로직이 override 존재 여부를 반영하지 않아 계속 "버그
+    의심"으로 오탐될 뿐(별도 코드 수정 불필요, 낮은 우선순위 — 원하면 나중에 진단
+    스크립트에 override 인지 로직 추가 가능). **#30 전체 완료로 간주.**
 31. **Target_REP Actual CPNP1 과소집계 버그 수정 완료 — 잔여 확인 필요(2026-08-25)** — 사용자
     리포트("8월 Webinar Actual CPNP1이 실제보다 훨씬 낮게 나옴")로 조사한 결과
     `isMetaRowWeekPrecise_()`(`AD_002_Meta.js`)가 부분(예: 화~일 6일) Meta export를 "정밀"로
@@ -1017,8 +1057,11 @@
     검출·플래깅)이 정확히 이 아이디어를 구현 — 외부 P1 School List 스프레드시트로 리스트
     소재 확정, `P1_School_Mismatch_QA` 시트로 노출 위치 확정, `runLeadsPipelineTail()`
     자동 편입까지 전부 여기서 "미정"이라 적어둔 항목의 실제 답. 즉 신규 작업이 아니라
-    #48과의 중복 등록이었던 것으로 확인 — 별도로 손댈 것 없음, #48의 잔여 검증(실 Import
-    자동 편입 확인)만 남아있음. 아래는 최초 등록 원문(참고용, 보존).
+    #48과의 중복 등록이었던 것으로 확인 — 별도로 손댈 것 없음. **✅ #48 자체도 2026-09-08
+    실 Leads Import로 최종 검증 완료**(정방향 불일치 2119건 + 역방향 Not_Striked 첫 실제
+    양성 케이스 13건, 파이프라인 자동 편입 에러 없음) — exec-plan
+    `docs/exec-plans/completed/2026-09-04-p1-school-mismatch-check.md`로 이동. 아래는 최초
+    등록 원문(참고용, 보존).
     (2026-09-03) — S&M_REP 성능 개선 설계 논의 중 발견: `Lead Priority`가 리드 유입 후
     바뀔 수 있는 이유는 Salesforce 자동 재분류가 아니라 **실무자가 P1 기준(연 학비
     2500만원 이상 학교) 대비 수기 검수 후 정정**하는 것(사용자 확인) — 그리고 이 P1
@@ -1103,7 +1146,8 @@
       **실제로 되는지 검증 안 됨** — 이 프로젝트가 Simple Trigger의 외부 `openById()` 권한
       부족으로 이미 여러 번 막힌 이력(Target_REP/ACQ_REP 사례)이 있어 신중한 검증 필요.
     막힌 지점: 두 방향 중 어느 쪽으로 갈지, 착수 시점 확정 필요 — 임의로 처리하지 말 것.
-48. **외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅 — 구현 및 수동 실행 검증 완료(2026-09-04), 실 Import 자동 편입 확인만 잔여(TODO)** (2026-09-03 등록) — 외부 "P1 School List" 스프레드시트(`15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q`, 사용자 확정 — E열 대표 학교명 + N열부터 오기입 변형 표기)와 Leads_OPS를 대조해, School Name이 P1 리스트에 있는데 effective Priority(`isEffectiveP1_()` 재사용, Priority Override 우선)가 P1이 아닌 리드를 `P1_School_Mismatch_QA` 시트에 플래깅(사용자 확정 — 이메일 알림 없음, Leads Import 파이프라인에 자동 편입). `runCheckP1SchoolMismatch()` 실행 결과 P1 학교 572개(별칭 포함)/Leads_OPS 36,628건 대조, 불일치 2,116건 기록 — 사용자가 상위 10건 육안 대조해 School Name 매칭 정확함을 확인(2026-09-04). 상세: `docs/exec-plans/active/2026-09-04-p1-school-mismatch-check.md`. **남은 검증**: 실제 Leads Import 1회 실행해 `runLeadsPipelineTail()`의 자동 편입 단계(`checkP1SchoolMismatch_`)가 정상 동작하는지 확인 전까지 완료로 간주하지 말 것.
+48. ~~외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅~~ — **✅ 완료(2026-09-08 실 Import 검증까지 마무리)** (2026-09-03 등록) — 외부 "P1 School List" 스프레드시트(`15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q`, 사용자 확정 — E열 대표 학교명 + N열부터 오기입 변형 표기)와 Leads_OPS를 대조해, School Name이 P1 리스트에 있는데 effective Priority(`isEffectiveP1_()` 재사용, Priority Override 우선)가 P1이 아닌 리드를 `P1_School_Mismatch_QA` 시트에 플래깅(사용자 확정 — 이메일 알림 없음, Leads Import 파이프라인에 자동 편입). `runCheckP1SchoolMismatch()` 실행 결과 P1 학교 572개(별칭 포함)/Leads_OPS 36,628건 대조, 불일치 2,116건 기록 — 사용자가 상위 10건 육안 대조해 School Name 매칭 정확함을 확인(2026-09-04). 역방향 체크(`Not_Striked`, 2026-09-04 이후 신규 P1 리드 중 리스트에 없는 학교)도 함께 구현. **✅ 2026-09-08 실 Leads Import로 최종 검증**: `runLeadsPipelineTail()` 안에서 `checkP1SchoolMismatch_` 자동 편입 확인(정방향 불일치 2,119건, 역방향 Not_Striked 신규 학교 13건 — 배포 후 첫 실제 양성 케이스), 에러 없음. 상세: `docs/exec-plans/completed/2026-09-04-p1-school-mismatch-check.md`.
 49. ~~Naver Search API 누적 캐시 시트 외부 Master_DB 스프레드시트로 이관~~ — 구현 및 실행 검증 완료(2026-09-04). `Naver_Search_Campaign_Stats_Cache`/`Ad_Spend_Cache`를 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가 있는 Master_DB 폴더 파일, `1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`, 사용자 확정 — 새 파일 안 만들고 탭만 추가)로 이관. 재계산 가능한 캐시라는 성질을 이용해 Raw 이관과 달리 별도 복사 스크립트 없이 read/write 함수의 대상만 외부 스프레드시트로 전환(`AD_003_NaverSearch.js` v2.16.0/`AD_004_SpendCache.js` v1.6.0의 opener 함수 신규, `JL_003_Write.js` v1.1.0도 함께 전환). `runRefreshAdSpendCache()`(222행)/`runRefreshNaverSearchAdCampaignStatsCache()`(9개 캠페인) 실행 결과 외부 시트에 탭 정상 생성 확인, ACQ_REP Generate 재실행도 정상 값 확인(사용자 확인, 2026-09-04). 상세: `docs/exec-plans/completed/2026-09-04-ad-spend-cache-external-migration.md`. **남은 낮은 우선순위 항목**: 메인 스프레드시트의 기존 숨김 탭 2개는 안정화 확인 후 별도 삭제(당장 안 함).
+50. **`buildLeadsOPS()`(Leads_OPS 병합) 증분화 — 설계/구현 미착수(TODO)** (2026-09-08 등록, 근거는 2026-09-04 세션에서 이미 논의) — `docs/exec-plans/active/2026-09-03-performance-optimization.md` 항목 5(청크 처리)에서 다룬 5대 성능 개선 중, 사용자가 명시적으로 범위 밖으로 보류한 "더 어려운 절반"이 바로 이것 — `mergeOPS()`(`OPS_004_Merge.js`)의 중복 이메일 해소 로직 자체는 매 Import마다 여전히 Leads_Master(36,741행)+Leads_OPS(36,689행) 전체를 재스캔한다(항목 1~4는 Raw/딕셔너리 레이어의 전체 스캔을 없앴지만 이 레이어는 그대로). 2026-09-08 실 Import 실측: `buildLeadsOPS()`가 61건 신규 처리에 101.18초 소요 — 신규 건수와 무관하게 전체 재스캔 비용이 고정으로 붙는 구조. **보류 사유(사용자 확정, 2026-09-04)**: Leads_OPS는 거의 모든 리포트가 참조하는 핵심 테이블이라 실수 시 파급이 크다는 이유로 청크 처리(안전장치)만 우선 적용하고 증분 병합은 별도 설계/검증 없이는 착수하지 않기로 함(`[[feedback_pause_before_core_merge_logic_change]]` 참고). **착수 시 최소 설계해야 할 것(exec-plan에 이미 기록)**: (1) 이메일이 이미 OPS에 있는데 새 배치 행의 Create Date가 기존보다 이르면 SF_COLUMNS 교체(MANUAL/SYNC_COLUMNS는 계속 보존), 이르지 않으면 duplicate로 카운트만 하고 기존 행 불변, (2) 같은 배치 내 신규 이메일 중복은 기존 로직 그대로 재사용 가능, (3) 실 스프레드시트 데이터로 대조 검증 필수(순수 함수 테스트만으로는 불충분). 임의로 착수하지 말 것 — 설계 논의 먼저.
 
 

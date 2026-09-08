@@ -1,3 +1,66 @@
+# Changelog — 2026-09-08
+
+## 파이프라인 성능 최적화 exec-plan 실 Import 검증 (`docs/OpenItems.md` #18, exec-plan `2026-09-03-performance-optimization.md`)
+
+2026-09-04에 코드 작성만 완료해뒀던 5개 항목을 이번 세션에서 실 Import로 검증. Leads(9/8)/
+MTA(9/7)/SAL(9/8)/IC Funnel(9/8) 전부 에러 없이 완주. 항목 2(RawDeduplicator 동적 윈도우)는
+Logger 로그로 직접 확인 — Leads "비교 대상 0건/전체 37,630건", MTA "비교 대상 141건/전체
+87,342건"(97건 정확히 중복 판정). 항목 3(IC Funnel/SAL Batch Direct Update)도 "Compared
+window" 로그로 확인, 최초 실행이라 체크포인트 0부터 시작해 전체 처리됐지만 이후 소규모 배치
+재확인(4건)에서 `syncICFunnelToOPS_` 196.4초(최초 690.5초 대비 대폭 감소)로 절감 효과 확인.
+항목 1(정렬 제거)/5(OPS 청킹)는 대용량 실데이터 무에러 완주로 간접 검증. 항목 4(딕셔너리
+증분)만 12시간 주기 트리거라 아직 미검증으로 남음.
+
+**⚠️ 새로 발견 후 원인 확정 — Target_REP 916초 근접-타임아웃**: SAL 파이프라인 직후 락 충돌
+재시도로 겹쳐 실행된 `runICFunnelPipelineTail`이 1790초(≈29.8분, 30분 제한 근접), 그 안의
+`generateTargetReport_`만 916초 소요(평소 25~38초). 같은 날 락 충돌 없이 IC Funnel을 단독
+재실행한 결과 `generateTargetReport_` 35.6초로 완전 정상 — **Target_REP 코드 버그가 아니라
+파이프라인이 겹쳐 돌 때 외부 스프레드시트(Deal Tracker) API 호출이 지연되는 현상으로 확정**.
+자주 발생하는 패턴은 아니라 낮은 우선순위로 `docs/OpenItems.md` #18에 기록만 해둠.
+
+## `docs/OpenItems.md` #48(P1 School Mismatch) 실 Import 최종 검증 완료
+
+`runLeadsPipelineTail()` 안에서 `checkP1SchoolMismatch_` 자동 편입 확인 — 정방향 불일치
+2,119건(`P1_School_Mismatch_QA`), 역방향 `Not_Striked` 신규 학교 13건(배포 후 첫 실제 양성
+케이스, 2026-09-04 배포 당일엔 0건이었음) — 에러 없음. exec-plan을
+`docs/exec-plans/completed/2026-09-04-p1-school-mismatch-check.md`로 이동.
+
+## `docs/OpenItems.md` #30(BOFU/Content Meta 매칭 커버리지) 근본 원인 확정 및 해소
+
+2026-09-05에 수정 완료했던 `isEligibleBOFUProgramPure_()`/`isEligibleContentProgramPure_()`
+(Program_Segment_Dictionary 최우선 조회)를 실 Import로 exercise한 뒤 `TEMPQA_051`을 재실행한
+결과, "확실한 후보인데 안 잡힘"(진짜 버그 의심) 버킷이 BOFU 1건/Content 9건 → BOFU 1건/Content
+6건으로만 줄어 완전히 해소되지 않음 — 추가 조사 착수.
+
+`TEMPQA_052_ProgramSegmentDictionaryAmbiguityCheck.js`(신규, 읽기 전용)로
+`Program_Segment_Dictionary` 원본 행을 직접 조회한 결과, 남은 7건 전부 `distinctSegmentCount=2`
+(다수결 제외 대상)이지만 실제 다수결은 "Content"이고 비율이 59~99.7%로 압도적임을 확인 —
+소수 의견이 단 1건만 있어도 무조건 "애매함"으로 제외하는 현재 임계값 때문. 이어서
+`TEMPQA_053_ProgramSegmentSplitTrace.js`(신규, 읽기 전용)로 MTA_Master/Leads_Master 원본
+터치를 UTM Campaign별로 쪼개본 결과, 소수 의견은 완전히 무관한 다른 캠페인임을 확정 — 예:
+"WF-2023-04-KOR-MOFU-Core Hyperlocalized Korean Army Infographic"(BOFU 141개 목록에 있었음)의
+Content 51건은 전부 진짜 에북 캠페인인데, BOFU 1건은 완전히 다른 캠페인
+("google-perfmax-acquisition-consult-bofu_contact")이 우연히 같은 Program 텍스트 라벨을
+공유한 것 — 분류 로직 버그(#29류)가 아니라 Program 그룹핑 라벨이 서로 다른 캠페인을 우연히
+묶는 데이터 구조상 노이즈로 확정(사용자 확인, 2026-09-08).
+
+사용자 결정에 따라 `TEMPQA_054_ProgramSegmentOverrideAdd.js`(신규, 1회성 — 기존
+`readProgramSegmentOverrideMap_()`/`writeOverrideMap_()`/`mergeOverrideMaps_()` 재사용해
+clobber 위험 없이 merge)로 7건을 `Program_Segment_Override`에 "Content"로 확정 추가(기존
+30건 → 37건). BOFU/Content Engine + `buildBOFUOPS()`/`buildContentOPS()` 재실행 후
+`TEMPQA_051` 재검증 — **Content 매칭 성공 61→67건(정확히 +6, 버킷 완전 해소)**. BOFU 쪽은
+"Army Infographic" 1건이 여전히 버킷에 표시되지만 실제 버그 아님 — 이 프로그램이 이제
+(의도대로) Content로 정확히 재분류돼 BOFU 미매칭이 올바른 동작이 된 것뿐, `TEMPQA_051`의
+버킷 판정 로직이 override 존재를 반영하지 않아 생기는 진단 스크립트 자체의 한계(별도 수정
+불필요, 낮은 우선순위). `docs/OpenItems.md` #30 전체 완료로 정리.
+
+## `docs/OpenItems.md` #50 신규 등록 — `buildLeadsOPS()` 증분화(OPS 시간 단축, TODO)
+
+2026-09-04 세션에서 성능 exec-plan 항목 5의 "더 어려운 절반"으로 이미 논의됐던(핵심 테이블이라
+파급 커서 보류) `mergeOPS()` 중복 이메일 해소 로직의 전체 재스캔 구조를, 별도 OpenItems 번호로
+정식 등록 — 2026-09-08 실 Import 실측(`buildLeadsOPS()` 61건 신규 처리에 101.18초, 신규
+건수와 무관하게 전체 재스캔 비용 고정)을 근거로 기록. 설계/구현은 미착수, 임의로 착수하지 말 것.
+
 # Changelog — 2026-09-04
 
 ## 파이프라인 성능 최적화 exec-plan 5개 항목 구현 (`docs/exec-plans/active/2026-09-03-performance-optimization.md`)

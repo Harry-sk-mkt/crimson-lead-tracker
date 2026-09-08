@@ -2,10 +2,10 @@
 
 **관련 로드맵 항목**: `docs/OpenItems.md` #48 (2026-09-03 등록)
 **시작일**: 2026-09-04
-**상태**: 정방향(P1_School_Mismatch_QA)/역방향(Not_Striked) 둘 다 코드 작성 + clasp push +
-수동 실행 완료(2026-09-04). 정방향은 육안 검증까지 완료, 역방향은 배포 당일이라 양성 케이스
-미확인(0건이 정상). 남은 건 실제 Leads Import 1회로 두 방향 다 파이프라인 자동 편입 + 역방향
-양성 케이스 확인뿐(2026-09-07 월요일 예정).
+**상태**: ✅ 완료(2026-09-08 검증) — 실 Leads Import(2026-09-08 실행, 전날 2026-09-07 예정이
+하루 밀림)로 `runLeadsPipelineTail()` 안에서 `checkP1SchoolMismatch_` 자동 편입 확인(정방향
+불일치 2119건, 역방향 신규 학교 13개 — 배포 이후 첫 실제 양성 케이스), 에러 없음. 두 방향
+전부 검증 완료.
 
 ## Goal
 
@@ -70,10 +70,13 @@ Leads_OPS를 매 Leads Import마다 자동으로 양방향 대조한다(이메�
       재실행 결과: "2026-09-04 이후 신규 P1 리드 중 리스트에 없는 학교 0개 Not_Striked에
       기록", 에러 없음. 0건은 정상(배포 당일이라 아직 START_DATE 이후 신규 P1 리드 자체가
       없음) — 양성 케이스(실제로 누락 학교가 잡히는지)는 신규 리드가 들어와야 검증 가능.
-- [ ] **남은 검증**: 실제 Leads Import 1회 실행해 (1) `runLeadsPipelineTail()`의
-      `checkP1SchoolMismatch_` 단계가 파이프라인 안에서 자동으로 도는지(README Pipeline
-      Status 또는 Execution 로그), (2) Not_Striked가 실제로 신규 P1 리드+누락 학교가 있을 때
-      양성 케이스를 정확히 잡는지 — 둘 다 다음 주 월요일(2026-09-07) 실 Import 때 확인 예정.
+- [x] **최종 검증 완료(2026-09-08, Execution 로그 확인)** — 실 Leads Import(`importCsv`,
+      61건 신규)로 트리거된 `runLeadsPipelineTail`(Time-Driven) 로그에서 확인:
+      `[P1SchoolMismatch] P1 학교 572개(별칭 포함) / Leads_OPS 36689건 대조 — 불일치 2119건
+      P1_School_Mismatch_QA에 기록.` / `[P1SchoolMismatch] 2026-09-04 이후 신규 P1 리드 중
+      리스트에 없는 학교 13개 Not_Striked에 기록.` — 에러 없이 10초 만에 완료(`checkP1SchoolMismatch_
+      completed in 10077ms`). (1) 파이프라인 자동 편입 확인, (2) Not_Striked 양성 케이스
+      13건으로 첫 실제 검출 확인 — 둘 다 완료.
 
 ## Surprises & Discoveries
 
@@ -98,4 +101,9 @@ Leads_OPS를 매 Leads Import마다 자동으로 양방향 대조한다(이메�
 
 ## Outcomes & Retrospective
 
-(미착수 — clasp push 및 실 Import 검증 이후 작성)
+정방향(P1_School_Mismatch_QA)/역방향(Not_Striked) 둘 다 설계대로 구현되고 실 Leads Import
+파이프라인에 자동 편입돼 정상 동작 확인. 정방향은 2116→2119건(신규 리드분 반영), 역방향은
+배포 이후 첫 실제 양성 케이스 13건을 검출 — 두 방향 모두 "코드가 실제로 뭔가를 잡아낸다"는
+것까지 확인됐으므로 완료로 간주. 남은 한계: Not_Striked 13건이 실제로 리스트에 추가할 가치가
+있는 학교인지의 육안 검수는 아직 사용자가 하지 않음(기능 자체의 정확성과는 별개, 운영 프로세스
+영역).
