@@ -1,5 +1,17 @@
 # Changelog — 2026-09-09
 
+## `docs/OpenItems.md` #9(백엔드 실행 체인 비동기화) 실사용 검증 완료 및 exec-plan 종료
+
+2026-08-04에 구현됐지만 실사용 검증 대기 상태로 한 달 넘게 남아있던 마지막 항목 —
+README Pipeline Status 실사용 갱신과 트리거 자동 발동 경로. 오늘 아침 실 Import Executions
+로그로 4개 파이프라인(Leads/MTA/SAL/IC Funnel) 전부 "Import→Append→트리거 자동 발동"
+경로를 Time-Driven 타입 실행으로 직접 확인 — 특히 IC Funnel tail이 SAL tail 종료 직후
+(11:13:02→11:15:15)에 발동한 것으로 락 충돌 시 자동 대기열 동작까지 실증. 사용자가 README
+탭 육안 확인 결과 New Leads/MTA/SAL/IC Funnel 전부 DONE 정상 표시 확인. `docs/exec-plans/
+active/2026-08-04-pipeline-async-triggers.md`가 2026-08-04 당시 파일명(`08_PipelineAsync.js`
+등 옛 넘버링)으로 작성된 채 이후 코드 전면 리팩터(`MASTER_002_PipelineAsync.js`로 전환)를
+반영 못하고 방치돼 있던 것도 함께 정리, Outcomes 작성 후 `completed/`로 이동.
+
 ## `docs/OpenItems.md` #46(onEdit 재발동 가드) 실사용 검증 완료 + #44/#47 stale 상태 정정
 
 실 `runICFunnelPipelineTail`(11:15:15 시작, 754.9초) 로그로 #46 검증: 재발동(8회,

@@ -2,6 +2,11 @@
 
 **관련 로드맵 항목**: `docs/OpenItems.md` #9 (2026-07-28 설계 확정)
 **시작일**: 2026-08-04
+**상태**: ✅ 완료(2026-09-09) — 구현은 2026-08-04, 이후 코드는 `08_PipelineAsync.js`→
+`MASTER_002_PipelineAsync.js`로 전면 리팩터됐으나 이 문서에 반영 안 된 채 1개월 넘게
+`active/`에 방치돼 있었음(발견 즉시 정리). 남아있던 마지막 검증 항목(README Pipeline
+Status 실사용 갱신, 트리거 자동 발동 경로)을 2026-09-09 Executions 로그 + 사용자 육안
+확인으로 마무리 — 아래 Outcomes 참고.
 
 ## Goal
 
@@ -144,4 +149,21 @@ Engine·Target Actuals)까지 같은 실행 안에서 동기로 처리해 브라
 
 ## Outcomes & Retrospective
 
-(작업 완료 시 작성)
+**최종적으로 구현/검증된 것**:
+- Import→Append→(락 확인)→트리거 설치→트리거 자동 발동 경로 — Leads/MTA/SAL/IC Funnel
+  4개 파이프라인 전부 2026-09-09 실 Import Executions 로그로 Time-Driven 타입 실행 확인
+  (수동 Run이 아니라 실제 자동 트리거 발동이라는 직접 증거).
+- 락 충돌 시 자동 대기열 — SAL tail(11:03:34~11:13:02) 실행 중 IC Funnel Import가 들어와,
+  IC Funnel tail이 SAL 종료 직후인 11:15:15에 발동한 것으로 실증.
+- README Pipeline Status 표시 — 사용자 육안 확인(2026-09-09)으로 New Leads/MTA/SAL/IC
+  Funnel 전부 DONE 상태 정상 표시 확인.
+- 코드는 이 문서 작성 이후 대규모 파일 재편(`08_PipelineAsync.js` → `MASTER_002_PipelineAsync.js`
+  등 넘버링 체계 전환)을 거쳤지만 핵심 설계(단일 PIPELINE_LOCK, 파이프라인당 트리거 1회,
+  README 진행상태, 실패 시 상태 기록 후 rethrow)는 그대로 유지됨 — Progress 섹션의 세부
+  파일/함수명은 당시 기준으로 참고만 할 것, 최신 구현은 `MASTER_002_PipelineAsync.js` 참고.
+
+**남은 한계(낮은 우선순위, 코드 조치 없음)**:
+- `runRetryPipelineTail()`(수동 재시도 진입점) — 실제 실패 사례가 아직 없어 동작 자체는
+  미검증. 실패가 드문 데다 인위적으로 실패를 유발할 이유가 없어 낮은 우선순위로 남김.
+- QA 전체(`runOPSQA_()`) 재활성화 여부는 여전히 미정(2026-07-28 당시부터 별개 미결
+  사항) — `skipQA=true`로 계속 스킵 중, 완전 중복 삭제만 자동 체인에 편입돼 있음.
