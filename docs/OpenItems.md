@@ -896,7 +896,7 @@
     이슈가 해결되면 같이 개선될 것으로 예상. **#35(New P1 8월 갭)의 남은 10건도 같은 계열의
     "export 최신성" 문제로 확인됨** — 별개 원인(Salesforce IC Funnel 리포트 자체를 오랫동안
     재export 안 한 것)이지만 처방은 동일(전체 재export/재import).
-39. **Leads_OPS 필드 소유권 전면 재편 — 구현 완료(2026-09-02), 실사용 검증 대기(TODO)** —
+39. **Leads_OPS 필드 소유권 전면 재편 — 구현 완료(2026-09-02), 핵심 실사용 검증 완료(2026-09-09)** —
     38번 항목(SAL 8월 갭) 조사 중 "Revenue가 MTA_Master 터치 기반으로만 동기화돼 Search_OPS가
     SAL과 동일한 구조적 문제를 겪고 있다"는 게 발견되면서 사용자가 전체 재설계를 결정.
     최종 구조: New Leads(기본정보+First Touch+Lead Priority) / MTA(`#Touches`만, 신규) /
@@ -937,6 +937,19 @@
     사용자 선택 사항)**: 실제로 Account 전환 케이스인지는 Salesforce에서 몇 건
     직접 열어 확인해야 최종 확정되나, 코드/파이프라인 측면에서는 이 항목의 조사가
     끝남 — mergeOPS() 관련 버그는 아니라는 게 확정됐으므로 추가 코드 조치는 없음.
+    **✅ 남은 마지막 실측 미검증 가정("복수 딜 Email → Revenue 합계 + 최신 Close Date
+    채택", `MASTER_011_RevenueSync.js` 헤더 주석) 검증 완료(2026-09-09)**: 신규
+    `TEMPQA_057_RevenueSyncDuplicateEmailVerify.js`(`runVerifyRevenueSyncDuplicateEmailAssumption()`)
+    로 실제 Deal Tracker의 복수 딜 Email을 조회한 결과 3건 확인 —
+    `anjeewoo11@gmail.com`(2건 합계 $213,060.26)/`sy2011@gmail.com`(2건 합계
+    $178,076.18, 같은 Close Date에 두 건 다 고액이라 중복 입력 의심)/
+    `joymoon916@gmail.com`(2건 합계 $84,168.59). 사용자가 `sy2011@gmail.com`을
+    Deal Tracker에서 직접 열어 두 딜이 실제로 서로 다른 정상 거래임을 확인 —
+    합계 가정이 맞다고 확정. 단, 이 3건 전부 위에서 이미 확인된 78건 미매칭
+    계열(Leads_OPS에 없음, Account 전환 등)이라 계산값이 실제로 Leads_OPS에
+    반영되는지(sync 메커니즘 자체)는 이번에도 검증 못함 — 매칭되는 복수 딜
+    Email이 실제로 생기면 그때 반영 여부 재확인 필요(낮은 우선순위, 임의로
+    처리하지 말 것). 이로써 #39의 남은 TODO는 이 sync-반영 재확인 하나뿐.
 40. **GAS 백엔드 설계 — GitHub 상위 스타 저장소 분석 대비 격차 검토, 기록만 완료(TODO, 구현
     착수 전)** — 2026-09-02 사용자가 외부에서 작성해온 분석 문서("GAS 백엔드 설계 — GitHub
     상위 스타 저장소 분석 & crimson-lead-tracker 적용안")를 실제 코드와 대조 검증. 문서 자체가

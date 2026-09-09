@@ -7,9 +7,16 @@
  * PropertiesService 카운터를 0으로 리셋.
  *
  * ⚠️ 반드시 Raw/Master 시트를 직접 비운 "직후"에만 실행할 것.
- * 1. Leads_Raw, MTA_Raw, Leads_Master, MTA_Master — 시트 내용 수동 삭제 (헤더 포함 전체 지우기)
+ * **2026-09-03부터 Leads_Raw/MTA_Raw는 메인 스프레드시트가 아니라 각자 전용 외부
+ * 스프레드시트에 있음**(`CONFIG.RAW_EXTERNAL.LEADS/MTA.SPREADSHEET_ID`,
+ * `MASTER_012_RawExternalMigration.js` 참고) — 1번 단계에서 Leads_Raw/MTA_Raw를
+ * 비울 땐 메인 스프레드시트가 아니라 그 외부 스프레드시트를 열어야 한다.
+ * Leads_Master/MTA_Master는 그대로 메인 스프레드시트에 있음(이관 대상 아님).
+ * 1. Leads_Raw/MTA_Raw(각자의 외부 스프레드시트) — 시트 내용 수동 삭제 (헤더 포함 전체 지우기)
+ *    Leads_Master, MTA_Master(메인 스프레드시트) — 시트 내용 수동 삭제 (헤더 포함 전체 지우기)
  * 2. Apps Script 편집기에서 resetIncrementalCounters() 실행 (카운터 0으로)
- * 3. SheetWriter, RawWriter, SheetSorter, IncrementalMasterBuild, MasterBuild, menu.gs 전부 적용
+ * 3. SheetWriter, RawWriter, IncrementalMasterBuild, MasterBuild, menu.gs 전부 적용
+ *    (구 SheetSorter는 `docs/OpenItems.md` #18로 정렬 로직 자체가 삭제돼 더 이상 존재하지 않음)
  * 4. 📥 Import → Import Leads / Import MTA로 전체 CSV 새로 업로드 (Raw에 처음부터 다시 쌓임)
  * 5. 🏗️ Build → Append New Leads / Append New MTA 실행 (카운터가 0이라 Raw 전체가 "신규"로 인식되어 Master 전체가 한 번에 생성됨)
  * 6. 이후부터는 매주 새 CSV만 Import → Append 반복

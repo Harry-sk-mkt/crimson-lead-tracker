@@ -25,9 +25,16 @@
  *   명시적 에러로 중단한다("No Assumptions").
  *
  * Version
- * v1.1.0
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-09-09)
+ * - `runDeleteLegacyMainRawBackups()`/`computeLegacyRawBackupDeletionPlan_()`
+ *   신규 — 이관 안정화 확인(6일간 실 Import 정상 동작) 후 메인 스프레드시트에
+ *   남겨뒀던 구 Raw 백업 3개 삭제(사용자 확정, 2026-09-09). 외부 스프레드시트
+ *   행 수가 메인 백업 이상일 때만 삭제하는 안전장치 포함, 단위 테스트
+ *   `testComputeLegacyRawBackupDeletionPlan()` PASS. `docs/exec-plans/active/
+ *   2026-09-03-master-db-raw-migration.md` "다음 세션 시작점" #1.
  * v1.1.0 (2026-09-04)
  * - **청크 쓰기 전환(성능/안전장치, docs/exec-plans/active/
  *   2026-09-03-performance-optimization.md #5)**:
@@ -273,6 +280,192 @@ function runMigrateICFunnelRawToExternal(){
     result.ok ? "✅ ICFunnel_Raw 이관 완료" : "⚠️ ICFunnel_Raw 이관 건수 불일치",
     "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건",
     SpreadsheetApp.getUi().ButtonSet.OK
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Legacy Raw Backup Deletion Plan (순수 함수)
+ *
+ * WHY
+ * 메인 스프레드시트에 남아있는 이관 이전 Raw 백업(Leads_Raw/MTA_Raw/
+ * ICFunnel_Raw)을 삭제해도 안전한지 판단하는 로직만 분리 — 외부
+ * 스프레드시트의 현재 행 수가 메인 백업의 행 수 이상이어야만("이관 이후
+ * 계속 append돼 데이터가 줄어들 리 없음" 불변식) 안전하다고 판단한다.
+ * 미만이면 데이터 유실 의심 상황이므로 삭제 대상에서 제외하고 이유를 남긴다.
+ *
+ * INPUT
+ * types : Array<{ label, mainRowCount, externalRowCount }>
+ *
+ * OUTPUT
+ * Array<{ label, mainRowCount, externalRowCount, safe, reason }>
+ *
+ * TEST
+ * testComputeLegacyRawBackupDeletionPlan() 참고
+ * ==========================================================
+ */
+function computeLegacyRawBackupDeletionPlan_(types){
+
+  return types.map(function(t){
+
+    if(t.mainRowCount === 0){
+      return {
+        label: t.label, mainRowCount: t.mainRowCount, externalRowCount: t.externalRowCount,
+        safe: false, reason: "메인 스프레드시트에 이미 데이터가 없음(삭제할 대상 없음)"
+      };
+    }
+
+    const safe = t.externalRowCount >= t.mainRowCount;
+
+    return {
+      label: t.label, mainRowCount: t.mainRowCount, externalRowCount: t.externalRowCount,
+      safe: safe,
+      reason: safe ? "" : "외부 스프레드시트 행 수(" + t.externalRowCount + ")가 메인 백업(" +
+        t.mainRowCount + ")보다 적음 — 데이터 유실 의심, 삭제 보류"
+    };
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeLegacyRawBackupDeletionPlan_()
+ * ==========================================================
+ */
+function testComputeLegacyRawBackupDeletionPlan(){
+
+  const plan = computeLegacyRawBackupDeletionPlan_([
+    { label: "Leads_Raw", mainRowCount: 37562, externalRowCount: 37631 }, // 이관 후 증분 반영, 안전
+    { label: "MTA_Raw", mainRowCount: 87180, externalRowCount: 87180 },   // 정확히 같음, 안전
+    { label: "ICFunnel_Raw", mainRowCount: 42864, externalRowCount: 100 }, // 외부가 더 적음 — 위험
+    { label: "Empty_Already", mainRowCount: 0, externalRowCount: 0 }       // 메인에 이미 없음
+  ]);
+
+  const pass =
+    plan[0].safe === true &&
+    plan[1].safe === true &&
+    plan[2].safe === false &&
+    plan[3].safe === false;
+
+  Logger.log("plan: " + JSON.stringify(plan));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * 수동 실행용 진입점 — 메인 스프레드시트의 구 Raw 백업 3개 삭제
+ * (일회성 정리, `docs/exec-plans/active/2026-09-03-master-db-raw-migration.md`
+ * "다음 세션 시작점" #1)
+ *
+ * WHY
+ * 2026-09-03 이관 이후 메인 스프레드시트에 남겨뒀던 Leads_Raw/MTA_Raw/
+ * ICFunnel_Raw 원본(안정화 확인 전까지 보존용 백업) — 이관 후 6일간 여러
+ * 실 Import 사이클로 안정 동작 확인 완료(사용자 확정, 2026-09-09), 이제
+ * 삭제 진행. 각 타입별로 외부 스프레드시트 행 수가 메인 백업 행 수 이상인지
+ * 먼저 확인(`computeLegacyRawBackupDeletionPlan_()`)한 뒤에만 삭제 —
+ * 안전하지 않은 타입은 건드리지 않고 이유만 로그에 남긴다. 삭제 자체는
+ * Google Sheets 자체 버전 기록(파일 > 버전 기록)으로 복구 가능.
+ * ==========================================================
+ */
+function runDeleteLegacyMainRawBackups(){
+
+  const mainSs = SpreadsheetApp.getActiveSpreadsheet();
+
+  const types = [
+    {
+      label: "Leads_Raw",
+      mainSheetName: CONFIG.SHEETS.LEADS_RAW,
+      externalSpreadsheetId: CONFIG.RAW_EXTERNAL.LEADS.SPREADSHEET_ID,
+      externalSheetName: CONFIG.SHEETS.LEADS_RAW
+    },
+    {
+      label: "MTA_Raw",
+      mainSheetName: CONFIG.SHEETS.MTA_RAW,
+      externalSpreadsheetId: CONFIG.RAW_EXTERNAL.MTA.SPREADSHEET_ID,
+      externalSheetName: CONFIG.SHEETS.MTA_RAW
+    },
+    {
+      label: "ICFunnel_Raw",
+      mainSheetName: CONFIG.IC_FUNNEL.SHEET,
+      externalSpreadsheetId: CONFIG.IC_FUNNEL.EXTERNAL.SPREADSHEET_ID,
+      externalSheetName: CONFIG.IC_FUNNEL.SHEET
+    }
+  ];
+
+  const rowCounts = types.map(function(t){
+
+    const mainSheet = mainSs.getSheetByName(t.mainSheetName);
+    const mainRowCount = mainSheet ? mainSheet.getLastRow() : 0;
+
+    const externalSheet = SpreadsheetApp.openById(t.externalSpreadsheetId).getSheetByName(t.externalSheetName);
+    const externalRowCount = externalSheet ? externalSheet.getLastRow() : 0;
+
+    return { label: t.label, mainRowCount: mainRowCount, externalRowCount: externalRowCount };
+
+  });
+
+  const plan = computeLegacyRawBackupDeletionPlan_(rowCounts);
+
+  Logger.log("[RawMigration] 구 Raw 백업 삭제 계획 : " + JSON.stringify(plan));
+
+  const toDelete = plan.filter(function(p){ return p.safe; });
+  const skipped = plan.filter(function(p){ return !p.safe; });
+
+  if(toDelete.length === 0){
+    SpreadsheetApp.getUi().alert(
+      "삭제할 대상이 없습니다",
+      plan.map(function(p){ return p.label + " : " + (p.reason || "이미 없음"); }).join("\n"),
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const ui = SpreadsheetApp.getUi();
+
+  const confirmMsg = toDelete
+    .map(function(p){ return p.label + " (" + p.mainRowCount + "행, 외부 " + p.externalRowCount + "행 확인됨)"; })
+    .join("\n") +
+    (skipped.length > 0
+      ? "\n\n⚠️ 건너뜀:\n" + skipped.map(function(p){ return p.label + " — " + p.reason; }).join("\n")
+      : "");
+
+  const response = ui.alert(
+    "메인 스프레드시트의 구 Raw 백업을 삭제할까요?",
+    confirmMsg + "\n\n이 작업은 되돌릴 수 없습니다(Google Sheets 버전 기록으로만 복구 가능).",
+    ui.ButtonSet.YES_NO
+  );
+
+  if(response !== ui.Button.YES){
+    Logger.log("[RawMigration] 사용자가 삭제를 취소함.");
+    return;
+  }
+
+  const deleted = [];
+
+  toDelete.forEach(function(p){
+
+    const sheetName = types.filter(function(t){ return t.label === p.label; })[0].mainSheetName;
+    const sheet = mainSs.getSheetByName(sheetName);
+
+    if(!sheet) return;
+
+    mainSs.deleteSheet(sheet);
+    deleted.push(p.label);
+
+    Logger.log("[RawMigration] " + p.label + " (" + sheetName + ") 삭제 완료.");
+
+  });
+
+  ui.alert(
+    "✅ 삭제 완료",
+    deleted.join(", ") + (skipped.length > 0 ? "\n\n건너뜀: " + skipped.map(function(p){ return p.label; }).join(", ") : ""),
+    ui.ButtonSet.OK
   );
 
 }

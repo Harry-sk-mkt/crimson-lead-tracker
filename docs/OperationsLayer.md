@@ -120,7 +120,9 @@ SAL과 동일한 '터치 없으면 갱신 안 됨' 문제를 겪고 있다"는 �
 - **Revenue**(신규, Deal Tracker 외부 스프레드시트, `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.
   COLUMNS.EMAIL`로 Email 매칭) — Revenue + Opportunity Won Date(`MASTER_011_RevenueSync.js`
   신규). Deal Tracker에 같은 Email로 여러 딜이 있으면 Revenue는 합계, Opportunity Won
-  Date는 가장 최근 Close Date를 채택(가정 — 실측 미검증).
+  Date는 가장 최근 Close Date를 채택 — 2026-09-09 실측 검증 완료(`docs/OpenItems.md` #39
+  참고, 실 중복 Email 3건 확인·사용자가 그중 1건을 Deal Tracker에서 직접 열어 정상 별개
+  딜임을 확인).
 
 Lead Priority 다운그레이드 방지 가드(`applyPriorityDowngradeGuard_()`)는 IC Funnel 경로에
 안전장치로 유지(사용자 확정, `docs/OpenItems.md` #20 New P1 8월 갭 재발 방지) — MTA 경로의

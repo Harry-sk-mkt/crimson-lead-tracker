@@ -1,5 +1,36 @@
 # Changelog — 2026-09-09
 
+## `docs/OpenItems.md` #39 — Revenue Sync 복수 딜 Email 집계 가정 실측 검증 완료
+
+`MASTER_011_RevenueSync.js` 헤더에 "가정(사용자 미검증)"으로 남아있던 마지막 항목 — 같은
+Email이 Deal Tracker에 여러 딜로 나타날 때 Revenue는 합계, Opportunity Won Date는 가장
+최근 Close Date를 채택하는 로직. 신규 `TEMPQA_057_RevenueSyncDuplicateEmailVerify.js`
+(`runVerifyRevenueSyncDuplicateEmailAssumption()`)로 실제 복수 딜 Email 3건
+(`anjeewoo11@gmail.com`/`sy2011@gmail.com`/`joymoon916@gmail.com`)을 확인 —
+`sy2011@gmail.com`이 같은 Close Date에 고액 2건이라 중복 입력 의심됐으나, 사용자가 Deal
+Tracker에서 직접 열어 실제로 서로 다른 두 딜임을 확인해 합계 가정 확정. 단, 3건 전부 이미
+알려진 78건 미매칭 계열(Leads_OPS에 없음, Account 전환 등)이라 실제 sync 반영 여부는 이번
+에도 검증 못함 — 매칭되는 복수 딜 Email이 생기면 재확인 필요(낮은 우선순위). `MASTER_011_
+RevenueSync.js`(v1.1.1)/`docs/OperationsLayer.md`/`docs/OpenItems.md` #39 갱신.
+
+## Master_DB Raw 이관 exec-plan(`2026-09-03-master-db-raw-migration.md`) 마무리 작업
+
+"다음 세션 시작점" 낮은 우선순위 항목 정리. (1) `RESET_001_ResetRawMaster.js` 헤더 주석 —
+Leads_Raw/MTA_Raw가 이제 메인 스프레드시트가 아니라 외부 스프레드시트에 있다는 걸 반영해
+"Raw 시트 직접 비우기" 안내를 갱신, 이미 삭제된 구 `SheetSorter` 참조도 함께 정리. (2)
+`TEMPQA_040`/`TEMPQA_042`/`TEMPQA_043`(IC Funnel 진단 스크립트) — `CONFIG.IC_FUNNEL.SHEET`를
+메인 스프레드시트에서 직접 여는 코드라 이관 후 실제로 깨진 것을 코드로 확인, 조사 결과는
+이미 문서화돼 있어 사용자 확인 후 3개 전부 삭제. (3) `docs/OpenItems.md` #45/#46 — 이
+exec-plan과 무관하게 이미 별도 세션에서 완료돼 있던 것을 재확인, exec-plan의 stale한
+"미착수" 표기만 정정. (4) 사용자가 안정화 6일 확인 후 메인 스프레드시트의 구 Raw 백업
+(Leads_Raw/MTA_Raw/ICFunnel_Raw) 삭제를 확정 — `MASTER_012_RawExternalMigration.js`
+(v1.2.0)에 `runDeleteLegacyMainRawBackups()`(외부 스프레드시트 행 수가 메인 백업 이상일
+때만 삭제하는 안전장치 + YES/NO 확인 dialog) 신규 구현, 단위 테스트
+`testComputeLegacyRawBackupDeletionPlan_()` PASS. **사용자가 편집기에서 실행했으나 오래
+걸려 완료 전 취소 — 실제 삭제까지는 미완료.** 다음 세션 시작 시 Executions 탭에서 실행
+완료 여부부터 확인 후 필요하면 재실행할 것(재실행 자체는 안전 — 이미 삭제된 타입은 자동
+스킵). exec-plan "다음 세션 시작점" 갱신.
+
 ## `docs/OpenItems.md` #33/#35/#38 — 세 항목 재조사 결과 정리 (New P1/SAL 8월 갭, Won/Lost Deal IC Date)
 
 **#33(Won/Lost Deal 20~30%가 IC Booked/Completed Date 없이 전환) 종료** — 사용자 확인:

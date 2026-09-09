@@ -23,14 +23,20 @@
  * COLUMNS.EMAIL`(V열, 사용자 확인)로 매칭 — Leads_OPS의 Primary Key도
  * Email(`OPS.KEY`)이라 자연스럽게 맞음.
  *
- * **집계 가정(사용자 미검증, 실측 전까지 가정으로 표시)**:
+ * **집계 가정(2026-09-09 실측 검증 완료)**:
  * 같은 Email이 Deal Tracker에 여러 딜로 나타날 수 있음(재구매/업셀 등) —
  * Revenue는 그 Email의 전체 딜 Revenue **합계**, Opportunity Won Date는
  * 그 중 **가장 최근 Close Date**를 채택한다. Target/ACQ 쪽 집계처럼
  * Upsell/Referral을 제외하지 않음 — 이 필드는 "이 리드가 발생시킨 총
  * 매출"이라는 기존 의미를 그대로 유지하는 게 목적이라 소스만 바뀌고
  * 정의는 안 바뀌어야 한다는 판단(Target_REP의 딜비중용 제외 로직과는
- * 목적이 다름).
+ * 목적이 다름). **검증**: `TEMPQA_057_RevenueSyncDuplicateEmailVerify.js`로
+ * 실제 복수 딜 Email 3건 확인 — 그중 `sy2011@gmail.com`(같은 Close Date에
+ * 큰 금액 2건이라 중복 입력 의심됐던 케이스)을 사용자가 Deal Tracker에서
+ * 직접 열어 실제로 서로 다른 두 딜임을 확인(2026-09-09), 합계 가정이 맞다고
+ * 확정. 단, 이 3건 전부 Leads_OPS에 아직 매칭 안 되는 Email이라(#39 기존
+ * 78건 미매칭 계열, Account 전환 등) 실제 sync 반영 자체는 검증 못 함 —
+ * 매칭되는 복수 딜 Email이 생기면 반영 여부도 재확인할 것.
  *
  * Master 빌드 없음 / 배치 읽기·쓰기 재사용
  * `MASTER_009_ICFunnelSync.js`/`MASTER_010_SALSync.js`와 동일 아키텍처 —
@@ -50,9 +56,13 @@
  *   트리거로 비동기", `MASTER_002_PipelineAsync.js` 참고).
  *
  * Version
- * v1.1.0
+ * v1.1.1
  *
  * Change Log
+ * v1.1.1 (2026-09-09)
+ * - 헤더 주석만 갱신 — 복수 딜 Email 합계 가정을 `TEMPQA_057_
+ *   RevenueSyncDuplicateEmailVerify.js`/사용자 확인으로 실측 검증 완료.
+ *   `docs/OpenItems.md` #39.
  * v1.1.0 (2026-09-03)
  * - **엔진 refresh 낭비 제거(`docs/OpenItems.md` #44,
  *   `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`)**:
