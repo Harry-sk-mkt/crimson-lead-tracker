@@ -2,17 +2,16 @@
 
 **관련 로드맵 항목**: 파이프라인 성능 최적화 및 구조 효율화  
 **시작일**: 2026-09-03  
-**상태**: 항목 1~5 전부 코드 작성 완료(2026-09-04), 순수 함수 단위 테스트 전부 PASS. **항목
-1/2/3/5는 2026-09-07~08 실 Import(MTA/Leads/SAL/IC Funnel)로 동작 자체는 확인 완료** — 상세는
-각 항목 참고. **항목 4(딕셔너리 증분)는 부분 검증(2026-09-08)** — Executions 로그로
-`periodicRefreshDictionaries_`가 Time-Driven 트리거로 정상 실행됨(01:04:25, 31.1초, 에러
-없음) 확인, 기대 로그 포맷("Leads 신규 N행 / MTA 신규 N행 반영(전체 재채굴 아님)")도 정확히
-찍힘 — **증분 경로를 타는 것 자체는 확인됨**. 다만 이 사이클은 "Leads 신규 0행 / MTA 신규
-0행"이라 신규 행을 실제로 올바르게 채굴하는지는 아직 미확인(이 실행이 당일 Leads Import보다
-먼저 돎). **TODO — 오늘(2026-09-08) 오후 1시경 다음 사이클 로그를 사용자가 공유하면, 당일
-Leads Import분이 0이 아닌 값으로 정확히 반영됐는지 확인 후 항목 4를 완료 처리할 것.** 항목
-5는 사용자 확정으로 청크 처리만 적용, Leads_OPS 증분 병합은 별도 설계/검증
-필요해 범위 밖으로 보류(아래 항목 5 "미착수" 참고). **✅ 원인 확정(2026-09-08, 사용자 재현
+**상태**: ✅ 전 항목(1~5) 코드 완료(2026-09-04) + 실사용 검증 완료(2026-09-08~09). 항목
+1/2/3/5는 2026-09-07~08 실 Import(MTA/Leads/SAL/IC Funnel)로 동작 확인. **항목 4(딕셔너리
+증분)도 2026-09-09 최종 검증 완료** — 2026-09-08 01:04:25 사이클(당일 Leads Import 이전,
+신규 0행)에 이어 그날 오후 1시 사이클(Leads Import 이후) 로그로 확인: `Leads_Master : 61
+new records read (targeted, sheet row 36682부터)` → `UTM_Program_Dictionary 증분 갱신 완료:
+Leads 신규 61행 / MTA 신규 0행 반영(전체 재채굴 아님)`, `Program_Segment_Dictionary`도 동일
+61행. 그날 실제 Leads Import 신규 건수(61건, Changelog 2026-09-08 `buildLeadsOPS()` 로그와
+일치)와 정확히 일치 — 증분 채굴이 올바른 값을 반영함을 확정. 항목 5는 사용자 확정으로 청크
+처리만 적용, Leads_OPS 증분 병합(`buildLeadsOPS()` 자체 증분화)은 별도 항목(`docs/OpenItems.md`
+#50)으로 분리해 범위 밖으로 보류(아래 항목 5 "미착수" 참고). **✅ 원인 확정(2026-09-08, 사용자 재현
 테스트)** — SAL 직후 겹쳐 실행됐을 때 `runICFunnelPipelineTail`이 1790초(≈29.8분, 30분 제한
 근접), `generateTargetReport_`만 916초 소요. 같은 날 락 충돌 없이 **단독으로 IC Funnel Import
 재실행**(월요일치 소량, 4건 신규)한 결과 `generateTargetReport_` **35.6초**(베이스라인 25.6s와
@@ -118,9 +117,12 @@ Leads Import분이 0이 아닌 값으로 정확히 반영됐는지 확인 후 �
       `periodicRefreshDictionaries_`의 01:04:25 Time-Driven 실행(31.1초, 에러 없음) 확인,
       기대 로그 포맷("Leads 신규 N행 / MTA 신규 N행 반영(전체 재채굴 아님)")도 정확히
       찍힘(UTM_Program_Dictionary/Program_Segment_Dictionary 둘 다) — 증분 경로 진입
-      자체는 확인됨. 이 사이클은 "신규 0행"이라(당일 Leads Import 이전 실행) 신규 행을
-      실제로 올바르게 채굴하는지는 미확인 — **TODO: 오늘 오후 1시경 다음 사이클 로그를
-      사용자가 공유하면(당일 Leads Import분 반영 여부) 확인 후 완료 처리.**
+      자체는 확인됨. **✅ 완전 검증(2026-09-09)** — 같은 날(2026-09-08) 오후 1시 사이클
+      (당일 Leads Import 이후) 로그로 이어서 확인: `Leads_Master : 61 new records read
+      (targeted, sheet row 36682부터)` → `UTM_Program_Dictionary 증분 갱신 완료: Leads
+      신규 61행 / MTA 신규 0행 반영(전체 재채굴 아님)`, `Program_Segment_Dictionary`도
+      동일 61행 — 그날 실제 Leads Import 신규 건수(61건, 항목 2/5 검증 로그와 동일 배치)와
+      정확히 일치해 증분 채굴이 실제로 올바른 값을 반영함을 확정.
       Business Segment 분류 결과(`resolveBusinessSegment_()` 등 소비 측)는 캐시
       시트의 핵심 4개 컬럼 의미/위치가 그대로라 회귀 없음 — 그래도 다음 Import 후
       Business Segment 분류가 기존과 동일하게 나오는지 육안 확인 권장.
@@ -214,3 +216,26 @@ Leads Import분이 0이 아닌 값으로 정확히 반영됐는지 확인 후 �
 4. `MASTER_009_ICFunnelSync.js` / `MASTER_010_SALSync.js` 신규 Batch Direct Update 전환 및 테스트
 5. `IMPORT_008_RawDeduplicator.js` 동적 윈도우 벤치마크 구현 및 테스트
 6. `OPS_004_Merge.js` 증분 업데이트 구조 보완
+
+---
+
+## Outcomes & Retrospective
+
+**5개 항목 전부 실 Import로 실사용 검증 완료(2026-09-08~09)**:
+- 항목 1(Master 정렬 제거)/5(OPS 청킹): 대용량 실데이터 무에러 완주로 간접 검증.
+- 항목 2(RawDeduplicator 동적 윈도우): Logger 로그로 직접 확인(좁은 윈도우만 읽으면서
+  판정 정확도 그대로 유지).
+- 항목 3(IC Funnel/SAL Batch Direct Update): 최초 1회 전체 처리(체크포인트 0 시작) 확인
+  + 소규모 배치 재확인으로 처리 시간 절감(690.5s → 196.4s) 확인.
+- 항목 4(딕셔너리 증분): 신규 0행 사이클과 신규 61행 사이클을 모두 확인 — 후자가 실제
+  Leads Import 건수(61건)와 정확히 일치해 증분 채굴 정확성까지 확정.
+
+**부수적으로 발견·해소된 것**: SAL 직후 파이프라인 겹침(락 충돌 재시도) 시
+`generateTargetReport_`가 916초까지 튀는 현상 — Target_REP 코드 버그가 아니라 파이프라인
+겹칠 때 외부 Deal Tracker API 호출이 지연되는 현상으로 원인 확정(재현 테스트로 검증).
+자주 발생하는 패턴이 아니라 낮은 우선순위로 `docs/OpenItems.md` #18에 기록만 해둠.
+
+**범위 밖으로 분리된 항목**: 항목 5의 "더 어려운 절반"이었던 `buildLeadsOPS()`(Leads_OPS
+증분 병합, `mergeOPS()` 중복 이메일 해소 로직 자체의 증분화)는 핵심 테이블 리스크가 커
+사용자 확정으로 이번 라운드 범위에서 제외 — `docs/OpenItems.md` #50으로 별도 등록, 설계/
+구현 미착수 상태로 백로그에 남김.

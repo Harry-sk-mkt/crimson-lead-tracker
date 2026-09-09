@@ -3,25 +3,11 @@
 **관련 로드맵 항목**: 없음(GAS 백엔드 설계 검토에서 파생된 별도 트랙, `docs/OpenItems.md`
 #40/#41/#42와 직결)
 **시작일**: 2026-09-02
-**상태**: 부분 구현 완료(2026-09-03) — #41 계열(BOFU/Content 이중조회, FY_REP 반복오픈,
-S&M_REP 전체 재스캔) 전부 구현·실측 검증 완료. **SAL/Revenue Engine refresh 낭비 제거 +
-Revenue 독립 2시간 트리거도 구현 완료(2026-09-03), 유닛 테스트 4개 전부 PASS, 실사용
-검증만 남음(아래 "다음 세션 시작점" 참고)**. Engine 독립 트리거 분리 자체(Axis A,
-Leads/MTA 전용)와 Target_REP/FY_REP 증분화는 여전히 설계 미확정 — 사용자가 확정 후
-알려주면 진행(2026-09-02 원칙 유지). 그 전까지 이 두 항목은 임의로 구현하지 말 것.
-
-**다음 세션 시작점(2026-09-03 세션 종료 시점)**:
-1. Revenue 2시간 트리거 실사용 확인 — `runInstallRevenuePeriodicRefreshTrigger()` 실행
-   후 "2026-09-03 15:19 KST" 다음 실행 예약됨. Executions 목록에서 `periodicRefreshRevenue_`가
-   그 시각에 자동으로 뜨는지, PIPELINE_LOCK 충돌 없이(또는 충돌 시 대기열 처리가 정상인지)
-   확인.
-2. 다음 SAL Import 때 로그에 기존 6개 Engine refresh 대신 "ACQ Summary SAL-Delta
-   Refresh Completed" 한 줄만 뜨는지, ACQ_Summary/ACQ_Summary_Weekly의 SAL 카운트가
-   실제로 정확히 반영되는지(예: S&M_REP 등에서 육안 대조) 확인.
-3. 위 둘 다 검증되면 이 exec-plan을 `docs/exec-plans/completed/`로 이동(`git mv`),
-   Outcomes & Retrospective 작성.
-4. (별개, 사용자가 새로 착수 원할 때만) Axis A(Engine 독립 트리거 분리)/Target_REP·
-   FY_REP 증분화 — 여전히 설계 미확정, 임의로 시작하지 말 것.
+**상태**: ✅ 완료(2026-09-09) — #41 계열(BOFU/Content 이중조회, FY_REP 반복오픈,
+S&M_REP 전체 재스캔) + SAL/Revenue Engine refresh 낭비 제거 + Revenue 독립 2시간
+트리거, 전부 구현·실사용 검증 완료. Engine 독립 트리거 분리 자체(Axis A, Leads/MTA
+전용)와 Target_REP/FY_REP 증분화는 설계 미확정으로 이번 exec-plan 범위 밖 — 사용자가
+새로 착수 원하면 별도 exec-plan으로 진행(아래 Outcomes 참고).
 
 ## Goal
 
@@ -227,10 +213,13 @@ FY_REP/S&M_REP이 과거 확정 구간을 매번 재계산하지 않고 증분�
     push 완료. **✅ 트리거 재설치 확인(2026-09-08 10:49:56)** — 사용자가
     `runInstallRevenuePeriodicRefreshTrigger()` 재실행, 로그 "Revenue 주기적
     Refresh 다음 실행 예약: 2026-09-08 12:49 KST" 확인, 에러 없이 Completed.
-    **TODO**: 12:49 KST 이후 Executions에서 `periodicRefreshRevenue_`가 실제로
-    자동 실행됐는지, 그다음 재예약 로그(14:49 KST)까지 이어지는지 확인 —
-    이번 버그가 "1회 실행 후 재예약 실패"였으므로 최소 2회 연속 성공까지
-    봐야 self-rescheduling 체인이 실제로 복구됐다고 확신 가능.
+    **✅ 2회 연속 성공 확인(2026-09-09)** — Executions 로그 직접 대조:
+    Run A(09/09 07:32:23, Completed, 에러 없음) 마지막 줄 "Revenue 주기적
+    Refresh 다음 실행 예약: 2026-09-09 09:38 KST" → Run B(09/09 09:38:17,
+    Completed, 에러 없음)가 정확히 그 예약 시각에 발동, 마지막 줄 "...다음
+    실행 예약: 2026-09-09 11:46 KST"로 이어짐. 재예약 시각이 예정대로
+    앞선 실행의 예약값과 일치하며 계속 갱신되는 것을 2회 연속으로 직접
+    확인 — self-rescheduling 체인 복구 확정.
   - **✅ (b) SAL 델타 refresh 실사용 검증 완료(2026-09-08 06:07 KST)** —
     같은 날 `runICFunnelPipelineTail`과 락 경합 후 재시도된 `runSALPipelineTail`
     로그로 확인: SAL_Raw 8179건 신규 처리(최초 실행이라 전체) 후 기존 6개
@@ -243,4 +232,26 @@ FY_REP/S&M_REP이 과거 확정 구간을 매번 재계산하지 않고 증분�
 
 ## Outcomes & Retrospective
 
-(작업 완료 시 작성)
+**최종적으로 구현/검증된 것**:
+- S&M_REP 주 단위 캐시화(`ACQ_Summary_Weekly`) — 119.8s → 4.0s(97% 감소), 실측 검증 완료.
+- BOFU/Content Meta_Raw+UTM Dictionary 이중조회 제거(모듈 스코프 메모이제이션).
+- FY_REP `perfTrackerByFY` 반복 오픈 제거(실행당 1회만 openById).
+- SAL Sync — ACQ_Summary/Weekly 갱신을 전체 재계산에서 델타(변경분만) 반영으로 전환,
+  기존 6개 Engine 전체 재실행 제거. 실사용 검증 완료(2026-09-08, "10 leads changed
+  (3.24s)").
+- Revenue Sync — 경량(Revenue-Only) 버전으로 전환, Revenue와 무관한 Events/BOFU/Content
+  Engine 호출 제거. 독립 2시간 주기 self-rescheduling 트리거(`periodicRefreshRevenue_`)로
+  분리해 다른 파이프라인 완료를 기다리지 않고 항상 도는 구조로 변경.
+- **버그 발견·수정**: 위 Revenue 트리거의 self-rescheduling이 `try/catch` 없이 짜여 있어
+  한 번이라도 실패하면 체인이 영구히 끊기는 구조적 결함을 실사용 중 발견(`MASTER_002_
+  PipelineAsync.js` v1.30.0에서 `finally`로 재예약을 옮겨 수정). 2026-09-09 Executions
+  로그로 2회 연속 정상 재예약 확인, 복구 확정.
+
+**남은 한계(이번 exec-plan 범위 밖으로 명시적으로 남김)**:
+- Engine 6종 독립 트리거 분리(Axis A) — 2026-09-03 실측 결과(Engine 6종 169.9s, 30분
+  한도의 27.8%)로 시급성이 낮아졌다고 판단, 설계 확정 보류 상태로 종료. 필요해지면 별도
+  exec-plan.
+- Target_REP/FY_REP 자체의 증분화(현재 매번 전체/과거 FY까지 재계산) — "확정된 과거 구간"
+  경계 설계가 미확정이라 이번 라운드에서 손대지 않음. 여전히 매번 전체 재계산이라 두
+  리포트가 Report 레이어에서 가장 무거운 축(Target_REP 25.6s, FY_REP 22.3s)으로 남아있음.
+- 착수하려면 사용자가 새로 설계를 확정한 뒤 별도 exec-plan으로 진행.

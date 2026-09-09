@@ -1,3 +1,27 @@
+# Changelog — 2026-09-09
+
+## 파이프라인 Refresh 시간 단축 exec-plan(`2026-09-02-pipeline-refresh-time-redesign.md`) 실사용 검증 완료 및 종료
+
+2026-09-08에 발견·수정한 `periodicRefreshRevenue_` self-rescheduling 체인 끊김 버그의 마지막
+남은 검증 항목("최소 2회 연속 성공") 확인. Executions 로그 대조: Run A(09/09 07:32:23,
+Completed)가 다음 실행을 "2026-09-09 09:38 KST"로 예약 → Run B(09/09 09:38:17, Completed)가
+정확히 그 시각에 발동해 완주하고 다시 "11:46 KST"로 재예약 — 재예약 시각이 예정대로 계속
+갱신되는 것을 2회 연속 직접 확인, 체인 복구 확정. 같은 exec-plan의 나머지 항목(Engine 독립
+트리거 분리/Target_REP·FY_REP 증분화)은 설계 미확정 상태로 범위 밖에 남겨두고, Outcomes &
+Retrospective 작성 후 `docs/exec-plans/completed/2026-09-02-pipeline-refresh-time-redesign.md`로
+이동.
+
+## 파이프라인 성능 최적화 exec-plan(`2026-09-03-performance-optimization.md`) 항목4(딕셔너리 증분) 최종 검증 완료 및 종료
+
+2026-09-08 "신규 0행" 사이클 확인만으로는 실제 증분 채굴 정확성이 미확인 상태였던 것을,
+같은 날 오후 1시 사이클(당일 Leads Import 이후) 로그로 이어서 확인 — `Leads_Master : 61
+new records read (targeted, sheet row 36682부터)` → `UTM_Program_Dictionary`/
+`Program_Segment_Dictionary` 둘 다 "Leads 신규 61행 / MTA 신규 0행 반영(전체 재채굴 아님)"
+정확히 기록. 그날 실제 Leads Import 신규 건수(61건)와 정확히 일치해 증분 채굴이 올바른
+값을 반영함을 확정 — 이로써 5개 항목 전부 실사용 검증 완료. `docs/OpenItems.md` #18 갱신,
+exec-plan에 Outcomes & Retrospective 작성 후 `docs/exec-plans/completed/2026-09-03-performance-optimization.md`로
+이동.
+
 # Changelog — 2026-09-08
 
 ## 파이프라인 성능 최적화 exec-plan 실 Import 검증 (`docs/OpenItems.md` #18, exec-plan `2026-09-03-performance-optimization.md`)
