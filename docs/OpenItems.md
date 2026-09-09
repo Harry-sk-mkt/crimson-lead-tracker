@@ -1075,19 +1075,14 @@
     있으면 검수 대상을 좁혀주거나 놓친 케이스를 잡아줄 수 있음. **아직 설계 착수 전** —
     리스트 자체가 어디 있는지/형식/최신성, flagging 결과를 어디에 어떻게 노출할지(별도
     QA 시트? Leads_OPS_QA 확장?) 전부 미정. 임의로 처리하지 말 것.
-44. **SAL Sync가 무관한 Engine 6종까지 매번 전부 재실행 — 코드로 확인, 미착수(TODO)**
-    (2026-09-03) — S&M_REP 성능 개선 설계 논의 중 사용자가 "SAL/IC 같은 세일즈 퍼널
-    데이터가 들어올 때마다 New P1까지 전부 다시 훑을 필요가 있냐"고 지적, 코드 확인 결과
-    실제로 낭비 확인됨. `syncSALToOPS_()`(`MASTER_010_SALSync.js:356-363`)는 `Sales
-    Accepted Date` 필드 하나만 동기화하는데(Create Date/Lead Priority는 전혀 안 건드림),
-    끝에서 `refreshACQSummary_()`/`refreshNewP1Engine_()`/Events/BOFU/Search/Content
-    Engine/`refreshTargetActuals_()` 7개를 조건 없이 전부 재실행 — Leads_OPS/MTA_Master
-    전체 재스캔이 SAL 하나 때문에 매번 도는 구조. (`syncICFunnelToOPS_()`는 Lead Priority도
-    함께 동기화하는 경로라 New P1이 실제로 바뀔 수 있어 이 문제에 덜 해당 —
-    `applyPriorityDowngradeGuard_()` 참고.) **막힌 지점**: 제대로 고치려면
-    `refreshACQSummary_()`(및 나머지 Engine들)를 "SAL 파생 부분만 부분 갱신" 가능하게
-    쪼개야 하는데, 이건 그 자체로 별도 설계/구현 작업 — 오늘(#39 Revenue 매칭 실패 조사 중
-    파생된 S&M_REP 성능 개선) 범위에는 포함하지 않기로 함. 임의로 처리하지 말 것.
+44. ~~SAL Sync가 무관한 Engine 6종까지 매번 전부 재실행~~ — **✅ 구현 및 실사용 검증
+    완료(2026-09-03 설계/구현, 2026-09-08 실사용 검증)** — `docs/exec-plans/completed/
+    2026-09-02-pipeline-refresh-time-redesign.md`에서 해결. `computeSALDeltaLeads_()`
+    (신규 순수 함수) + `refreshACQSummarySALDelta_()`(`ACQREP_002_Summary.js` v1.5.0)로
+    "무관한 Engine 6종 전부 재실행"을 "이번에 바뀐 리드만 반영하는 델타 병합"으로 교체
+    (`MASTER_010_SALSync.js` v1.1.0). 실사용 검증(2026-09-08): SAL Import 로그에서 기존
+    6개 Engine 전체 재실행 대신 "ACQ Summary SAL-Delta Refresh Started" → "Completed :
+    10 leads changed (3.24s)" 한 줄로 정확히 끝남 확인.
 45. ~~Salesforce에서 추출해야 할 필드값을 리포트(Export 타입)별로 정리~~ — **✅ 문서화
     완료(2026-09-04)**. `docs/SalesforceFieldRequirements.md` 신규 — `CORE_001_Config.js`의
     `REQUIRED_FIELDS`/`RAW_DATE_COLUMNS`/`IC_FUNNEL.COLUMNS`/`SAL.COLUMNS`와 각 Transformer/
@@ -1131,24 +1126,16 @@
     **남은 것(TODO)**: 실제 파이프라인 tail 실행 중 handleReportGenerateEdit/onFYReportEdit_가
     더 이상 재발동하지 않는지, Events/BOFU/Content Engine 구간 소요시간이 원래 수준(55~76초)
     으로 돌아오는지 다음 실 Import 때 확인 전까지 완료로 간주하지 말 것.
-47. **Revenue 파이프라인 — Leads/MTA/IC Funnel/SAL 완료에 얹혀가는 방식 대신 독립 트리거로
-    분리 — 아이디어만 기록, 미착수(TODO)** (2026-09-03, Master_DB Raw 이관 세션 중 사용자
-    제안) — 지금 `runRevenuePipelineTail()`(`MASTER_011_RevenueSync.js`)은 CSV Import가
-    없는 유일한 타입이라 Leads/MTA/IC Funnel/SAL 중 아무 tail이나 끝날 때마다
-    `enqueuePendingPipelineType_(CONFIG.PIPELINE.TYPES.REVENUE)`로 대기열에 얹혀가는 방식으로만
-    트리거됨(`CORE_001_Config.js` v1.56.0 변경 이력 참고). 그런데 Revenue의 실제 소스인 Deal
-    Tracker(외부 스프레드시트)는 이 4개 파이프라인과 무관하게 바뀌므로, 지금 방식도 "진짜 변경
-    감지"가 아니라 다른 파이프라인에 편승하는 간접 트리거일 뿐 — 사용자가 차라리 Revenue를
-    떼어내 독립적으로 도는 트리거로 바꾸자고 제안. 두 방향 검토됨:
-    - **단순 시간 트리거**: 이 프로젝트에 이미 선례 있음 —
-      `periodicRefreshAllReports_()`(하루 2번 KST 10/22시 강제 재계산, 42번 항목 참고)와 동일
-      패턴을 Revenue에도 적용. 구현 난이도 낮음, 기존 검증된 패턴 재사용.
-    - **Deal Tracker 자체 변경 감지(신규 입력 발생 시 트리거)**: 이 스크립트가 Deal Tracker
-      외부 스프레드시트에 직접 installable onEdit 트리거를 설치하는 게 기술적으로 가능해
-      보이나(편집 권한만 있으면 소유하지 않은 스프레드시트에도 설치형 트리거를 걸 수 있음),
-      **실제로 되는지 검증 안 됨** — 이 프로젝트가 Simple Trigger의 외부 `openById()` 권한
-      부족으로 이미 여러 번 막힌 이력(Target_REP/ACQ_REP 사례)이 있어 신중한 검증 필요.
-    막힌 지점: 두 방향 중 어느 쪽으로 갈지, 착수 시점 확정 필요 — 임의로 처리하지 말 것.
+47. ~~Revenue 파이프라인 — Leads/MTA/IC Funnel/SAL 완료에 얹혀가는 방식 대신 독립 트리거로
+    분리~~ — **✅ 구현 및 실사용 검증 완료(2026-09-03 설계/구현, 2026-09-09 2회 연속
+    재예약 확인)** — 두 방향 중 "단순 시간 트리거"로 확정, `docs/exec-plans/completed/
+    2026-09-02-pipeline-refresh-time-redesign.md`에서 해결. `scheduleNextRevenuePeriodicRefresh_()`/
+    `periodicRefreshRevenue_()`(`MASTER_002_PipelineAsync.js`)가 2시간마다 독립 실행
+    (`PIPELINE_LOCK`은 계속 존중, 획득 실패 시 대기열 등록 후 다음 주기 재시도). **2026-09-08
+    버그 발견·수정**: self-rescheduling이 실패 시 체인이 끊기는 구조적 결함을 실사용 중
+    발견해 `finally`로 재예약을 옮겨 수정(v1.30.0). **2026-09-09 최종 검증**: Executions
+    로그로 2회 연속 정상 재예약(07:32→09:38 KST 예약대로 정확히 발동→11:46 KST 재예약)
+    확인, 체인 복구 확정.
 48. ~~외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅~~ — **✅ 완료(2026-09-08 실 Import 검증까지 마무리)** (2026-09-03 등록) — 외부 "P1 School List" 스프레드시트(`15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q`, 사용자 확정 — E열 대표 학교명 + N열부터 오기입 변형 표기)와 Leads_OPS를 대조해, School Name이 P1 리스트에 있는데 effective Priority(`isEffectiveP1_()` 재사용, Priority Override 우선)가 P1이 아닌 리드를 `P1_School_Mismatch_QA` 시트에 플래깅(사용자 확정 — 이메일 알림 없음, Leads Import 파이프라인에 자동 편입). `runCheckP1SchoolMismatch()` 실행 결과 P1 학교 572개(별칭 포함)/Leads_OPS 36,628건 대조, 불일치 2,116건 기록 — 사용자가 상위 10건 육안 대조해 School Name 매칭 정확함을 확인(2026-09-04). 역방향 체크(`Not_Striked`, 2026-09-04 이후 신규 P1 리드 중 리스트에 없는 학교)도 함께 구현. **✅ 2026-09-08 실 Leads Import로 최종 검증**: `runLeadsPipelineTail()` 안에서 `checkP1SchoolMismatch_` 자동 편입 확인(정방향 불일치 2,119건, 역방향 Not_Striked 신규 학교 13건 — 배포 후 첫 실제 양성 케이스), 에러 없음. 상세: `docs/exec-plans/completed/2026-09-04-p1-school-mismatch-check.md`.
 49. ~~Naver Search API 누적 캐시 시트 외부 Master_DB 스프레드시트로 이관~~ — 구현 및 실행 검증 완료(2026-09-04). `Naver_Search_Campaign_Stats_Cache`/`Ad_Spend_Cache`를 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가 있는 Master_DB 폴더 파일, `1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`, 사용자 확정 — 새 파일 안 만들고 탭만 추가)로 이관. 재계산 가능한 캐시라는 성질을 이용해 Raw 이관과 달리 별도 복사 스크립트 없이 read/write 함수의 대상만 외부 스프레드시트로 전환(`AD_003_NaverSearch.js` v2.16.0/`AD_004_SpendCache.js` v1.6.0의 opener 함수 신규, `JL_003_Write.js` v1.1.0도 함께 전환). `runRefreshAdSpendCache()`(222행)/`runRefreshNaverSearchAdCampaignStatsCache()`(9개 캠페인) 실행 결과 외부 시트에 탭 정상 생성 확인, ACQ_REP Generate 재실행도 정상 값 확인(사용자 확인, 2026-09-04). 상세: `docs/exec-plans/completed/2026-09-04-ad-spend-cache-external-migration.md`. **남은 낮은 우선순위 항목**: 메인 스프레드시트의 기존 숨김 탭 2개는 안정화 확인 후 별도 삭제(당장 안 함).
 50. **`buildLeadsOPS()`(Leads_OPS 병합) 증분화 — 설계/구현 미착수(TODO)** (2026-09-08 등록, 근거는 2026-09-04 세션에서 이미 논의) — `docs/exec-plans/active/2026-09-03-performance-optimization.md` 항목 5(청크 처리)에서 다룬 5대 성능 개선 중, 사용자가 명시적으로 범위 밖으로 보류한 "더 어려운 절반"이 바로 이것 — `mergeOPS()`(`OPS_004_Merge.js`)의 중복 이메일 해소 로직 자체는 매 Import마다 여전히 Leads_Master(36,741행)+Leads_OPS(36,689행) 전체를 재스캔한다(항목 1~4는 Raw/딕셔너리 레이어의 전체 스캔을 없앴지만 이 레이어는 그대로). 2026-09-08 실 Import 실측: `buildLeadsOPS()`가 61건 신규 처리에 101.18초 소요 — 신규 건수와 무관하게 전체 재스캔 비용이 고정으로 붙는 구조. **보류 사유(사용자 확정, 2026-09-04)**: Leads_OPS는 거의 모든 리포트가 참조하는 핵심 테이블이라 실수 시 파급이 크다는 이유로 청크 처리(안전장치)만 우선 적용하고 증분 병합은 별도 설계/검증 없이는 착수하지 않기로 함(`[[feedback_pause_before_core_merge_logic_change]]` 참고). **착수 시 최소 설계해야 할 것(exec-plan에 이미 기록)**: (1) 이메일이 이미 OPS에 있는데 새 배치 행의 Create Date가 기존보다 이르면 SF_COLUMNS 교체(MANUAL/SYNC_COLUMNS는 계속 보존), 이르지 않으면 duplicate로 카운트만 하고 기존 행 불변, (2) 같은 배치 내 신규 이메일 중복은 기존 로직 그대로 재사용 가능, (3) 실 스프레드시트 데이터로 대조 검증 필수(순수 함수 테스트만으로는 불충분). 임의로 착수하지 말 것 — 설계 논의 먼저.
