@@ -1,5 +1,40 @@
 # Changelog — 2026-09-09
 
+## `docs/OpenItems.md` #31 — Target_REP Actual CPNP1 신규 과다집계 버그 발견·수정 (Meta 지출 분할배치)
+
+#31("Target_REP Actual CPNP1 과소집계") 잔여 확인차 8/31주 값을 Target_REP CPNP1에서 Meta
+지출로 역산해 사용자가 Google Drive로 공유해준 Campaigns 2.0 원본과 대조하던 중, 완전히
+별개의 새 버그(방향은 반대 — 과다집계)를 발견. 사용자가 최근 Meta 지출 export를 한 주를
+여러 배치(월~수/수~토)로 나눠 올리는 방식으로 바꾸면서, 같은 캠페인의 같은 주를 "정밀"
+(`isMetaRowWeekPrecise_()`) 행 2개 이상이 동시에 커버하는 케이스가 생겼는데,
+`aggregateMetaSpendByWeekSegment_()`(`AD_002_Meta.js`)가 이들을 각각 독립적으로 7일치로
+비례보정(prorate)한 뒤 그냥 합산해 실제 지출의 최대 1.85배까지 과다집계되고 있었음.
+
+Google Drive 커넥터로 Campaigns 2.0 원본(Meta_Raw 탭)을 직접 열어보려 했으나 파일이 너무
+커서 자연어 변환이 잘려 신뢰할 수 없었고, 대신 사용자가 Reporting starts=2026-08-31 필터로
+직접 뽑아준 raw 데이터로 Node 시뮬레이션 재현: raw 합계 $16,299.06 vs 기존 로직 계산값
+$30,149.82(1.85배) — Target_REP에서 역산한 세그먼트 합계($30,267, Seminar 제외)와 거의
+정확히 일치해 실제로 이 과다집계가 Target_REP에 반영되고 있었음을 확인.
+
+**수정**: 신규 `computeEffectiveMetaDateRange_()`/`mergePreciseMetaRecordsForCampaignWeek_()`
+(`AD_002_Meta.js` v1.18.0) — 같은 캠페인+같은 주를 커버하는 정밀 행들을 먼저 그룹핑·병합
+(raw spent 합산, effectiveStart/End는 가장 이른/늦은 값 채택)한 뒤 딱 한 번만 prorate하도록
+`aggregateMetaSpendByWeekSegment_()` 재작성 — 두 배치가 합쳐서 7일 전체를 커버하면
+prorate 함수 자체 로직에 의해 자동으로 보정 없이 raw 합산값이 채택됨. 이미 검증된
+`isMetaRowWeekPrecise_()`/`computeMetaRowWeeklySpend_()`/`prorateSingleWeekMetaSpend_()`는
+변경하지 않아 회귀 위험 최소화.
+
+**검증**: (1) Node 시뮬레이션 — 실제 분할배치 데이터로 재현한 결과 fixed/raw 비율 정확히
+1.0000. (2) Apps Script `testMergePreciseMetaRecordsForCampaignWeek()`(신규)/
+`testAggregateMetaSpendByWeekSegment()`(분할배치 회귀 케이스 추가) 전부 PASS. (3) 실
+`runRefreshAdSpendWeeklyCache()` → `runRefreshTargetActuals()` 재실행 후 Target_REP 8/31주
+Actual CPNP1이 Webinar $652.81→$394.11/BOFU $596.78→$327.48/Content $798.42→$401.14로
+정상화(약 50~60% 감소, 이중집계 제거 비율 1÷1.85≈54%와 부합) — Search만 거의 불변
+($213.85→$214.34, Naver Search Ads API 기반이라 이 버그와 원래 무관, 정상 동작 확인).
+
+사용자가 이 분할배치 export 방식을 앞으로도 계속 쓸 예정이라고 확정 — 1회성 이슈가 아니라
+상시 케이스로 확정 반영. `docs/OpenItems.md` #31 완료 처리.
+
 ## `docs/OpenItems.md` #9(백엔드 실행 체인 비동기화) 실사용 검증 완료 및 exec-plan 종료
 
 2026-08-04에 구현됐지만 실사용 검증 대기 상태로 한 달 넘게 남아있던 마지막 항목 —

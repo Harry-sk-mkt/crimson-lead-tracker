@@ -519,19 +519,36 @@
     `TEMPQA_051`의 (5)번 판정 로직이 override 존재 여부를 반영하지 않아 계속 "버그
     의심"으로 오탐될 뿐(별도 코드 수정 불필요, 낮은 우선순위 — 원하면 나중에 진단
     스크립트에 override 인지 로직 추가 가능). **#30 전체 완료로 간주.**
-31. **Target_REP Actual CPNP1 과소집계 버그 수정 완료 — 잔여 확인 필요(2026-08-25)** — 사용자
+31. ~~Target_REP Actual CPNP1 과소집계 버그~~ — **✅ 2026-08-25 버그 2건 수정 + 2026-09-09
+    별개 신규 버그(과다집계) 발견·수정, 전부 실사용 검증 완료**. 최초(2026-08-25): 사용자
     리포트("8월 Webinar Actual CPNP1이 실제보다 훨씬 낮게 나옴")로 조사한 결과
     `isMetaRowWeekPrecise_()`(`AD_002_Meta.js`)가 부분(예: 화~일 6일) Meta export를 "정밀"로
     오인해 그 주의 나머지 요일 지출이 통째로 증발/이중집계되던 버그 2건을 발견·수정
-    (v1.14.0~v1.16.0, `docs/Changelog.md` 2026-08-25 "Target_REP Actual CPNP1 과소집계" 섹션
-    참고). 코드 수정 자체는 Node 시뮬레이션 + 실 시트 재실행으로 검증 완료했으나, 세션 종료
-    시점에 아직 미확인/미완료로 남은 것: (1) `TARGET_002_Report.js`의
-    `runRefreshTargetActuals()`를 실행해 Target_REP 시트 자체의 Actual 값이 갱신됐는지
-    (사용자에게 요청만 하고 실행 확인 응답은 못 받음), (2) 2026-08-24(월)주 Meta_Raw 데이터가
-    아직 비어있어(사용자가 export 붙여넣기 예정이라고 밝힘) 이번 주 Actual이 계속 0/공란으로
-    보일 것 — 코드 이슈 아님, (3) 8/17주 수정 후 실측(10,443.03)과의 최종 오차가 얼마인지
-    사용자가 직접 재확인한 응답은 못 받음(수정 직전 값 기준 Node 계산상 근접할 것으로 예상만
-    확인). 다음 세션에서 위 3가지를 먼저 확인할 것.
+    (v1.14.0~v1.16.0, `docs/Changelog.md` 2026-08-25 섹션). 당시 세션 종료 시점 미확인
+    3가지(runRefreshTargetActuals 실행 확인/8·17주 최종 오차/8·24주 공란 여부)는 이후 여러
+    세션의 실 Import·리포트 재생성으로 간접 해소된 상태였음.
+    **2026-09-09 신규 발견 — 완전히 별개의 새 버그(과다집계, 위와 반대 방향)**: 사용자가 최근
+    Meta 지출 export를 한 주를 여러 배치로 나눠 올리는 방식(예: 월~수/수~토)으로 바꾸면서,
+    같은 캠페인의 같은 주를 "정밀" 행 2개 이상이 동시에 커버하는 케이스가 발생 —
+    `aggregateMetaSpendByWeekSegment_()`가 이 여러 정밀 행을 각각 독립적으로
+    7일치로 비례보정(prorate)한 뒤 그냥 합산해, 실제 지출의 최대 1.85배까지 과다집계됨
+    (2026-09-09 실측: 사용자가 준 Campaigns 2.0 원본 데이터 기준 8/31주 raw $16,299.06 vs
+    기존 로직 $30,149.82 — Target_REP CPNP1 역산값과 거의 정확히 일치해 실제로 반영되고
+    있던 과다집계로 확인). **수정**: 신규 `computeEffectiveMetaDateRange_()`/
+    `mergePreciseMetaRecordsForCampaignWeek_()`(`AD_002_Meta.js` v1.18.0) — 같은 캠페인+같은
+    주를 커버하는 정밀 행들을 먼저 그룹핑·병합(raw spent 합산, effectiveStart/End는
+    가장 이른/늦은 값)한 뒤 딱 한 번만 prorate하도록 `aggregateMetaSpendByWeekSegment_()`
+    재작성 — 두 배치가 합쳐서 7일 전체를 커버하면 자동으로 보정 없이 raw 합산값 채택됨.
+    기존 `isMetaRowWeekPrecise_()`/`computeMetaRowWeeklySpend_()`/`prorateSingleWeekMetaSpend_()`
+    자체는 변경 없음(이미 검증된 코드, 회귀 위험 최소화). **검증**: Node 시뮬레이션으로 실제
+    분할배치 데이터 재현 결과 fixed/raw 비율 정확히 1.0000 확인, Apps Script
+    `testMergePreciseMetaRecordsForCampaignWeek()`/`testAggregateMetaSpendByWeekSegment()`
+    (분할배치 회귀 케이스 추가) 전부 PASS, 실 `runRefreshAdSpendWeeklyCache()` →
+    `runRefreshTargetActuals()` 재실행 후 Target_REP 8/31주 Actual CPNP1이 Webinar
+    $652.81→$394.11/BOFU $596.78→$327.48/Content $798.42→$401.14로 정상화(약 50~60%
+    감소, 이중집계 제거 비율 1÷1.85≈54%와 부합) — Search만 거의 불변($213.85→$214.34,
+    Naver Search Ads API 기반이라 이 Meta 버그와 원래 무관, 정상). **이 패턴은 사용자가
+    앞으로도 계속 쓸 예정(2026-09-09 확인)** — 우연한 1회성 이슈가 아니라 상시 케이스.
 32. ~~ACQ_REP 이번 달 IC Booked/Complete 구조적 과소집계~~ — **✅ 실사용 검증 완료(2026-08-28)**,
     아래는 진행 경과 기록(참고용). 사용자가 Salesforce "leads report"(IC
     Booked Date=이번 달, 전체 세그먼트)
@@ -833,14 +850,14 @@
     표에 "SAL" 행, PIPELINE_LOCK은 Leads/MTA/IC Funnel과 공유), "📥 Update → Import
     SAL Report" 메뉴 신규. `MASTER_009_ICFunnelSync.js` v1.6.0은 Sales Accepted Date
     관리에서 완전히 손을 뗌(IC Funnel export 버그의 영향 자체를 차단).
-    **막힌 지점(사용자 액션 필요, TODO)**: (1) `CONFIG.SAL.EXTERNAL.SPREADSHEET_ID`가
-    아직 빈 문자열 — 사용자가 새 Google Sheet를 만들고 그 안에 "SAL_Raw"라는 이름의
-    탭을 만든 뒤 스프레드시트 ID를 공유해줘야 함. (2) Salesforce에서 SAL 전용 리포트
-    ("All leads" 범위, IC Booked Date 필터 없음, TEMPQA_045에서 쓴 CSV와 유사하되
-    이번엔 "New (Not Contacted) Date Time" 필드까지 포함)를 새로 만들어 export해야
-    함. 둘 다 완료되기 전까지 `runSyncSALToOPS()`/`importSALReport()`는 명시적
-    에러로 실패함(추측으로 진행하지 않음). 완료 후 잔여 24건이 실제로 해소되는지
-    재검증 필요 — 확인 전까지 완료로 간주하지 말 것.
+    **✅ 막힌 지점 해소됨(정확한 날짜 미상, 늦어도 2026-09 초 — SAL 파이프라인이
+    이후 세션들에서 매 Import마다 정상 동작하는 것으로 실측 확인)**: `CONFIG.SAL.
+    EXTERNAL.SPREADSHEET_ID` 설정 + Salesforce SAL 전용 리포트 export 둘 다 완료됨
+    — 2026-09-08/09 세션에서 `runSALPipelineTail`이 실 SAL_Raw(8,179건+)를 매번
+    정상 동기화하는 것을 반복 확인(오늘도 "Compared window" 로그 정상). **잔여 24건
+    (P1 TODO #1)이 실제로 해소됐는지는 아직 재검증 안 됨** — `TEMPQA_045_
+    AugustSALSalesforceLeadTrace.js`의 `runCompareAugustSALAgainstSalesforce()`를
+    Apps Script 편집기에서 재실행하면 확인 가능. 확인 전까지 완료로 간주하지 말 것.
 
     **🔴 P1 TODO #2 — 잔여 14건: Leads 리포트 필터 범위 문제로 별개, 코드로 처리 불가,
     사용자 액션 대기**: 이 리드들이 `Leads_OPS`(및 상당수는 `Leads_Master`)에 아예 없음 — IC

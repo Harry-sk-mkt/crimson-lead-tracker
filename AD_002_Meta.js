@@ -34,9 +34,28 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.17.0
+ * v1.18.0
  *
  * Change Log
+ * v1.18.0 (2026-09-09)
+ * - **버그 수정 — 같은 캠페인+같은 주를 커버하는 정밀 export 행이 2개 이상이면
+ *   과다집계**: 사용자가 Meta 지출을 한 주를 여러 배치로 나눠 올리는 방식으로
+ *   전환하면서(예: 월~수/수~토), 같은 캠페인의 같은 주를 정밀(isMetaRowWeekPrecise_())
+ *   행이 2개 이상 동시에 커버하는 경우가 실제로 발생 — 기존 aggregateMetaSpendByWeekSegment_()가
+ *   각 행을 독립적으로 prorateSingleWeekMetaSpend_()에 넣어 각자 7일치로 부풀린 뒤
+ *   그냥 더해서 실제 지출의 최대 2배 가까이 과다집계됨(2026-09-09 실측 — Target_REP
+ *   CPNP1 역산값으로 사용자가 제공한 Campaigns 2.0 원본 데이터와 대조해 발견: 8/31주
+ *   raw $16,299.06 vs 기존 로직 $30,149.82, 약 1.85배). 신규
+ *   computeEffectiveMetaDateRange_()/mergePreciseMetaRecordsForCampaignWeek_() 추가 —
+ *   같은 캠페인+같은 주를 커버하는 정밀 행들을 먼저 그룹핑/병합(raw spent 합산,
+ *   effectiveStart는 가장 이른 값/effectiveEnd는 가장 늦은 값)한 뒤 딱 한 번만
+ *   prorate하도록 aggregateMetaSpendByWeekSegment_() 재작성 — 두 배치가 합쳐서 7일
+ *   전체를 커버하면 prorateSingleWeekMetaSpend_() 자체 로직에 의해 자동으로 보정 없이
+ *   raw 합산값 채택됨. isMetaRowWeekPrecise_()/computeMetaRowWeeklySpend_()/
+ *   prorateSingleWeekMetaSpend_() 자체는 이미 검증된 코드라 변경 없음(회귀 위험 최소화).
+ *   신규 테스트 testMergePreciseMetaRecordsForCampaignWeek() 추가 + 기존
+ *   testAggregateMetaSpendByWeekSegment()에 분할배치 회귀 케이스 추가.
+ *
  * v1.17.0 (2026-09-04)
  * - **버그 수정 — 진행 중인(아직 안 끝난) 주가 미래 요일 지출을 조작해
  *   부풀려짐(사용자 리포트)**: Target_REP Content 2026-08-31주가 New P1=9/
@@ -1203,6 +1222,188 @@ function testComputeMetaRowWeeklySpend(){
 
 /**
  * ==========================================================
+ * Compute Effective Meta Date Range (순수 함수, 2026-09-09 신규)
+ *
+ * WHY
+ * "캠페인 활성 기간 ∩ 보고 조회 기간" 교집합 계산이 isMetaRowWeekPrecise_()/
+ * computeMetaRowWeeklySpend_()에 이미 중복돼 있는데, 아래 신규
+ * mergePreciseMetaRecordsForCampaignWeek_()도 같은 계산이 필요해 공용
+ * 함수로 분리. 기존 두 함수는 이미 검증된 코드라 회귀 위험을 피하려고
+ * 그대로 두고 건드리지 않음 — 이번에 새로 추가하는 병합 로직에서만 재사용.
+ * ==========================================================
+ */
+function computeEffectiveMetaDateRange_(record){
+
+  const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
+  const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
+
+  const effectiveStart = (hasCampaignStart && record.campaignStart > record.reportStart)
+    ? record.campaignStart
+    : record.reportStart;
+
+  const effectiveEnd = (hasCampaignEnd && record.campaignEnd < record.reportEnd)
+    ? record.campaignEnd
+    : record.reportEnd;
+
+  return { effectiveStart: effectiveStart, effectiveEnd: effectiveEnd };
+
+}
+
+
+/**
+ * ==========================================================
+ * Merge Precise Meta Records For Campaign Week (순수 함수, 2026-09-09 신규)
+ *
+ * WHY
+ * 사용자가 한 주(週) export를 여러 배치로 나눠 올리기 시작(예: 월~수/수~토)
+ * 하면서, 같은 캠페인의 같은 주를 "정밀"(isMetaRowWeekPrecise_()) 행이
+ * 2개 이상 동시에 커버하는 경우가 실제로 발생함 — 기존 aggregateMetaSpendByWeekSegment_()는
+ * 이런 행들을 각자 독립적으로 prorateSingleWeekMetaSpend_()에 넣어 각자
+ * 7일치로 부풀린 뒤 그냥 더해서, 실제 지출의 최대 2배 가까이 과다집계되는
+ * 버그로 이어짐(2026-09-09 실측 — 8/31주 raw $16,299.06 vs 기존 로직
+ * $30,149.82, 약 1.85배. Target_REP CPNP1 역산값과도 거의 일치해 실제로
+ * Target_REP에 반영되고 있던 과다집계로 확인). 이 함수는 같은 캠페인+같은
+ * 주를 커버하는 정밀 행들을 하나로 병합(raw spent 합산, effectiveStart는
+ * 가장 이른 값/effectiveEnd는 가장 늦은 값 채택)한 뒤 딱 한 번만
+ * prorateSingleWeekMetaSpend_()를 호출하도록 한다 — 두 배치가 합쳐서 7일
+ * 전체를 커버하면 daysCovered>=7이 되어 prorateSingleWeekMetaSpend_()
+ * 자체 로직에 의해 자동으로 보정 없이 raw 합산값 그대로 채택됨(그 함수는
+ * 변경하지 않고 그대로 재사용 — 이 함수는 병합만 담당).
+ *
+ * 한계(의도적, 실사용 패턴 기준 근사): 여러 배치가 서로 겹치지 않고 이어
+ * 붙는(월~수 + 수~토처럼 연속) 경우를 전제로 한다 — 중간에 진짜 빠진 날이
+ * 있어도 min/max만 보므로 감지하지 못한다. 사용자가 이런 식으로 나눠
+ * 올리기로 확정(2026-09-09)했고, 실제 export 관행이 항상 연속 구간을
+ * 이어붙이는 방식이라 이 한계는 실질적 위험이 낮다고 판단.
+ *
+ * INPUT
+ * group : Array<Object>  같은 캠페인+같은 주를 커버하는 정밀 레코드들
+ *   (원본 record 그대로 — spent/reportStart/reportEnd/campaignStart/campaignEnd)
+ *
+ * OUTPUT
+ * Object  { spent, reportStart, reportEnd, campaignStart, campaignEnd }
+ *   prorateSingleWeekMetaSpend_(merged, merged.reportStart, merged.reportEnd, weekMonday)
+ *   형태로 바로 넣을 수 있는 병합된 pseudo-record(reportStart/reportEnd를
+ *   effectiveStart/effectiveEnd와 동일하게 설정 — 병합된 값 자체가 "우리가
+ *   실제로 가진 데이터의 경계"이므로, group 크기가 1이어도 기존 단일 행
+ *   처리와 동일한 결과를 내도록 설계됨, 아래 테스트 참고)
+ *
+ * TEST
+ * testMergePreciseMetaRecordsForCampaignWeek() 참고
+ * ==========================================================
+ */
+function mergePreciseMetaRecordsForCampaignWeek_(group){
+
+  let spent = 0;
+  let effectiveStart = null;
+  let effectiveEnd = null;
+  let campaignStart = null;
+  let campaignEnd = null;
+
+  group.forEach(function(record){
+
+    const range = computeEffectiveMetaDateRange_(record);
+
+    spent += Number(record.spent) || 0;
+
+    if(effectiveStart === null || range.effectiveStart < effectiveStart) effectiveStart = range.effectiveStart;
+    if(effectiveEnd === null || range.effectiveEnd > effectiveEnd) effectiveEnd = range.effectiveEnd;
+
+    const hasCampaignStart = record.campaignStart instanceof Date && !isNaN(record.campaignStart.getTime());
+    const hasCampaignEnd = record.campaignEnd instanceof Date && !isNaN(record.campaignEnd.getTime());
+
+    // 같은 캠페인이라 그룹 내에서 campaignStart/campaignEnd가 동일한 게
+    // 정상이지만, export 시점 차이로 값이 갈리면(예: Ends가 그사이 연장됨)
+    // 더 넓은 쪽(가장 이른 시작/가장 늦은 종료)을 채택해 안전하게 처리.
+    if(hasCampaignStart && (campaignStart === null || record.campaignStart < campaignStart)) campaignStart = record.campaignStart;
+    if(hasCampaignEnd && (campaignEnd === null || record.campaignEnd > campaignEnd)) campaignEnd = record.campaignEnd;
+
+  });
+
+  return {
+    spent: spent,
+    reportStart: effectiveStart,
+    reportEnd: effectiveEnd,
+    campaignStart: campaignStart,
+    campaignEnd: campaignEnd
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — mergePreciseMetaRecordsForCampaignWeek_()
+ * ==========================================================
+ */
+function testMergePreciseMetaRecordsForCampaignWeek(){
+
+  // 2026-09-09 실측 재현 — 같은 캠페인의 같은 주(8/31주)가 월~수(3일)/
+  // 수~토(4일) 두 배치로 쪼개진 경우. 합쳐서 정확히 7일이므로 병합 후
+  // prorate하면 보정 없이 raw 합산값 그대로여야 한다(과다집계 없음).
+  const batch1 = {
+    spent: 100,
+    reportStart: new Date(2026, 7, 31),  // 2026-08-31(월)
+    reportEnd: new Date(2026, 8, 2),     // 2026-09-02(수)
+    campaignStart: new Date(2024, 0, 1),
+    campaignEnd: new Date(2026, 11, 31)
+  };
+
+  const batch2 = {
+    spent: 140,
+    reportStart: new Date(2026, 8, 3),   // 2026-09-03(목)
+    reportEnd: new Date(2026, 8, 6),     // 2026-09-06(일)
+    campaignStart: new Date(2024, 0, 1),
+    campaignEnd: new Date(2026, 11, 31)
+  };
+
+  const merged = mergePreciseMetaRecordsForCampaignWeek_([batch1, batch2]);
+
+  const mergePass =
+    merged.spent === 240 &&
+    merged.reportStart.getTime() === new Date(2026, 7, 31).getTime() &&
+    merged.reportEnd.getTime() === new Date(2026, 8, 6).getTime();
+
+  Logger.log("Merged: spent=" + merged.spent + " (expected 240), reportStart=" +
+    merged.reportStart.toString() + ", reportEnd=" + merged.reportEnd.toString());
+  Logger.log(mergePass ? "✅ PASS" : "❌ FAIL");
+
+  // 병합 후 prorate — 7일 전체 커버이므로 보정 없이 240 그대로여야 함
+  // (기존 버그였다면 100×7/3 + 140×7/4 = 233.33 + 245 = 478.33로 과다집계됨).
+  const prorated = prorateSingleWeekMetaSpend_(
+    merged, merged.reportStart, merged.reportEnd, new Date(2026, 7, 31),
+    new Date(2026, 8, 9) // "오늘" = 그 주가 이미 끝난 시점
+  );
+
+  const proratePass = prorated === 240;
+
+  Logger.log("Prorated (7일 전체 커버, 보정 없어야 함): " + prorated + " (expected 240)");
+  Logger.log(proratePass ? "✅ PASS" : "❌ FAIL");
+
+  // group 크기가 1이면 기존 단일 행 처리와 동일해야 함(회귀 없음 확인).
+  const singleMerged = mergePreciseMetaRecordsForCampaignWeek_([batch1]);
+  const singleProrated = prorateSingleWeekMetaSpend_(
+    singleMerged, singleMerged.reportStart, singleMerged.reportEnd, new Date(2026, 7, 31),
+    new Date(2026, 8, 9)
+  );
+  const directProrated = prorateSingleWeekMetaSpend_(
+    batch1,
+    computeEffectiveMetaDateRange_(batch1).effectiveStart,
+    computeEffectiveMetaDateRange_(batch1).effectiveEnd,
+    new Date(2026, 7, 31),
+    new Date(2026, 8, 9)
+  );
+
+  const singlePass = singleProrated === directProrated;
+
+  Logger.log("group=1 merged prorate=" + singleProrated + " vs 기존 방식=" + directProrated + " (동일해야 함)");
+  Logger.log(singlePass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Aggregate Meta Spend By Week/Segment (순수 함수)
  *
  * WHY
@@ -1210,6 +1411,12 @@ function testComputeMetaRowWeeklySpend(){
  * 우선" 규칙: 같은 캠페인의 같은 주를 정밀(isMetaRowWeekPrecise_()) 행과
  * 분배(장기 lump) 행이 동시에 커버하면, 분배 행의 그 주 기여분은 버리고
  * 정밀값을 채택한다.
+ *
+ * **2026-09-09 수정 — 정밀 행이 2개 이상이면 병합 후 1회만 prorate**:
+ * 예전엔 같은 캠페인+같은 주를 커버하는 정밀 행이 여러 개면 각자
+ * 독립적으로 prorate한 뒤 합산해 과다집계됐음(위
+ * mergePreciseMetaRecordsForCampaignWeek_() WHY 참고) — 이제 정밀 행들을
+ * 먼저 그룹핑(campaignName+주)하고 병합한 뒤 딱 한 번만 prorate한다.
  *
  * INPUT
  * records : Array  (readMetaRawRows_() 결과)
@@ -1227,36 +1434,58 @@ function aggregateMetaSpendByWeekSegment_(records){
     return Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
   };
 
+  const preciseGroups = {}; // "campaignName|weekKey" -> {weekStart, campaignName, records:[]}
   const preciseCoverageByCampaign = {};
 
   records.forEach(function(record){
 
     if(!isMetaRowWeekPrecise_(record)) return;
 
-    computeMetaRowWeeklySpend_(record).forEach(function(entry){
+    const range = computeEffectiveMetaDateRange_(record);
+    const weeks = generateAdSpendWeekRange_(range.effectiveStart, range.effectiveEnd);
 
-      const campaign = record.campaignName;
+    if(weeks.length !== 1) return; // isMetaRowWeekPrecise_()가 이미 보장하지만 방어적으로 체크
 
-      if(!preciseCoverageByCampaign[campaign]) preciseCoverageByCampaign[campaign] = {};
+    const weekKey = toKey(weeks[0].weekStart);
+    const groupKey = record.campaignName + "|" + weekKey;
 
-      preciseCoverageByCampaign[campaign][toKey(entry.weekStart)] = true;
+    if(!preciseGroups[groupKey]){
+      preciseGroups[groupKey] = { weekStart: weeks[0].weekStart, campaignName: record.campaignName, records: [] };
+    }
 
-    });
+    preciseGroups[groupKey].records.push(record);
+
+    if(!preciseCoverageByCampaign[record.campaignName]) preciseCoverageByCampaign[record.campaignName] = {};
+    preciseCoverageByCampaign[record.campaignName][weekKey] = true;
 
   });
 
   const totals = {};
 
+  Object.keys(preciseGroups).forEach(function(groupKey){
+
+    const group = preciseGroups[groupKey];
+    const merged = mergePreciseMetaRecordsForCampaignWeek_(group.records);
+    const proratedSpent = prorateSingleWeekMetaSpend_(merged, merged.reportStart, merged.reportEnd, group.weekStart);
+
+    const segment = getBusinessSegment(group.campaignName);
+    const key = toKey(group.weekStart) + "|" + segment;
+
+    totals[key] = (totals[key] || 0) + proratedSpent;
+
+  });
+
   records.forEach(function(record){
 
-    const isPrecise = isMetaRowWeekPrecise_(record);
+    if(isMetaRowWeekPrecise_(record)) return; // 위에서 이미 병합 처리됨
+
     const coverage = preciseCoverageByCampaign[record.campaignName];
 
     computeMetaRowWeeklySpend_(record).forEach(function(entry){
 
       const weekKey = toKey(entry.weekStart);
 
-      if(!isPrecise && coverage && coverage[weekKey]) return;
+      if(coverage && coverage[weekKey]) return; // 정밀값이 이미 그 주를 커버하면 분배값 버림
 
       const key = weekKey + "|" + entry.segment;
 
@@ -1309,6 +1538,36 @@ function testAggregateMetaSpendByWeekSegment(){
 
   Logger.log("Result: " + JSON.stringify(result));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+  // 2026-09-09 회귀 테스트 — 같은 캠페인+같은 주가 정밀 행 2개(월~수/수~토)로
+  // 쪼개진 경우. 병합 전에는 100×7/3+140×7/4=478.33로 과다집계됐음 — 병합 후
+  // 7일 전체 커버이므로 raw 합산(240) 그대로여야 한다.
+  const splitBatchRecords = [
+    {
+      campaignName: "KR_core_split-batch-test_contact",
+      spent: 100,
+      reportStart: new Date(2026, 7, 31), // 2026-08-31(월)
+      reportEnd: new Date(2026, 8, 2),    // 2026-09-02(수)
+      campaignStart: new Date(2024, 0, 1),
+      campaignEnd: new Date(2026, 11, 31)
+    },
+    {
+      campaignName: "KR_core_split-batch-test_contact",
+      spent: 140,
+      reportStart: new Date(2026, 8, 3),  // 2026-09-03(목)
+      reportEnd: new Date(2026, 8, 6),    // 2026-09-06(일)
+      campaignStart: new Date(2024, 0, 1),
+      campaignEnd: new Date(2026, 11, 31)
+    }
+  ];
+
+  const splitResult = aggregateMetaSpendByWeekSegment_(splitBatchRecords);
+  const splitPass =
+    splitResult["2026-08-31|BOFU"] === 240 &&
+    Object.keys(splitResult).length === 1;
+
+  Logger.log("Split-batch result: " + JSON.stringify(splitResult) + " (expected {\"2026-08-31|BOFU\":240})");
+  Logger.log(splitPass ? "✅ PASS" : "❌ FAIL");
 
 }
 
