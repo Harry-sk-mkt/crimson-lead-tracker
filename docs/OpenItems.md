@@ -624,8 +624,13 @@
     리포트였던 것으로 결론 — 코드 문제 아님). **남은 것(TODO)**: 사용자가 평소 IC Funnel
     import에 쓰는 리포트 템플릿(Lead ID 포함 필수)으로 최신 데이터를 재export → "📥 Update →
     Import IC Funnel" 재업로드 → 재sync 후 이 5건 해소 확인.
-33. **Won/Lost Deal 중 20~30%가 IC Booked/Completed Date 없이 바로 전환 — 원인 미상, 다음
-    세션으로 보류(2026-08-26)** — 32번 항목(ICFunnel_Raw 재도입) 검증 중, 사용자가 전체 기간
+33. ~~Won/Lost Deal 중 20~30%가 IC Booked/Completed Date 없이 바로 전환~~ — **✅ 원인 확인
+    완료(2026-09-09, 사용자 확인)** — 처음부터 Salesforce "Contact"로 생성된 케이스는 우리가
+    쓰는 Lead 리포트(Leads_Master의 소스)에 애초에 안 잡힘 — 그 딜에 대응하는 Lead 레코드
+    자체가 없으니 Lead 레벨 필드인 IC Booked/Completed Date도 우리 파이프라인 안에 존재할
+    방법이 없음(#39의 "Account로 전환된 리드가 Lead 리포트에서 안 보임"과 동일 종류의
+    Salesforce 데이터 구조 문제). 기록 누락(버그)이 아니라 애초에 추적 대상이 아니었던
+    케이스로 확정 — 코드 조치 불필요, 이 항목 종료. 32번 항목(ICFunnel_Raw 재도입) 검증 중, 사용자가 전체 기간
     ICFunnel_Raw CSV를 뽑아보니 IC Booked Date가 Salesforce 리포트 화면에 "-"로 보이는 값들이
     있어 "Booked 했다가 취소된 것 아니냐"고 질문 → 후속으로 `Sales Funnel Stage` 컬럼을 추가한
     재export(`report1787695235728.csv`, 36,464행)를 받아 분석.
@@ -640,9 +645,8 @@
       (80%)/Completed 590건(80.5%), Won Deal 918건 중 Booked 646건(70%)/Completed 669건
       (73%) — 즉 Won/Lost Deal의 **20~30%는 IC Booked/Completed Date 없이 바로 전환**됨(이번에
       새로 발견, 기존 파이프라인 버그와 무관 — 빈 값은 정확히 빈 값으로 처리되고 있음, 확인됨).
-    **미해결**: 이게 "IC 단계를 정상적으로 건너뛰는 케이스"(예: 재신청/기존 고객 등)인지
-    "원래 있어야 하는데 기록 누락"인지 판단 불가 — Salesforce 프로세스/데이터 지식이 필요한
-    질문이라 다음 세션으로 보류(사용자 결정, 2026-08-26). 임의로 처리하지 말 것.
+    **✅ 판단 완료(2026-09-09)**: 위 결론 참고 — Contact로 생성된 케이스가 이 20~30%의
+    실체로 확인됨.
 34. ~~Business Segment 딕셔너리("Lead 유입 → Dictionary 조회 → Business Segment 분류")의
     "특이 분류" 모니터링 프로세스 구축~~ — **✅ 설계·구현·실측 검증 완료(2026-09-04)**.
     사용자와 방향 먼저 논의 후 진행 — 플래깅 대상 3종 전부 확정: (1) 확신도 낮은
@@ -751,6 +755,25 @@
     `CONFIG.IC_FUNNEL.COLUMNS.LEAD_PRIORITY`는 optional로 이미 준비됨) — 아직 안 됨. 다음 세션에
     `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`의 `runCompareAugustNewP1AgainstSalesforce()`
     재실행으로 최종 검증할 것.
+    **2026-09-09 재검증 — 아키텍처 변경으로 위 "6건 즉시 해결" 경로 자체가 사라졌음을 발견**:
+    `runCompareAugustNewP1AgainstSalesforce()` 재실행 결과 279건 중 266건 정상 일치(3건은
+    #20류 mergeOPS 구조적 배제로 정상, 10건은 여전히 스냅샷 지연) — **2026-08-28 당시와 정확히
+    같은 10명**이 그대로 남아있어 원인 재조사. `MASTER_003_MTAFunnelSync.js`가 **2026-09-02
+    (v1.10.0)에 Lead Priority 역동기화 자체를 완전히 제거**(Leads_OPS 필드 소유권 재편 —
+    Revenue/Lead Priority를 이 파일에서 빼고 `#Touches`만 관리하도록 재설계)했다는 걸 이번에
+    확인 — 즉 "MTA_Master 보면 6건 바로 해결"이라던 2026-08-28 진단 경로 자체가 그 이후
+    사라진 것. 현재 Lead Priority의 유일한 소유 경로는 New Leads(Leads_Master 재수입) +
+    `MASTER_009_ICFunnelSync.js`(ICFunnel_Raw, 다운그레이드 가드) 조합. 신규
+    `TEMPQA_056_ICFunnelLeadPriorityBacklogCheck.js`(`runCheckICFunnelLeadPriorityBacklog()`)
+    로 이 10명을 ICFunnel_Raw에서 직접 조회한 결과 **10명 전부 ICFunnel_Raw에 딱 1행뿐이고
+    IC Booked Date/Lead Priority 둘 다 공란** — Lead Priority 컬럼이 헤더에 추가된
+    이후로 이 10명은 단 한 번도 새로 export된 적이 없다는 뜻(#38 SAL 헤더 버그와 같은
+    시기의 옛날 행 하나만 남아있음). **결론**: 코드 버그 아님 — 소스 데이터가 신선하지
+    않을 뿐. #38(SAL)과 동일한 해법으로 해소 가능할 것으로 예상: **Salesforce IC Funnel
+    리포트를 (Lead Priority 컬럼 포함) 전체 재export → "📥 Update → Import IC Funnel"
+    재업로드**하면 이 10명 포함 유사 케이스 전체가 갱신될 것 — 아직 실행 전, 사용자 액션
+    대기(TODO). 재export 후 `runCompareAugustNewP1AgainstSalesforce()` 재실행으로 최종
+    확인할 것.
 36. ~~Events_OPS Meta 캠페인 오매칭(CVR 71.3% 등 비정상 수치)~~ — **✅ 근본 원인 규명 및 수정
     완료(2026-08-28)**, "Recording" 변형 0 문제만 별도 미해결로 남음. 사용자 보고로 "WB-2026-07-
     KOR-MOFU-Core Game Changing Common Application Tips & Case Studies" 웨비나의 CVR 71.3%/
@@ -854,19 +877,25 @@
     이후 세션들에서 매 Import마다 정상 동작하는 것으로 실측 확인)**: `CONFIG.SAL.
     EXTERNAL.SPREADSHEET_ID` 설정 + Salesforce SAL 전용 리포트 export 둘 다 완료됨
     — 2026-09-08/09 세션에서 `runSALPipelineTail`이 실 SAL_Raw(8,179건+)를 매번
-    정상 동기화하는 것을 반복 확인(오늘도 "Compared window" 로그 정상). **잔여 24건
-    (P1 TODO #1)이 실제로 해소됐는지는 아직 재검증 안 됨** — `TEMPQA_045_
-    AugustSALSalesforceLeadTrace.js`의 `runCompareAugustSALAgainstSalesforce()`를
-    Apps Script 편집기에서 재실행하면 확인 가능. 확인 전까지 완료로 간주하지 말 것.
+    정상 동기화하는 것을 반복 확인(오늘도 "Compared window" 로그 정상). **✅ 잔여 24건
+    (P1 TODO #1) 재검증 완료(2026-09-09)** — `TEMPQA_045_AugustSALSalesforceLeadTrace.js`의
+    `runCompareAugustSALAgainstSalesforce()` 재실행 결과 304건 중 295건(97%) 정상 일치,
+    어긋난 9건 전부 "Leads_OPS에 없음(Email 매칭 실패)" 단일 원인 — SAL 값 자체가 틀리거나
+    없는 sync 레벨 문제는 **0건**. SAL 동기화 메커니즘 자체는 완전히 정상 동작하는 것으로
+    최종 확인 — TODO #1은 이걸로 종료, 남은 9건은 아래 TODO #2와 동일한 원인(Leads 리포트
+    필터 범위)으로 흡수.
 
-    **🔴 P1 TODO #2 — 잔여 14건: Leads 리포트 필터 범위 문제로 별개, 코드로 처리 불가,
-    사용자 액션 대기**: 이 리드들이 `Leads_OPS`(및 상당수는 `Leads_Master`)에 아예 없음 — IC
-    Funnel/SAL 리포트엔 잡히는데 "Leads" 수동 export 리포트("LeadsIC_KR_mkt_2.0")에서만 빠짐.
-    재import 타이밍 문제 아님(Leads가 IC Funnel보다 오히려 최신인데도 재현됨, 실측 확인) —
-    **사용자가 Salesforce에서 두 리포트("Leads" vs IC Funnel/SAL)의 필터 조건을 직접 나란히
-    비교해야 함**, 임의로 처리하지 말 것. IC Booked/Complete(TEMPQA_042/043)도 같은 종류의
-    미등록 리드(3건, Lead ID `00QRC00000ZsV97`/`00QRC00000D1CCY`/`00QRC000011JJ3o`) 영향을
-    받고 있어 이 필터 이슈가 해결되면 같이 개선될 것으로 예상.
+    **P1 TODO #2 — 잔여 9~14건(재검증 시점에 따라 변동): Leads 리포트 필터 범위 문제로 별개,
+    코드로 처리 불가, 사용자 액션 대기**: 이 리드들이 `Leads_OPS`(및 상당수는 `Leads_Master`)에
+    아예 없음 — IC Funnel/SAL 리포트엔 잡히는데 "Leads" 수동 export 리포트
+    ("LeadsIC_KR_mkt_2.0")에서만 빠짐. 재import 타이밍 문제 아님(Leads가 IC Funnel보다
+    오히려 최신인데도 재현됨, 실측 확인) — **사용자가 Salesforce에서 두 리포트("Leads" vs
+    IC Funnel/SAL)의 필터 조건을 직접 나란히 비교해야 함**, 임의로 처리하지 말 것. IC
+    Booked/Complete(TEMPQA_042/043)도 같은 종류의 미등록 리드(3건, Lead ID
+    `00QRC00000ZsV97`/`00QRC00000D1CCY`/`00QRC000011JJ3o`) 영향을 받고 있어 이 필터
+    이슈가 해결되면 같이 개선될 것으로 예상. **#35(New P1 8월 갭)의 남은 10건도 같은 계열의
+    "export 최신성" 문제로 확인됨** — 별개 원인(Salesforce IC Funnel 리포트 자체를 오랫동안
+    재export 안 한 것)이지만 처방은 동일(전체 재export/재import).
 39. **Leads_OPS 필드 소유권 전면 재편 — 구현 완료(2026-09-02), 실사용 검증 대기(TODO)** —
     38번 항목(SAL 8월 갭) 조사 중 "Revenue가 MTA_Master 터치 기반으로만 동기화돼 Search_OPS가
     SAL과 동일한 구조적 문제를 겪고 있다"는 게 발견되면서 사용자가 전체 재설계를 결정.

@@ -1,5 +1,33 @@
 # Changelog — 2026-09-09
 
+## `docs/OpenItems.md` #33/#35/#38 — 세 항목 재조사 결과 정리 (New P1/SAL 8월 갭, Won/Lost Deal IC Date)
+
+**#33(Won/Lost Deal 20~30%가 IC Booked/Completed Date 없이 전환) 종료** — 사용자 확인:
+처음부터 Salesforce "Contact"로 생성된 케이스는 우리가 쓰는 Lead 리포트에 애초에 안 잡힘 —
+그 딜에 대응하는 Lead 레코드 자체가 없으니 Lead 레벨 필드인 IC Booked/Completed Date도
+우리 파이프라인 안에 존재할 방법이 없음(#39의 "Account 전환 리드가 Lead 리포트에서 안
+보임"과 동일 종류의 Salesforce 데이터 구조 문제). 기록 누락(버그)이 아니라 애초에 추적
+대상이 아니었던 케이스로 확정, 코드 조치 불필요.
+
+**#38(SAL 8월 갭) 잔여 24건(P1 TODO #1) 재검증 완료** — `runCompareAugustSALAgainstSalesforce()`
+재실행 결과 304건 중 295건(97%) 정상 일치, 어긋난 9건 전부 "Leads_OPS에 없음(Email 매칭
+실패)" 단일 원인 — SAL 값 자체가 틀리거나 없는 sync 레벨 문제는 0건. SAL 동기화 메커니즘
+자체는 완전히 정상 동작 확인, TODO #1 종료. 남은 9건은 TODO #2(Leads 리포트 필터 범위
+차이, Salesforce에서 직접 비교 필요 — 사용자 액션 대기)로 흡수.
+
+**#35(New P1 8월 갭) 재조사 — 아키텍처 변경으로 기존 진단이 무효화된 것을 발견**:
+`runCompareAugustNewP1AgainstSalesforce()` 재실행 결과 279건 중 266건 일치, 13건 어긋남
+(3건은 #20류 mergeOPS 구조적 배제로 정상, 10건은 2026-08-28 최초 발견 때와 정확히 같은
+리드가 여전히 Lead Priority 스냅샷 지연 상태). 원인 재조사 중 `MASTER_003_MTAFunnelSync.js`가
+**2026-09-02(v1.10.0)에 Lead Priority 역동기화를 완전히 제거**했다는 걸 발견 —
+"MTA_Master 보면 6건 바로 해결"이라던 2026-08-28 진단 경로 자체가 그 이후 사라진 것.
+신규 `TEMPQA_056_ICFunnelLeadPriorityBacklogCheck.js`로 현재 Lead Priority의 유일한
+소유 경로(ICFunnel_Raw)를 이 10명에 대해 직접 조회한 결과, 10명 전부 ICFunnel_Raw에
+딱 1행뿐이고 IC Booked Date/Lead Priority 둘 다 공란 — Lead Priority 컬럼이 헤더에
+추가된 이후로 이 10명은 단 한 번도 새로 export된 적이 없다는 뜻. 코드 버그 아님, 소스
+데이터가 신선하지 않을 뿐 — #38과 동일한 해법(Salesforce IC Funnel 리포트 전체 재export →
+재import) 필요, 사용자 액션 대기(TODO).
+
 ## `docs/OpenItems.md` #31 — Target_REP Actual CPNP1 신규 과다집계 버그 발견·수정 (Meta 지출 분할배치)
 
 #31("Target_REP Actual CPNP1 과소집계") 잔여 확인차 8/31주 값을 Target_REP CPNP1에서 Meta
