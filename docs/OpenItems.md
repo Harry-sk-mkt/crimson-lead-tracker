@@ -1093,8 +1093,8 @@
     드롭 위험)도 함께 기록. **범위 결정(착수 시 확정)**: 필드별 다운스트림 리포트/컬럼
     역추적은 하지 않음(Business Segment 등 다수 리포트에 영향을 주는 필드가 많아 과도한
     범위 확장으로 판단) — 대신 파생 컬럼 단위로 용도만 요약. CLAUDE.md 문서 목록에도 등록.
-46. **자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인 tail이 느려짐 —
-    가드 추가로 수정 완료(2026-09-05), 실사용 검증 대기(TODO)** (2026-09-03, Master_DB Raw
+46. ~~자동 리포트 생성이 installable onEdit 트리거를 재발동시켜 파이프라인 tail이 느려짐~~ —
+    **✅ 가드 추가로 수정 완료(2026-09-05), 실사용 검증 완료(2026-09-09)** (2026-09-03, Master_DB Raw
     이관 검증 세션 중 발견) — `runICFunnelPipelineTail()` 실행이 19분 넘게 걸려 원인 조사 중
     확인. `handleReportGenerateEdit`(`ACQREP_001_Report.js`, ACQ_REP/NewP1_REP/S&M_REP의
     Generate 체크박스 처리)와 `onFYReportEdit_`(`FYREP_002_Report.js`)는 **installable
@@ -1123,9 +1123,19 @@
     변경 없음)**: 사람이 파이프라인 tail 실행 도중 정확히 같은 순간 Generate 체크박스를
     직접 클릭하면 이번 사이클엔 무시됨(체크박스는 TRUE로 남고 자동 리셋도 안 됨) —
     `periodicRefreshAllReports_()`(하루 2번 강제 재계산) 안전망이 있어 리스크 낮다고 판단.
-    **남은 것(TODO)**: 실제 파이프라인 tail 실행 중 handleReportGenerateEdit/onFYReportEdit_가
-    더 이상 재발동하지 않는지, Events/BOFU/Content Engine 구간 소요시간이 원래 수준(55~76초)
-    으로 돌아오는지 다음 실 Import 때 확인 전까지 완료로 간주하지 말 것.
+    **✅ 실사용 검증 완료(2026-09-09)** — 실 `runICFunnelPipelineTail`(11:15:15 시작,
+    754.9초) 로그 대조: 재발동 자체는 여전히 발생(11:25:07~11:26:08 사이 8회, Report
+    Generation 단계에서 리포트 시트 쓰기 때마다 반응 — 구조상 막을 수 없는 부분, 가드는
+    "재발동 후 즉시 return"만 보장) — 각 재발동이 전부 1.25~3.57초로 짧게 끝나 가드가
+    의도대로 초입에서 빠져나가는 패턴 확인(전체 재생성 로직이 도는 흔적 없음). Engine
+    구간은 Search 61.40s/Content 69.67s로 정상 범위(55~76s), Events 117.05s/BOFU
+    108.61s는 다소 높지만 원래 버그 수치(153~207s)에는 못 미침 — **이번 재발동 클러스터
+    (Report Generation 단계)는 Engine Refresh 단계(11:16:48~11:22:45)보다 시간상 나중에
+    발생해 서로 안 겹침**, 즉 이번 실행에서 Events/BOFU가 다소 높은 건 재발동 락 경합이
+    원인일 수 없음 — 같은 날 아침 MTA→SAL→IC Funnel이 연속으로 밀려 돈 것(#18 파이프라인
+    겹침 이슈)이 더 유력. 원래 보고됐던 심각한 재발(153~207s 수준) 재현 없음, 재발동도
+    빠르게 소진 — 완료로 정리. (Engine 구간 소폭 상승의 정확한 원인이 100% 분리 확인된
+    건 아니라 #18과 연결지어 계속 관찰.)
 47. ~~Revenue 파이프라인 — Leads/MTA/IC Funnel/SAL 완료에 얹혀가는 방식 대신 독립 트리거로
     분리~~ — **✅ 구현 및 실사용 검증 완료(2026-09-03 설계/구현, 2026-09-09 2회 연속
     재예약 확인)** — 두 방향 중 "단순 시간 트리거"로 확정, `docs/exec-plans/completed/

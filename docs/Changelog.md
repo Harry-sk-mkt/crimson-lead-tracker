@@ -1,5 +1,18 @@
 # Changelog — 2026-09-09
 
+## `docs/OpenItems.md` #46(onEdit 재발동 가드) 실사용 검증 완료 + #44/#47 stale 상태 정정
+
+실 `runICFunnelPipelineTail`(11:15:15 시작, 754.9초) 로그로 #46 검증: 재발동(8회,
+Report Generation 단계에서 리포트 시트 쓰기 때마다 반응)은 여전히 발생하지만 전부
+1.25~3.57초로 짧게 끝나 가드가 의도대로 작동함을 확인, 원래 보고됐던 심각한 재발
+(Events/BOFU/Content Engine 153~207초로 튐)도 재현되지 않음(이번 재발동 클러스터는
+시간상 Engine Refresh 단계와 안 겹쳐서 원래 우려했던 락 경합 시나리오 자체가 발생 안 함).
+Events(117.05s)/BOFU(108.61s)가 baseline(55~76s)보다 다소 높은 건 관찰됐으나 재발동과
+시간이 안 겹쳐 다른 원인(#18 파이프라인 겹침)으로 추정 — 완전히 분리 확인된 건 아니라 계속
+관찰. 같은 조사 과정에서 `docs/OpenItems.md` #44(SAL Sync 델타 갱신)/#47(Revenue 독립
+트리거)이 이미 완료된 exec-plan(`2026-09-02-pipeline-refresh-time-redesign.md`)에서
+해소됐는데도 헤더가 "미착수(TODO)"로 stale하게 남아있던 것을 발견해 함께 정정.
+
 ## 파이프라인 Refresh 시간 단축 exec-plan(`2026-09-02-pipeline-refresh-time-redesign.md`) 실사용 검증 완료 및 종료
 
 2026-09-08에 발견·수정한 `periodicRefreshRevenue_` self-rescheduling 체인 끊김 버그의 마지막
