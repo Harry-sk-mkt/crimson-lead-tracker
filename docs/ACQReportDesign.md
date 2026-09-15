@@ -41,7 +41,7 @@ FY25 OCT에 각각 귀속된다 (예전엔 전부 AUG 하나로 귀속됐었음)
 | --- | --- | --- |
 | All Leads, All P1, SAL | MTA_Master | **Per-Touch** (MKT UTM Campaign 기준, 2026-07-22 이전엔 Last Touch였음 — 아래 섹션 참고) |
 | New Leads, New P1, IC Booked, IC Complete | Leads_OPS | **First Touch** (First MKT UTM Campaign 기준) |
-| Revenue | Deal Tracker (2026-07-28부터, 2트랙 아키텍처 CLAUDE.md #7) | **딜 자체의 수동 "Segment" 컬럼**(H열, 원래 "Content Category") — `getBusinessSegment()` 키워드 매칭은 실측 검증(Search $144,265 vs 실제 ~$537,507.89) 결과 폐기, 사용자가 전체 딜을 수동 재분류한 컬럼을 그대로 읽음 (`computeACQDealRevenueFromRows_()`, `30_ACQReport.js`) |
+| Revenue | Deal Tracker (2026-07-28부터, 2트랙 아키텍처 CLAUDE.md #7) | **딜 자체의 수동 "Segment" 컬럼**(H열, 원래 "Content Category") — `getBusinessSegment()` 키워드 매칭은 실측 검증(Search $144,265 vs 실제 ~$537,507.89) 결과 폐기, 사용자가 전체 딜을 수동 재분류한 컬럼을 그대로 읽음 (`computeACQDealRevenueFromRows_()`, `ACQREP_001_Report.js`) |
 
 이는 `business-segment-classification.md`에 이미 정의된 원래 설계 차이(Leads_Master=First Touch, MTA_Master=Last Touch)를 그대로 반영한 결과다. **버그가 아니지만, 사용자가 "왜 지표마다 세그먼트 기준이 다르지?"라고 헷갈릴 수 있어 명시적으로 기록.** Revenue는 2026-07-28부터 세 번째로 다른 기준(딜 자체 필드)까지 추가됐다 — 아래 Metric Definitions 표 참고.
 
@@ -55,7 +55,7 @@ FY25 OCT에 각각 귀속된다 (예전엔 전부 AUG 하나로 귀속됐었음)
 New P1 Target을 붙이면 실적 숫자가 서로 달라질 수 있다"고 잘못 판단한 적이 있다.
 
 **실제로는 동일하다** — 코드로 확인(2026-07-30):
-- `30_ACQReport.js`의 `computeOPSAggregates_()`가 New Leads/New P1을 계산할 때
+- `ACQREP_001_Report.js`의 `computeOPSAggregates_()`가 New Leads/New P1을 계산할 때
   `headers.indexOf("Business Segment")`로 **Leads_OPS의 `Business Segment` 컬럼 값을 그대로
   읽는다** (재계산도, `FT Override` 적용도 없음).
 - `docs/NewP1ReportDesign.md`의 New P1도 정확히 같은 컬럼(`Business Segment` 컬럼 값 그대로,
@@ -93,7 +93,7 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 **영향**:
 - `MTA_Master`는 터치 단위(1 Lead = N Row)인데, `Business Segment`는 Lead 레벨 필드라 같은 Lead의
   모든 터치 row가 항상 동일한(현재 시점) Segment 값을 갖는다.
-- `computeMTAAggregates_()`(`30_ACQReport.js`)가 이 row를 그 row 자신의 `MTA Created Date`로 월
+- `computeMTAAggregates_()`(`ACQREP_001_Report.js`)가 이 row를 그 row 자신의 `MTA Created Date`로 월
   귀속시키기 때문에, "이번 달에 Segment X로 집계된 터치"가 실제로 그 달에 Segment X 채널이었다는
   뜻이 아니다 — 단지 "그 Lead가 (현재 기준으로) 최종적으로 Segment X"라는 사실이, 그 Lead의 모든
   과거 터치 row에 소급 적용된 것일 뿐이다.
@@ -120,12 +120,12 @@ Lead의 현재 상태가 그대로 조회됨을 Salesforce 원본에서 직접 �
 | All P1 | MTA_Master | MTA Created Date (Event) | `Lead Priority`에 `"1"` 포함(substring) — `Priority Override` 컬럼이 `MTA_Master`엔 없어서 New P1과 달리 그대로 유지 |
 | SAL | Leads_OPS | **Sales Accepted Date (Event)** | Sales Accepted Date가 그 달에 속함 (2026-07-25부터 — 아래 "SAL 과집계 원인 해결" 섹션 참고. 이전엔 MTA_Master의 Lead Record Type="SAL" 터치 건수였음) |
 | New Leads | Leads_OPS | Create Date (Cohort=Event) | Count All |
-| New P1 | Leads_OPS | Create Date (Cohort=Event) | 유효 Priority = "Priority 1" (exact match, `Priority Override` 우선 → 없으면 `Lead Priority`, 2026-07-22부터 `NewP1_REP` 설계와 통일. `isEffectiveP1_()`, `30_ACQReport.js`) |
+| New P1 | Leads_OPS | Create Date (Cohort=Event) | 유효 Priority = "Priority 1" (exact match, `Priority Override` 우선 → 없으면 `Lead Priority`, 2026-07-22부터 `NewP1_REP` 설계와 통일. `isEffectiveP1_()`, `ACQREP_001_Report.js`) |
 | IC Booked | Leads_OPS | **IC Booked Date (Event)** | IC Booked Date가 그 달에 속함 |
 | IC Complete | Leads_OPS | **IC Completed Date (Event)** | IC Completed Date가 그 달에 속함 |
 | Revenue | **Deal Tracker** (2026-07-28부터 — 이전엔 Leads_OPS `Opportunity Won Date`/`Revenue`, 2트랙 아키텍처 CLAUDE.md #7 참고) | **Close Date (Event, Deal Tracker 자체 필드)** | 그 달에 Close된 딜의 Revenue 합. Segment는 딜 트래커의 수동 "Segment" 컬럼(H열) 그대로 사용 — Upsell은 이 컬럼에서 이미 "Other"로 분류돼 있어 별도 제외 로직 없음 |
 
-## ✅ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25 조사, 2026-08-26 해결책 구현 완료, 실사용 검증 대기)
+## ✅ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25 조사, 2026-08-26 해결책 구현 → 2026-08-28 실사용 검증 완료, `docs/OpenItems.md` #32)
 
 **2026-08-26 후속 — 해결책 구현 완료**: 아래 "해결 방향"에서 미착수로 남겨뒀던
 ICFunnel_Raw 재도입을 실제로 구현. `MASTER_009_ICFunnelSync.js`(신규) +
@@ -139,7 +139,8 @@ Sales Accepted Date만 계속 관리 — 두 파이프라인이 같은 필드를
 Date" — day-first 날짜 형식이라 `RAW_DATE_COLUMNS.IC_FUNNEL`로 Plain Text 보호
 처리함(Sales Accepted Date와 동일한 locale 오해석 사고 방지). "📥 Update → Import
 IC Funnel" 메뉴로 수동 실행(사용자가 Salesforce에서 별도 리포트를 export/import).
-**실사용 검증 아직 안 됨** — `docs/OpenItems.md` #32 참고, 완료로 간주하지 말 것.
+**✅ 실사용 검증 완료(2026-08-28)** — Salesforce 대비 IC Booked 21/42→39/42, IC Complete
+7/21→19/21로 대폭 개선 확인, 남은 소수 갭은 sync 버그가 아님을 확인. 상세: `docs/OpenItems.md` #32.
 
 ## ⚠️ 이번 달 IC Booked/Complete 구조적 과소집계 — 터치 기반 export의 한계 (2026-08-25, 원인 조사 기록)
 
@@ -179,16 +180,18 @@ Booked Date는 계속 공란) — 그 사이 새 마케팅 터치가 없어서 �
 영향이 적어 보임. Revenue는 2026-07-28부터 Deal Tracker 소스로 전환되어(2트랙 아키텍처, CLAUDE.md
 #7) 이 문제에서 이미 벗어남 — 남은 취약 지표는 사실상 **IC Booked/Complete뿐**.
 
-**해결 방향(미착수, 사용자 결정 대기)**: `ICFunnel_Raw` 방식(터치와 무관한 별도 Lead-level IC
-Booked/Completed/Won Date 주간 export)을 IC Booked/Complete 전용으로 재도입하면 이 시차가
-사라진다 — 단 사용자가 Salesforce에서 별도 리포트를 추가로 유지보수해야 하고, SAL(Sales Accepted
-Date)은 지금 방식 그대로 둘지 같이 옮길지 결정 필요. 상세: `docs/OpenItems.md` #32. 이번 세션에선
-조사만 완료, 구현은 보류.
+**해결 방향(당시 기록 — 실제로는 아래처럼 그대로 채택·구현됨)**: `ICFunnel_Raw` 방식(터치와
+무관한 별도 Lead-level IC Booked/Completed/Won Date 주간 export)을 IC Booked/Complete
+전용으로 재도입하면 이 시차가 사라진다 — 단 사용자가 Salesforce에서 별도 리포트를 추가로
+유지보수해야 하고, SAL(Sales Accepted Date)은 지금 방식 그대로 둘지 같이 옮길지 결정 필요.
+**✅ 2026-08-26 후속 세션에서 정확히 이 방향으로 결정·구현 완료**(SAL은 별도로 분리, 위
+"✅ 이번 달 IC Booked/Complete 구조적 과소집계... 해결" 섹션 참고) — 이 문단은 그 결정에
+이르기까지의 조사 기록으로 보존.
 
 ## ⚠️ computeMTAFunnelByLeadId_() — "가장 오래된 터치" → "가장 최근 터치"로 정정 (2026-07-25)
 - **문제**: IC Booked/Completed/Won Date/Revenue는 Lead 레벨 스냅샷(그 터치 row가 export된 시점의
   Salesforce 상태)이라 파이프라인 진행에 따라(IC Booked → Completed → Won) 값이 갱신되는데,
-  `computeMTAFunnelByLeadId_()`(`09_MTAFunnelSync.js`)가 mergeOPS()의 "earliest wins"(중복 리드
+  `computeMTAFunnelByLeadId_()`(`MASTER_003_MTAFunnelSync.js`)가 mergeOPS()의 "earliest wins"(중복 리드
   식별용) 원칙을 잘못 그대로 적용해 **가장 오래된 터치**의 스냅샷 값을 채택하고 있었음 — 실제로는
   이미 진행된 Funnel 상태를 놓치는 구조적 오류였음.
 - **발견 경위**: 테스트 스프레드시트에서 이번 달 MTA만 재수출/재계산해 실제 Salesforce 수치와
@@ -207,12 +210,12 @@ Date)은 지금 방식 그대로 둘지 같이 옮길지 결정 필요. 상세: 
   row에도 Record Type=SAL이 찍혀 있어 7월 SAL 카운트에 잘못 포함됨(사용자 발견, 실측 MTA 리포트
   SAL 총계 235 확인).
 - **해결**: Salesforce MTA export에 `Lead: Sales Accepted Date`(진짜 SAL 전환 이벤트 날짜) 필드
-  추가 가능함을 확인 — `13_MTATransformer.js`에 `Sales Accepted Date` 필드로 매핑,
-  `computeMTAFunnelByLeadId_()`(`09_MTAFunnelSync.js`)의 대표값(가장 최근 터치) 산출 대상에 포함,
-  `syncMTAFunnelToOPS_()`가 Leads_OPS `Sales Accepted Date` 컬럼(`20_OPS_Config.js` SYNC_COLUMNS)에
+  추가 가능함을 확인 — `MASTER_007_MTATransformer.js`에 `Sales Accepted Date` 필드로 매핑,
+  `computeMTAFunnelByLeadId_()`(`MASTER_003_MTAFunnelSync.js`)의 대표값(가장 최근 터치) 산출 대상에 포함,
+  `syncMTAFunnelToOPS_()`가 Leads_OPS `Sales Accepted Date` 컬럼(`OPS_001_Config.js` SYNC_COLUMNS)에
   동기화. SAL 계산 자체를 `computeMTAAggregates_()`(MTA_Master, 터치 단위)에서
   `computeOPSAggregates_()`(Leads_OPS, IC Booked/Complete와 동일하게 리드당 1건, 이벤트 날짜
-  기준)로 이동(`30_ACQReport.js`). 기존 MTA_Master 기반 SAL 로직/`Lead Record Type` 사용은 제거.
+  기준)로 이동(`ACQREP_001_Report.js`). 기존 MTA_Master 기반 SAL 로직/`Lead Record Type` 사용은 제거.
 
 ## ⚠️ SAL에 Lead Status 제외 조건 추가 필요 — 데이터 대기 (2026-07-25, 미해결)
 - 위 "Sales Accepted Date" 전환 이후에도, `Lead Status`(Salesforce 표준 필드 — `Sales Funnel Stage`와
@@ -223,15 +226,15 @@ Date)은 지금 방식 그대로 둘지 같이 옮길지 결정 필요. 상세: 
 - **확정된 제외 조건**: `Lead Status === "Nurturing"`만 제외. New/Attempting Contact/Contacted/
   Disqualified/IC Booked/Qualified는 전부 SAL로 그대로 카운트(사용자 확인).
 - **막힘**: `Lead: Lead Status` 필드가 아직 MTA export에 없음 — Salesforce 리포트에 추가 + 재export
-  전까지 구현 불가. 도착 시 `13_MTATransformer.js` 매핑(리드 레벨 스냅샷이라 대표값 로직 필요 가능)
-  → `computeOPSAggregates_()`(`30_ACQReport.js`) SAL 조건에 `leadStatus !== "Nurturing"` 추가.
+  전까지 구현 불가. 도착 시 `MASTER_007_MTATransformer.js` 매핑(리드 레벨 스냅샷이라 대표값 로직 필요 가능)
+  → `computeOPSAggregates_()`(`ACQREP_001_Report.js`) SAL 조건에 `leadStatus !== "Nurturing"` 추가.
   자세한 내용: `CLAUDE.md` 미해결 항목 10번.
 
 ## 💡 Opportunity Won Date 대체 후보 발견 — Lead: Sales Funnel Stage = "Won Deal" (2026-07-25, 발견만 기록·구현 보류)
 - CLAUDE.md "현재 알려진 미해결 항목" 5번(Opp Won Date는 진짜 Close Date가 아님)과 관련된 발견.
   `Lead: Sales Funnel Stage`가 `"Won Deal"`인 리드는 전부 Revenue 값이 존재하는 것으로 확인됨
   (사용자 확인) — Won 여부 판별에 Opportunity Won Date 대신/보조로 활용할 수 있는 후보.
-  이 필드는 이미 MTA_Master에 `Sales Funnel Stage` 컬럼으로 존재(`13_MTATransformer.js`,
+  이 필드는 이미 MTA_Master에 `Sales Funnel Stage` 컬럼으로 존재(`MASTER_007_MTATransformer.js`,
   `rawRecord["Lead: Sales Funnel Stage"]`에서 매핑) — 새 Salesforce export 필드 요청 불필요.
 - **구현은 보류** — 정확한 활용 방식(Won count만 대체할지, wonDate 자체를 대체할지 등)은 추후
   별도 설계 논의 후 결정.
@@ -273,14 +276,20 @@ Funnel 진행률을 보고 싶으면(예전 이 리포트가 하려던 것) 추�
 view만 빠르게 불러오려는 건데 여전히 느리다"는 문제 제기로 재설계).
 
 **해결**: `ACQ_Summary`라는 별도 숨김 시트에 **전체 기간의 모든 (FY, Month, Segment) 조합별 지표를 미리 계산**해서
-저장해두고, `generateACQReport_()`는 이 요약 테이블만 조회한다 (원본 스캔 없음 → 1초 이내).
+저장해두고, `generateACQReport_()`는 이 요약 테이블만 조회한다 (원본 스캔 없음 → 1초 이내). S&M_REP 전용 주
+단위 서브캐시 `ACQ_Summary_Weekly`도 같은 스캔에 얹어 동시에 갱신된다(`docs/OpenItems_Legacy.md` #41).
 
-- `31_ACQSummary.js`의 `refreshACQSummary_()`가 전체 재계산을 담당
-- 아래 5개 함수 실행 끝에 자동으로 `refreshACQSummary_()` 호출되어, Master/OPS가 바뀔 때마다 요약 테이블도 같이 갱신됨:
-  - `appendNewLeads()`, `appendNewMTA()` (`07_IncrementalMasterBuild.js`)
-  - `rebuildLeadsMaster()`, `rebuildMTAMaster()` (`10_MasterBuild.js`)
-  - `syncICFunnelToOPS()` (`08_ICFunnelSync.js`)
-- 이 5개 함수를 실행하는 작업(Append/Rebuild/Sync) 자체는 이 때문에 조금 느려지지만, ACQ Report 조회는 항상 빠름
+**갱신 경로 (2026-08-04 비동기 파이프라인 도입 이후 — 아래는 현재 구조, `ACQREP_002_Summary.js`)**:
+- `appendNewLeads()`/`appendNewMTA()`(`MASTER_001_IncrementalMasterBuild.js`)는 더 이상 직접 호출하지
+  않음 — Raw→Master append만 동기 처리하고 `schedulePipelineTail_()`로 백그라운드 트리거만 예약한다.
+- **전체 재계산**(`refreshACQSummary_()`) — `syncMTAFunnelToOPS_()`(`MASTER_003_MTAFunnelSync.js`,
+  `runMTAPipelineTail()` 안에서 호출)/`syncICFunnelToOPS_()`(`MASTER_009_ICFunnelSync.js`,
+  `runICFunnelPipelineTail()` 안에서 호출)/`rebuildLeadsMaster()`·`rebuildMTAMaster()`
+  (`MASTER_004_MasterBuild.js`, 수동 Full Rebuild) 끝에서 호출.
+- **경량 델타 갱신** — SAL Sync(`refreshACQSummarySALDelta_()`, `MASTER_010_SALSync.js`)와
+  Revenue Sync(`refreshACQSummaryRevenueOnly_()`, `MASTER_011_RevenueSync.js`)는 전체 재계산 대신
+  이번에 바뀐 리드/딜만 반영하는 경량 경로를 쓴다(`docs/OpenItems_Legacy.md` #44 계열) — Leads_OPS/
+  MTA_Master 전체 재스캔 없음.
 
 ## Future Scalability
 동일 Engine/Summary 구조를 ACQ Report, Conversion Report, Dashboard 등 향후 리포트가 재사용할 수 있도록 설계됨.
