@@ -56,3 +56,40 @@ echo "clasp push 실행..."
 # 실측 확인(2026-07-30, clasp 3.3.0) — 이 래퍼 자체가 이미 위에서 worktree
 # 확인/y-n 게이트를 거치므로, clasp의 중복 확인은 안전하게 건너뛴다.
 clasp push --force "$@"
+
+# ---------------------------------------------------------------------------
+# 삭제 전용 push 무시 버그 감지 (2026-09-16 발견, docs/OpenItems.md #52 조사 중)
+#
+# clasp 3.3.0의 `push`는 getChangedFiles()가 "로컬 파일 목록"만 순회하며 원격과
+# 비교한다(files.js:304) — 원격에만 존재하고 로컬엔 없는 파일(=삭제 대상)은 애초에
+# 비교 대상에 안 들어가 "변경"으로 잡히지 않는다. 그 결과 이번 push에서 실제
+# 콘텐츠 차이가 "파일 삭제"뿐이면 clasp는 API 호출(updateContent) 자체를 건너뛰고
+# "Script is already up to date."만 출력한다 — 삭제가 조용히 실패하는데 성공한
+# 것처럼 보인다(-f/--force도 매니페스트 확인용일 뿐 이 경로엔 영향 없음).
+#
+# 실측 사례: TEMPQA_060_ICFunnelBookedCompletedFullBackfill.js를 로컬에서
+# 삭제하고 push했지만 원격 컨테이너에 그대로 남아있었음 — 재pull로 확인.
+#
+# 이 블록은 매 push 후 임시 디렉토리에 원격을 pull해 파일명만 로컬과 diff하고,
+# 로컬에 없는 원격 전용 파일이 있으면 경고만 한다(자동 삭제/자동 재push는 하지
+# 않음 — 삭제 전용 push는 이 스크립트로 재시도해도 같은 이유로 계속 무시되므로,
+# Apps Script 편집기에서 직접 삭제하는 것이 유일하게 확실한 방법).
+echo ""
+echo "삭제 동기화 확인 중 (원격 전용 파일 감지)..."
+orphan_check_dir="$(mktemp -d)"
+cp .clasp.json "$orphan_check_dir/"
+if npx clasp pull -P "$orphan_check_dir" >/dev/null 2>&1; then
+  remote_only="$(comm -13 \
+    <(ls -1 | grep -E '\.(js|gs|json|html)$' | sort) \
+    <(ls -1 "$orphan_check_dir" | grep -E '\.(js|gs|json|html)$' | sort))"
+  if [ -n "$remote_only" ]; then
+    echo "⚠️  경고: 로컬엔 없고 원격 컨테이너에만 남아있는 파일이 있습니다 (삭제 push가 무시됐을 가능성):"
+    printf '%s\n' "$remote_only" | sed 's/^/   - /'
+    echo "   위 clasp 버그 설명 참고 — Apps Script 편집기에서 직접 삭제하세요."
+  else
+    echo "✅ 원격 전용 파일 없음 (삭제 동기화 정상)."
+  fi
+else
+  echo "   (원격 pull 실패 — 삭제 동기화 확인 생략)"
+fi
+rm -rf "$orphan_check_dir"

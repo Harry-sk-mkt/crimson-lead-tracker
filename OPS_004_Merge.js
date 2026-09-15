@@ -7,9 +7,27 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.3.0
+ * v3.4.0
  *
  * Change Log
+ * v3.4.0 (2026-09-16)
+ * - **`buildLeadsOPS()` 증분화 1단계(`docs/OpenItems.md` #50, 그림자 모드
+ *   — 실제 쓰기 경로는 아직 무변경)**: `mergeOPS()`의 "이메일 그룹 중복
+ *   해소" + "최종 row 구성" 로직을 각각 `resolveEmailGroupEarliestWins_()`/
+ *   `buildOpsRowFromMasterRow_()`(순수 함수)로 분리 — `mergeOPS()` 자체
+ *   동작은 100% 동일(기존 테스트 `testMergeOPS_EarliestWins()` PASS 유지),
+ *   신규 증분 경로가 동일 로직을 재사용하기 위한 리팩터. `applyICRequestTracking_()`의
+ *   카운터 산술도 `computeICRequestCounterUpdate_()`로 분리(동일 이유,
+ *   `testApplyICRequestTracking()` PASS 유지). 신규 `planIncrementalOpsMerge_()`
+ *   (순수 함수 — 새 Master 배치만으로 신규/교체후보/중복 판정) +
+ *   `computeIncrementalOpsMergePlan_()`(IO 래퍼 — Leads_OPS Email/Create
+ *   Date 2개 컬럼만 targeted read해 인덱스 구성, 교체후보만 전체 행 read).
+ *   `OPS_003_Build.js`의 `verifyIncrementalOpsShadowDiff_()`가 매 `buildLeadsOPS()`
+ *   실행마다 이 증분 계획과 전체 재스캔 결과를 diff해 Logger에만 기록(시트
+ *   쓰기 없음) — 여러 실 Import로 diff 일치를 확인한 뒤 쓰기 전환은 별도
+ *   승인 필요(`[[feedback_pause_before_core_merge_logic_change]]`).
+ *   신규 테스트: `testResolveEmailGroupEarliestWins()`/`testBuildOpsRowFromMasterRow()`/
+ *   `testComputeICRequestCounterUpdate()`/`testPlanIncrementalOpsMerge()`.
  * v3.3.0 (2026-09-04)
  * - **청크 읽기 전환(성능/안전장치, docs/exec-plans/active/
  *   2026-09-03-performance-optimization.md #5)**: `sheetToObjects()`의
@@ -102,97 +120,24 @@ function mergeOPS(master, ops) {
   };
 
   //----------------------------------------
-  // 1) Email별 그룹핑 (빈 Email은 skip)
+  // 1)+2) Email별 그룹핑 + 중복 해소(가장 이른 Create Date만 채택) —
+  // resolveEmailGroupEarliestWins_()로 분리(2026-09-16, #50 증분화 —
+  // 증분 경로와 동일 로직 공유 목적)
   //----------------------------------------
 
-  const emailGroups = {};
+  const resolved = resolveEmailGroupEarliestWins_(master);
 
-  master.forEach(masterRow => {
-
-    const email = String(
-      masterRow[OPS.KEY] || ""
-    ).trim().toLowerCase();
-
-    if (!email) {
-
-      summary.skipped++;
-
-      return;
-
-    }
-
-    if (!emailGroups[email]) {
-      emailGroups[email] = [];
-    }
-
-    emailGroups[email].push(masterRow);
-
-  });
+  summary.skipped = resolved.skippedCount;
+  summary.duplicate = resolved.duplicateCount;
 
   //----------------------------------------
-  // 2) 중복 그룹 해소 — Create Date가 가장 이른 레코드만 채택
-  //----------------------------------------
-
-  const resolvedRows = [];
-
-  Object.keys(emailGroups).forEach(email => {
-
-    const group = emailGroups[email];
-
-    if (group.length === 1) {
-
-      resolvedRows.push(group[0]);
-
-      return;
-
-    }
-
-    let earliest = group[0];
-
-    group.forEach(candidate => {
-
-      const candidateDate = candidate["Create Date"];
-      const earliestDate = earliest["Create Date"];
-
-      const candidateValid =
-        candidateDate instanceof Date &&
-        !isNaN(candidateDate.getTime());
-
-      const earliestValid =
-        earliestDate instanceof Date &&
-        !isNaN(earliestDate.getTime());
-
-      if (
-        candidateValid &&
-        earliestValid &&
-        candidateDate.getTime() < earliestDate.getTime()
-      ) {
-        earliest = candidate;
-      }
-
-    });
-
-    group.forEach(candidate => {
-
-      if (candidate !== earliest) {
-
-        summary.duplicate++;
-
-      }
-
-    });
-
-    resolvedRows.push(earliest);
-
-  });
-
-  //----------------------------------------
-  // 3) 최종 확정된 레코드만 기존 OPS와 Merge
+  // 3) 최종 확정된 레코드만 기존 OPS와 Merge — buildOpsRowFromMasterRow_()로
+  // 분리(2026-09-16, 증분 경로와 동일 로직 공유 목적)
   //----------------------------------------
 
   const finalRowObjects = [];
 
-  resolvedRows.forEach(masterRow => {
+  resolved.resolvedRows.forEach(masterRow => {
 
     const email = String(
       masterRow[OPS.KEY] || ""
@@ -200,52 +145,12 @@ function mergeOPS(master, ops) {
 
     const existing = emailMap[email];
 
-    const row = {};
+    const row = buildOpsRowFromMasterRow_(masterRow, existing);
 
-    OPS.SF_COLUMNS.forEach(col => {
-
-      row[col] = masterRow[col];
-
-    });
-
-        if (existing) {
-
-      OPS.MANUAL_COLUMNS.forEach(col => {
-
-        row[col] = existing[col];
-
-      });
-
-      OPS.SYNC_COLUMNS.forEach(col => {
-
-        row[col] = existing[col];
-
-      });
-
-      applyICRequestTracking_(row, existing);
-
+    if (existing) {
       summary.updated++;
-
-    }
-
-    else {
-
-      OPS.MANUAL_COLUMNS.forEach(col => {
-
-        row[col] = "";
-
-      });
-
-      OPS.SYNC_COLUMNS.forEach(col => {
-
-        row[col] = "";
-
-      });
-
-      applyICRequestTracking_(row, null);
-
+    } else {
       summary.new++;
-
     }
 
     finalRowObjects.push(row);
@@ -275,6 +180,239 @@ function mergeOPS(master, ops) {
     qa: []      // TODO — 프로토타입 검증 후 구현 (의도적 보류)
 
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * Resolve Email Group Earliest Wins (순수 함수, 2026-09-16 분리)
+ *
+ * WHY
+ * `mergeOPS()`의 "이메일별 그룹핑 + 중복 해소(Create Date가 가장 이른
+ * 레코드만 채택)" 로직을 분리 — 전체 재스캔 경로(`mergeOPS()`가 Master
+ * 전체에 대해 호출)와 증분 경로(`planIncrementalOpsMerge_()`가 이번에
+ * 새로 들어온 배치에 대해서만 호출)가 "그룹 내에서 어떤 레코드가 이기는지"
+ * 판정 로직을 완전히 동일하게 공유하도록 하기 위함(`docs/OpenItems.md` #50 —
+ * 두 경로가 결과적으로 일치해야 diff 검증이 의미 있음).
+ *
+ * INPUT
+ * masterRows : Object[]  (Leads_Master 레코드 — 전체 또는 신규 배치만)
+ *
+ * OUTPUT
+ * { resolvedRows: Object[], duplicateCount: number, skippedCount: number }
+ *
+ * TEST
+ * testResolveEmailGroupEarliestWins() 참고
+ * ==========================================================
+ */
+function resolveEmailGroupEarliestWins_(masterRows){
+
+  const emailGroups = {};
+  let skippedCount = 0;
+
+  masterRows.forEach(masterRow => {
+
+    const email = String(
+      masterRow[OPS.KEY] || ""
+    ).trim().toLowerCase();
+
+    if (!email) {
+      skippedCount++;
+      return;
+    }
+
+    if (!emailGroups[email]) {
+      emailGroups[email] = [];
+    }
+
+    emailGroups[email].push(masterRow);
+
+  });
+
+  const resolvedRows = [];
+  let duplicateCount = 0;
+
+  Object.keys(emailGroups).forEach(email => {
+
+    const group = emailGroups[email];
+
+    if (group.length === 1) {
+      resolvedRows.push(group[0]);
+      return;
+    }
+
+    let earliest = group[0];
+
+    group.forEach(candidate => {
+
+      const candidateDate = candidate["Create Date"];
+      const earliestDate = earliest["Create Date"];
+
+      const candidateValid =
+        candidateDate instanceof Date && !isNaN(candidateDate.getTime());
+
+      const earliestValid =
+        earliestDate instanceof Date && !isNaN(earliestDate.getTime());
+
+      if (
+        candidateValid &&
+        earliestValid &&
+        candidateDate.getTime() < earliestDate.getTime()
+      ) {
+        earliest = candidate;
+      }
+
+    });
+
+    group.forEach(candidate => {
+      if (candidate !== earliest) {
+        duplicateCount++;
+      }
+    });
+
+    resolvedRows.push(earliest);
+
+  });
+
+  return { resolvedRows, duplicateCount, skippedCount };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — resolveEmailGroupEarliestWins_()
+ * ==========================================================
+ */
+function testResolveEmailGroupEarliestWins(){
+
+  const rows = [
+    { "Email": "test@example.com", "Lead ID": "L2", "Create Date": new Date(2026, 5, 15) },
+    { "Email": "test@example.com", "Lead ID": "L1", "Create Date": new Date(2026, 5, 1) },
+    { "Email": "test@example.com", "Lead ID": "L3", "Create Date": new Date(2026, 5, 20) },
+    { "Email": "", "Lead ID": "blank" },
+    { "Email": "solo@example.com", "Lead ID": "S1", "Create Date": new Date(2026, 5, 10) }
+  ];
+
+  const result = resolveEmailGroupEarliestWins_(rows);
+
+  const pass =
+    result.resolvedRows.length === 2 &&
+    result.resolvedRows.some(r => r["Lead ID"] === "L1") &&
+    result.resolvedRows.some(r => r["Lead ID"] === "S1") &&
+    result.duplicateCount === 2 &&
+    result.skippedCount === 1;
+
+  Logger.log(
+    "testResolveEmailGroupEarliestWins: " + (pass ? "PASS" : "FAIL") +
+    " (" + JSON.stringify(result) + ")"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Build OPS Row From Master Row (순수 함수, 2026-09-16 분리)
+ *
+ * WHY
+ * `mergeOPS()`의 "최종 row 구성"(SF_COLUMNS는 masterRow에서, MANUAL/
+ * SYNC_COLUMNS는 existing에서 보존 또는 신규면 공백, IC Request Tracking
+ * 적용) 로직을 분리 — 전체 재스캔 경로와 증분 경로(신규 행 추가 + 기존 행
+ * 교체 둘 다)가 동일하게 재사용(`docs/OpenItems.md` #50).
+ *
+ * INPUT
+ * masterRow : Object  (SF_COLUMNS 소스 — 이 이메일의 "채택된" Master 레코드)
+ * existing  : Object|undefined|null  (기존 OPS 레코드 — 없으면 신규 행)
+ *
+ * OUTPUT
+ * Object  (OPS.HEADER의 모든 컬럼을 키로 갖는 완성된 row 객체)
+ *
+ * TEST
+ * testBuildOpsRowFromMasterRow() 참고
+ * ==========================================================
+ */
+function buildOpsRowFromMasterRow_(masterRow, existing){
+
+  const row = {};
+
+  OPS.SF_COLUMNS.forEach(col => {
+    row[col] = masterRow[col];
+  });
+
+  if (existing) {
+
+    OPS.MANUAL_COLUMNS.forEach(col => {
+      row[col] = existing[col];
+    });
+
+    OPS.SYNC_COLUMNS.forEach(col => {
+      row[col] = existing[col];
+    });
+
+    applyICRequestTracking_(row, existing);
+
+  } else {
+
+    OPS.MANUAL_COLUMNS.forEach(col => {
+      row[col] = "";
+    });
+
+    OPS.SYNC_COLUMNS.forEach(col => {
+      row[col] = "";
+    });
+
+    applyICRequestTracking_(row, null);
+
+  }
+
+  return row;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildOpsRowFromMasterRow_()
+ * ==========================================================
+ */
+function testBuildOpsRowFromMasterRow(){
+
+  const masterRow = {
+    "Lead ID": "L1", "Created FY": "FY26", "Create Date": new Date(2026, 5, 1),
+    "Company / Account": "Acme", "Email": "test@example.com", "Phone": "",
+    "School Name": "", "Lead Priority": "Priority 1", "First Touch Detail": "",
+    "Business Segment": "Events"
+  };
+
+  // Case 1: 신규(existing 없음) — MANUAL/SYNC 공백, IC Request 초기화
+  const newRow = buildOpsRowFromMasterRow_(masterRow, null);
+  const newRowOk =
+    newRow["Lead ID"] === "L1" &&
+    newRow["Notes"] === "" &&
+    newRow["Revenue"] === "" &&
+    newRow["IC Requested"] === false &&
+    newRow["Total IC Requests"] === 0;
+
+  // Case 2: 기존 존재 — MANUAL/SYNC 보존
+  const existing = {
+    "Notes": "VIP", "Revenue": 5000, "IC Requested": false, "Total IC Requests": 2,
+    "IC Booked Date": ""
+  };
+  const updatedRow = buildOpsRowFromMasterRow_(masterRow, existing);
+  const updatedRowOk =
+    updatedRow["Lead ID"] === "L1" &&
+    updatedRow["Notes"] === "VIP" &&
+    updatedRow["Revenue"] === 5000 &&
+    updatedRow["Total IC Requests"] === 2;
+
+  const pass = newRowOk && updatedRowOk;
+
+  Logger.log(
+    "testBuildOpsRowFromMasterRow: " + (pass ? "PASS" : "FAIL") +
+    " (newRow=" + JSON.stringify(newRow) + ", updatedRow=" + JSON.stringify(updatedRow) + ")"
+  );
 
 }
 
@@ -390,17 +528,81 @@ function applyICRequestTracking_(row, existing) {
   const wasRequested = existing[checkboxCol] === true;
   const previousCount = Number(existing[counterCol]) || 0;
 
-  let newCount = previousCount + (wasRequested ? 1 : 0);
-
   const icBookedDate = row["IC Booked Date"];
   const hasBookedDate = icBookedDate instanceof Date && !isNaN(icBookedDate.getTime());
+
+  const update = computeICRequestCounterUpdate_(wasRequested, previousCount, hasBookedDate);
+
+  row[checkboxCol] = update.requested;
+  row[counterCol] = update.count;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute IC Request Counter Update (순수 함수, 2026-09-16 분리)
+ *
+ * WHY
+ * `applyICRequestTracking_()`의 카운터 산술만 분리 — 전체 재스캔 경로(매
+ * row마다 호출)와 증분 경로 도입 후 신설될 "IC Requested 체크된 행만
+ * 훑는 경량 스윕"(`docs/OpenItems.md` #50, `[[feedback_pause_before_core_
+ * merge_logic_change]]` 논의에서 별도 스윕으로 분리 확정) 둘 다 동일한
+ * 산술을 재사용하기 위함 — 두 경로가 결과적으로 같은 카운트를 내야 함.
+ *
+ * INPUT
+ * wasRequested : boolean  (기존 "IC Requested" 체크박스 값)
+ * previousCount : number  (기존 "Total IC Requests")
+ * hasBookedDate : boolean (이 row의 "IC Booked Date"가 유효한 Date인지)
+ *
+ * OUTPUT
+ * { requested: false, count: number }
+ *
+ * TEST
+ * testComputeICRequestCounterUpdate() 참고
+ * ==========================================================
+ */
+function computeICRequestCounterUpdate_(wasRequested, previousCount, hasBookedDate){
+
+  let newCount = previousCount + (wasRequested ? 1 : 0);
 
   if (hasBookedDate && newCount < 1) {
     newCount = 1;
   }
 
-  row[checkboxCol] = false;
-  row[counterCol] = newCount;
+  return { requested: false, count: newCount };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeICRequestCounterUpdate_()
+ * ==========================================================
+ */
+function testComputeICRequestCounterUpdate(){
+
+  const wasChecked = computeICRequestCounterUpdate_(true, 2, false);
+  const wasCheckedOk = wasChecked.requested === false && wasChecked.count === 3;
+
+  const wasUnchecked = computeICRequestCounterUpdate_(false, 2, false);
+  const wasUncheckedOk = wasUnchecked.requested === false && wasUnchecked.count === 2;
+
+  const floorCorrection = computeICRequestCounterUpdate_(false, 0, true);
+  const floorCorrectionOk = floorCorrection.requested === false && floorCorrection.count === 1;
+
+  const floorNotNeeded = computeICRequestCounterUpdate_(false, 3, true);
+  const floorNotNeededOk = floorNotNeeded.requested === false && floorNotNeeded.count === 3;
+
+  const pass = wasCheckedOk && wasUncheckedOk && floorCorrectionOk && floorNotNeededOk;
+
+  Logger.log(
+    "testComputeICRequestCounterUpdate: " + (pass ? "PASS" : "FAIL") +
+    " (wasChecked=" + JSON.stringify(wasChecked) +
+    ", wasUnchecked=" + JSON.stringify(wasUnchecked) +
+    ", floorCorrection=" + JSON.stringify(floorCorrection) +
+    ", floorNotNeeded=" + JSON.stringify(floorNotNeeded) + ")"
+  );
 
 }
 
@@ -500,6 +702,258 @@ function testMergeOPS_EarliestWins(){
     result.summary.merged === 1;
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Plan Incremental OPS Merge (순수 함수, 2026-09-16 신규 — `docs/OpenItems.md` #50)
+ *
+ * WHY
+ * `buildLeadsOPS()` 증분화의 핵심 판정 로직 — "이번에 새로 들어온 Master
+ * 배치"만 갖고, 기존 Leads_OPS를 건드리지 않으면서 어떤 이메일이 (a) 완전
+ * 신규 행으로 추가돼야 하는지, (b) 기존 행의 SF_COLUMNS를 교체해야 하는지
+ * (기존보다 더 이른 Create Date 레코드가 이번 배치에 있는 경우), (c) 그냥
+ * duplicate로 카운트만 하고 기존 행은 그대로 둬야 하는지를 가른다.
+ *
+ * 2026-09-16 설계 논의에서 확정된 원칙(사용자 결정):
+ * - 전체 재스캔 경로(`mergeOPS()`)는 이 함수 도입 이후에도 당분간 그대로
+ *   유지하며 실제 쓰기를 계속 담당 — 이 함수의 결과는 "그림자 모드"로
+ *   병렬 계산돼 실제 쓰기 결과와 diff 검증만 하고, 여러 차례 실 Import로
+ *   diff가 계속 일치함을 확인한 뒤에야 쓰기 경로를 이 함수로 전환한다.
+ * - 정렬(Create Date 내림차순) 불변식은 이 함수/증분 경로에서 아예 다루지
+ *   않음 — 신규 행은 그냥 끝에 추가되고, 정렬 복구는 별도의 하루 1회 전체
+ *   재정렬 트리거가 담당(아직 미구현, 쓰기 전환 시점에 함께 구현 예정).
+ *
+ * INPUT
+ * newMasterRows : Object[]  (이번에 새로 Leads_Master에 추가된 배치만 —
+ *   전체 Master 아님)
+ * existingIndex : Object  { [lowercase email]: { rowIndex: number,
+ *   createDate: Date|"" } }  (현재 Leads_OPS의 Email→행번호+Create Date만
+ *   담은 경량 인덱스 — 이 함수 자체는 시트를 읽지 않음, IO 래퍼가 준비)
+ *
+ * OUTPUT
+ * {
+ *   newRows: Object[]        (완성된 row 객체 — 그대로 추가하면 됨)
+ *   replaceCandidates: [{ email, rowIndex, masterRow }]  (SF_COLUMNS 교체
+ *     대상 — 최종 row 완성은 IO 래퍼가 기존 행 전체를 읽어온 뒤
+ *     buildOpsRowFromMasterRow_()로 수행, 이 함수는 "교체해야 하는지"만
+ *     판정)
+ *   summary : { newCount, replaceCandidateCount, duplicateCount, skippedCount }
+ * }
+ *
+ * TEST
+ * testPlanIncrementalOpsMerge() 참고
+ * ==========================================================
+ */
+function planIncrementalOpsMerge_(newMasterRows, existingIndex){
+
+  const resolved = resolveEmailGroupEarliestWins_(newMasterRows);
+
+  const newRows = [];
+  const replaceCandidates = [];
+  let duplicateCount = resolved.duplicateCount; // 배치 내부 중복(그룹 해소 과정)
+
+  resolved.resolvedRows.forEach(masterRow => {
+
+    const email = String(
+      masterRow[OPS.KEY] || ""
+    ).trim().toLowerCase();
+
+    const existingEntry = existingIndex[email];
+
+    if (!existingEntry) {
+
+      newRows.push(buildOpsRowFromMasterRow_(masterRow, null));
+      return;
+
+    }
+
+    const candidateDate = masterRow["Create Date"];
+    const existingDate = existingEntry.createDate;
+
+    const candidateValid =
+      candidateDate instanceof Date && !isNaN(candidateDate.getTime());
+
+    const existingValid =
+      existingDate instanceof Date && !isNaN(existingDate.getTime());
+
+    const shouldReplace =
+      candidateValid && existingValid &&
+      candidateDate.getTime() < existingDate.getTime();
+
+    if (shouldReplace) {
+
+      replaceCandidates.push({
+        email: email,
+        rowIndex: existingEntry.rowIndex,
+        masterRow: masterRow
+      });
+
+    } else {
+
+      // 기존 OPS 레코드가 이미 같거나 더 이른 Create Date를 갖고 있음 —
+      // 배치 쪽 레코드는 duplicate로만 카운트, 기존 행은 건드리지 않음.
+      duplicateCount++;
+
+    }
+
+  });
+
+  return {
+    newRows: newRows,
+    replaceCandidates: replaceCandidates,
+    summary: {
+      newCount: newRows.length,
+      replaceCandidateCount: replaceCandidates.length,
+      duplicateCount: duplicateCount,
+      skippedCount: resolved.skippedCount
+    }
+  };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — planIncrementalOpsMerge_()
+ * ==========================================================
+ */
+function testPlanIncrementalOpsMerge(){
+
+  const newBatch = [
+    // 완전 신규 이메일
+    { "Email": "new@example.com", "Lead ID": "N1", "Create Date": new Date(2026, 5, 10) },
+
+    // 기존 OPS(6/15)보다 더 이른 레코드 도착 — 교체 대상
+    { "Email": "earlier@example.com", "Lead ID": "E1", "Create Date": new Date(2026, 5, 1) },
+
+    // 기존 OPS(6/1)보다 늦은 레코드 도착 — duplicate, 기존 유지
+    { "Email": "later@example.com", "Lead ID": "L1", "Create Date": new Date(2026, 5, 20) },
+
+    // 같은 배치 내 중복(같은 이메일 2건, earlier wins) — 결과는 dupA(6/1)만 살아남고
+    // 그 자체가 "existingIndex에 없음"이라 신규 행으로 추가됨
+    { "Email": "dup@example.com", "Lead ID": "D2", "Create Date": new Date(2026, 5, 15) },
+    { "Email": "dup@example.com", "Lead ID": "D1", "Create Date": new Date(2026, 5, 5) }
+  ];
+
+  const existingIndex = {
+    "earlier@example.com": { rowIndex: 100, createDate: new Date(2026, 5, 15) },
+    "later@example.com": { rowIndex: 200, createDate: new Date(2026, 5, 1) }
+  };
+
+  const result = planIncrementalOpsMerge_(newBatch, existingIndex);
+
+  const pass =
+    result.newRows.length === 2 && // new@ + dup@(승자 D1)
+    result.newRows.some(r => r["Email"] === "new@example.com") &&
+    result.newRows.some(r => r["Lead ID"] === "D1") &&
+    result.replaceCandidates.length === 1 &&
+    result.replaceCandidates[0].email === "earlier@example.com" &&
+    result.replaceCandidates[0].rowIndex === 100 &&
+    result.summary.duplicateCount === 2 && // later@ 1건 + dup@ 그룹 내부 1건
+    result.summary.newCount === 2 &&
+    result.summary.replaceCandidateCount === 1;
+
+  Logger.log(
+    "testPlanIncrementalOpsMerge: " + (pass ? "PASS" : "FAIL") +
+    " (" + JSON.stringify(result) + ")"
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Incremental OPS Merge Plan (IO 래퍼, 2026-09-16 — `docs/OpenItems.md` #50)
+ *
+ * WHY
+ * `planIncrementalOpsMerge_()`(순수 함수)가 필요로 하는 "Leads_OPS의
+ * Email→행번호+Create Date 경량 인덱스"를 준비하고, `replaceCandidates`로
+ * 판정된 항목은 그 행 전체를 targeted read해 `buildOpsRowFromMasterRow_()`로
+ * 최종 row까지 완성한다. Email/Create Date 2개 컬럼만 전체 스캔하고(전체
+ * ~26개 컬럼이 아님), 실제 행 전체 읽기는 교체 후보(보통 0~소수 건)에만
+ * 한정 — 이게 이 증분 경로가 전체 재스캔(`readOPS()` 전체 시트 읽기)보다
+ * 가벼운 핵심 이유.
+ *
+ * INPUT
+ * newMasterRows : Object[]  (이번에 새로 Leads_Master에 추가된 배치)
+ *
+ * OUTPUT
+ * { newRows: Object[], replaceRows: [{rowIndex, email, row}], summary: Object }
+ * | null  (Leads_OPS가 비어있으면 — 호출부가 전체 경로로 폴백해야 함)
+ * ==========================================================
+ */
+function computeIncrementalOpsMergePlan_(newMasterRows){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!opsSheet || opsSheet.getLastRow() < OPS.ROWS.DATA_START) {
+    return null;
+  }
+
+  const headerMap = getHeaderMap(opsSheet);
+  const emailCol = headerMap[OPS.KEY];
+  const createDateCol = headerMap["Create Date"];
+
+  if (emailCol === undefined || createDateCol === undefined) {
+    throw new Error("Email/Create Date column not found in " + OPS.SHEET.OPS);
+  }
+
+  const numRows = opsSheet.getLastRow() - OPS.ROWS.DATA_START + 1;
+
+  const emailValues = opsSheet
+    .getRange(OPS.ROWS.DATA_START, emailCol + 1, numRows, 1)
+    .getValues();
+
+  const createDateValues = opsSheet
+    .getRange(OPS.ROWS.DATA_START, createDateCol + 1, numRows, 1)
+    .getValues();
+
+  const existingIndex = {};
+
+  emailValues.forEach(function(row, i){
+
+    const email = String(row[0] || "").trim().toLowerCase();
+
+    if (!email || existingIndex[email]) return; // 첫 번째로 만난 행만(정상 상태면 중복 없음)
+
+    existingIndex[email] = {
+      rowIndex: OPS.ROWS.DATA_START + i,
+      createDate: createDateValues[i][0]
+    };
+
+  });
+
+  const plan = planIncrementalOpsMerge_(newMasterRows, existingIndex);
+
+  const replaceRows = plan.replaceCandidates.map(function(candidate){
+
+    const existingRowValues = opsSheet
+      .getRange(candidate.rowIndex, 1, 1, OPS.HEADER.length)
+      .getValues()[0];
+
+    const existingRowObject = {};
+
+    OPS.HEADER.forEach(function(col, c){
+      existingRowObject[col] = existingRowValues[c];
+    });
+
+    return {
+      rowIndex: candidate.rowIndex,
+      email: candidate.email,
+      row: buildOpsRowFromMasterRow_(candidate.masterRow, existingRowObject)
+    };
+
+  });
+
+  return {
+    newRows: plan.newRows,
+    replaceRows: replaceRows,
+    summary: plan.summary
+  };
 
 }
 

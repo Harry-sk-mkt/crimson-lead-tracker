@@ -22,9 +22,24 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.32.0
+ * v1.33.0
  *
  * Change Log
+ * v1.33.0 (2026-09-16)
+ * - **수동 Editor 재실행 락 가드 추가** — `runLeadsPipelineTail()`/
+ *   `runMTAPipelineTail()`/`runICFunnelPipelineTail()`/`runSALPipelineTail()`
+ *   4개 tail 함수가 편집기에서 직접 Run될 때(디버깅/재시도용으로 원래도
+ *   허용되던 경로) `PIPELINE_LOCK`을 전혀 체크하지 않던 문제 수정 —
+ *   `docs/OpenItems.md` #52(SAL/IC Booked/Completed Date 대량 유실) 조사 중
+ *   9/15 아침 `runLeadsPipelineTail`(Editor)이 락을 정상 보유 중이던
+ *   `periodicRefreshRevenue_`(Time-Driven)와 44초간 겹쳐 실행된 것을
+ *   Executions 로그로 확인 — `buildLeadsOPS()`가 시트 스냅샷 기준으로 전체
+ *   재작성하는 구조라 그 사이 다른 프로세스의 쓰기가 조용히 되돌아갈 수
+ *   있음. 신규 `guardPipelineTailEntry_()`(IO 래퍼) +
+ *   `computeTailEntryGuardDecision_()`(순수 판정 함수, 테스트
+ *   `testComputeTailEntryGuardDecision()`) — 락이 없으면 직접 획득, 같은
+ *   타입/stale이면 기존 트리거 흐름대로 통과, **다른 타입의 살아있는 락이면
+ *   실행 거부**. 4개 tail 진입부 전부에 적용.
  * v1.32.0 (2026-09-15)
  * - **`refreshTargetActuals_()` 단계를 `runLeadsPipelineTail()`에서 제거** —
  *   사용자가 실행 로그(`[TIMING] LEADS/refreshTargetActuals_ completed in
@@ -737,6 +752,99 @@ function releasePipelineLock_(){
   PropertiesService
     .getScriptProperties()
     .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+}
+
+
+/**
+ * ==========================================================
+ * Guard Pipeline Tail Entry (수동 Editor 재실행 락 가드, 2026-09-16 추가)
+ *
+ * WHY (`docs/OpenItems.md` #52 조사 중 발견)
+ * `runLeadsPipelineTail()`/`runMTAPipelineTail()`/`runICFunnelPipelineTail()`/
+ * `runSALPipelineTail()`은 원래 트리거 대상 + "수동 재실행 진입점(디버깅/재시도용)"
+ * 둘 다로 설계됐다. 트리거 경로는 `appendNewLeads()` 등 앞문이 이미
+ * `acquirePipelineLock_()`로 락을 잡아둔 뒤 트리거를 설치하므로 안전하지만,
+ * Apps Script 편집기에서 이 tail 함수를 **직접 Run**하면 그 앞문을 완전히
+ * 건너뛰어 락 체크 자체가 없었다 — 실측(2026-09-16): 9/15 아침
+ * `runLeadsPipelineTail`이 편집기에서 두 번 수동 실행됐고, 두 번째 실행이
+ * 마침 락을 정상 보유 중이던 `periodicRefreshRevenue_`(type=REVENUE)와
+ * 44초간 겹쳐 돌았음(Executions 로그로 확인). `buildLeadsOPS()`는
+ * `readOPS()`로 시트 스냅샷을 뜬 뒤 그 스냅샷 기준으로 시트 전체를 다시
+ * 쓰므로(`writeOPS()`), 스냅샷~재작성 사이에 다른 프로세스가 쓴 값은
+ * 조용히 되돌아간다 — SAL/IC Booked/Completed Date 대량 유실 사고(#52)의
+ * 유력한 원인.
+ *
+ * 설계(사용자 확정 2026-09-16)
+ * - 락이 아예 없으면(순수 수동 실행, 시스템 유휴) 여기서 직접 acquire —
+ *   이후 tail 끝의 `releasePipelineLockAndProcessQueue_()`가 정상 반납.
+ * - 락이 있는데 타입이 "같으면"(트리거 경로의 정상 재진입 — 앞문이 이미
+ *   이 타입으로 잡아둔 락) 그대로 진행 — 기존 트리거 흐름 무변경.
+ * - 락이 있는데 타입이 "다르면"(다른 파이프라인이 진짜로 실행 중인데
+ *   수동으로 이 tail을 부른 경우 — 9/15 사고와 동일 패턴) 실행 거부.
+ * - stale 락(`LOCK_STALE_THRESHOLD_MS` 초과)은 `acquirePipelineLock_()`의
+ *   기존 self-heal 판정을 그대로 재사용 — 여기선 "죽은 락"으로 보고 진행.
+ *
+ * @param {string} type  CONFIG.PIPELINE.TYPES.* 중 하나
+ * @return {{ok:boolean, holderType:(string|null)}}
+ * ==========================================================
+ */
+function guardPipelineTailEntry_(type){
+
+  const props = PropertiesService.getScriptProperties();
+  const existingRaw = props.getProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+  const decision = computeTailEntryGuardDecision_(existingRaw, type, Date.now());
+
+  if(decision.shouldAcquire){
+    acquirePipelineLock_(type);
+  }
+
+  return { ok: decision.ok, holderType: decision.holderType };
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Tail Entry Guard Decision (순수 함수, guardPipelineTailEntry_ 판정 로직)
+ *
+ * `computePipelineLockState_()`와 의도적으로 분리 — 저 함수는 "락이 비어있거나
+ * 죽었으면 무조건 획득 가능"으로 판정(타입 무관)하는 반면, 이 함수는 "타입이
+ * 다른 살아있는 락이면 거부"까지 추가로 본다(guardPipelineTailEntry_ 전용 판정).
+ *
+ * @param {string|null} existingLockRaw  PropertiesService에 저장된 락 원본 문자열
+ * @param {string} requestedType  이번에 진입하려는 tail의 CONFIG.PIPELINE.TYPES.*
+ * @param {number} nowMs  기준 시각(ms) — 테스트 용이성을 위해 주입
+ * @return {{ok:boolean, holderType:(string|null), shouldAcquire:boolean}}
+ * ==========================================================
+ */
+function computeTailEntryGuardDecision_(existingLockRaw, requestedType, nowMs){
+
+  if(!existingLockRaw){
+    return { ok: true, holderType: null, shouldAcquire: true };
+  }
+
+  let parsed;
+
+  try{
+    parsed = JSON.parse(existingLockRaw);
+  } catch(e){
+    return { ok: true, holderType: null, shouldAcquire: true };
+  }
+
+  if(!parsed || !parsed.type || typeof parsed.acquiredAt !== "number"){
+    return { ok: true, holderType: null, shouldAcquire: true };
+  }
+
+  const age = nowMs - parsed.acquiredAt;
+  const stale = age > CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS;
+
+  if(stale || parsed.type === requestedType){
+    return { ok: true, holderType: parsed.type, shouldAcquire: false };
+  }
+
+  return { ok: false, holderType: parsed.type, shouldAcquire: false };
 
 }
 
@@ -2125,7 +2233,8 @@ function refreshNaverSearchCampaignStats_(){
  *
  * 트리거 대상(schedulePipelineTail_("runLeadsPipelineTail")) + 수동 재실행
  * 진입점(디버깅/재시도용, 이름 끝에 "_" 없음 — Apps Script 편집기 Run
- * 드롭다운에 보여야 함, CLAUDE.md 규칙).
+ * 드롭다운에 보여야 함, CLAUDE.md 규칙). 수동 재실행 시 락 충돌 가드는
+ * `guardPipelineTailEntry_()` 참고(2026-09-16 추가, #52 조사).
  * ==========================================================
  */
 function runLeadsPipelineTail(){
@@ -2133,6 +2242,17 @@ function runLeadsPipelineTail(){
   deleteTriggersByHandlerName_("runLeadsPipelineTail");
 
   const type = CONFIG.PIPELINE.TYPES.LEADS;
+
+  const guard = guardPipelineTailEntry_(type);
+
+  if(!guard.ok){
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " runLeadsPipelineTail 실행 거부 — PIPELINE_LOCK을 '" + guard.holderType +
+      "'가 보유 중(다른 파이프라인 실행 중). 그 파이프라인이 끝난 뒤 다시 시도할 것."
+    );
+    return;
+  }
 
   const state = {
     status: "RUNNING",
@@ -2260,6 +2380,17 @@ function runMTAPipelineTail(){
   deleteTriggersByHandlerName_("runMTAPipelineTail");
 
   const type = CONFIG.PIPELINE.TYPES.MTA;
+
+  const guard = guardPipelineTailEntry_(type);
+
+  if(!guard.ok){
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " runMTAPipelineTail 실행 거부 — PIPELINE_LOCK을 '" + guard.holderType +
+      "'가 보유 중(다른 파이프라인 실행 중). 그 파이프라인이 끝난 뒤 다시 시도할 것."
+    );
+    return;
+  }
 
   const state = {
     status: "RUNNING",
@@ -2391,6 +2522,17 @@ function runICFunnelPipelineTail(){
 
   const type = CONFIG.PIPELINE.TYPES.ICFUNNEL;
 
+  const guard = guardPipelineTailEntry_(type);
+
+  if(!guard.ok){
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " runICFunnelPipelineTail 실행 거부 — PIPELINE_LOCK을 '" + guard.holderType +
+      "'가 보유 중(다른 파이프라인 실행 중). 그 파이프라인이 끝난 뒤 다시 시도할 것."
+    );
+    return;
+  }
+
   const state = {
     status: "RUNNING",
     stage: "",
@@ -2474,6 +2616,17 @@ function runSALPipelineTail(){
   deleteTriggersByHandlerName_("runSALPipelineTail");
 
   const type = CONFIG.PIPELINE.TYPES.SAL;
+
+  const guard = guardPipelineTailEntry_(type);
+
+  if(!guard.ok){
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " runSALPipelineTail 실행 거부 — PIPELINE_LOCK을 '" + guard.holderType +
+      "'가 보유 중(다른 파이프라인 실행 중). 그 파이프라인이 끝난 뒤 다시 시도할 것."
+    );
+    return;
+  }
 
   const state = {
     status: "RUNNING",
@@ -2803,6 +2956,59 @@ function testComputePipelineLockState(){
     ", freshOtherType=" + JSON.stringify(freshOtherType) +
     ", staleLock=" + JSON.stringify(staleLock) +
     ", legacyFormat=" + JSON.stringify(legacyFormat) + ")"
+  );
+
+}
+
+
+/**
+ * WHY — `docs/OpenItems.md` #52 조사 중 발견한 "수동 Editor 재실행이 락을
+ * 완전히 우회한다" 버그의 수정(`guardPipelineTailEntry_()`/
+ * `computeTailEntryGuardDecision_()`, 2026-09-16)에 대한 테스트. 핵심 케이스:
+ * 타입이 다른 살아있는 락이 있으면 거부(9/15 사고 재현 조건), 그 외(락 없음/
+ * 파싱 불가/같은 타입/stale)는 전부 통과.
+ */
+function testComputeTailEntryGuardDecision(){
+
+  const now = 1000000000000;
+
+  const noLock = computeTailEntryGuardDecision_(null, "LEADS", now);
+  const noLockOk = noLock.ok === true && noLock.holderType === null && noLock.shouldAcquire === true;
+
+  const unparsable = computeTailEntryGuardDecision_("not json", "LEADS", now);
+  const unparsableOk = unparsable.ok === true && unparsable.shouldAcquire === true;
+
+  const sameTypeAlive = computeTailEntryGuardDecision_(
+    JSON.stringify({ type: "LEADS", acquiredAt: now - 1000 }), "LEADS", now
+  );
+  const sameTypeAliveOk = sameTypeAlive.ok === true && sameTypeAlive.shouldAcquire === false;
+
+  // 9/15 사고 재현 조건: REVENUE가 살아있는 락을 쥐고 있는데 LEADS tail이 수동 진입.
+  const differentTypeAlive = computeTailEntryGuardDecision_(
+    JSON.stringify({ type: "REVENUE", acquiredAt: now - 1000 }), "LEADS", now
+  );
+  const differentTypeAliveOk =
+    differentTypeAlive.ok === false &&
+    differentTypeAlive.holderType === "REVENUE" &&
+    differentTypeAlive.shouldAcquire === false;
+
+  const differentTypeStale = computeTailEntryGuardDecision_(
+    JSON.stringify({ type: "REVENUE", acquiredAt: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }),
+    "LEADS", now
+  );
+  const differentTypeStaleOk = differentTypeStale.ok === true && differentTypeStale.shouldAcquire === false;
+
+  const pass =
+    noLockOk && unparsableOk && sameTypeAliveOk && differentTypeAliveOk && differentTypeStaleOk;
+
+  Logger.log(
+    "testComputeTailEntryGuardDecision: " +
+    (pass ? "PASS" : "FAIL") +
+    " (noLock=" + JSON.stringify(noLock) +
+    ", unparsable=" + JSON.stringify(unparsable) +
+    ", sameTypeAlive=" + JSON.stringify(sameTypeAlive) +
+    ", differentTypeAlive=" + JSON.stringify(differentTypeAlive) +
+    ", differentTypeStale=" + JSON.stringify(differentTypeStale) + ")"
   );
 
 }

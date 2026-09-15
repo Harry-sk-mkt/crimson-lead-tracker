@@ -9,9 +9,13 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.69.0
+ * v1.70.0
  *
  * Change Log
+ * v1.70.0 (2026-09-16)
+ * - **`PROPERTIES.LEADS_OPS_MASTER_LAST_ROW` 신규** — `buildLeadsOPS()`
+ *   증분화(`docs/OpenItems.md` #50) 그림자 모드 체크포인트. Raw가 아니라
+ *   Leads_Master 행 수를 추적(UTM_PROGRAM_DICT_LEADS_LAST_ROW와 동일 관례).
  * v1.69.0 (2026-09-15)
  * - **`PROPERTIES.ACQ_FY_RANGE_CACHE`/`NEWP1_FY_RANGE_CACHE` 신규** —
  *   `findFiscalYearRange_()`/`findNewP1FiscalYearRange_()`가 매 파이프라인
@@ -859,7 +863,15 @@ const CONFIG = {
     // findNewP1FiscalYearRange_()의 하루 1회 캐시. JSON `{min, max, computedDate}`
     // 문자열, isFYRangeCacheFreshForToday_()(UTIL_001_TransformHelper.js)가 판정.
     ACQ_FY_RANGE_CACHE: "ACQ_FY_RANGE_CACHE",
-    NEWP1_FY_RANGE_CACHE: "NEWP1_FY_RANGE_CACHE"
+    NEWP1_FY_RANGE_CACHE: "NEWP1_FY_RANGE_CACHE",
+
+    // 2026-09-16 추가(docs/OpenItems.md #50) — buildLeadsOPS() 증분화 그림자
+    // 모드의 체크포인트. LEADS_LAST_ROW/MTA_LAST_ROW와 달리 Raw가 아니라
+    // **Leads_Master** 행 수를 추적(UTM_PROGRAM_DICT_LEADS_LAST_ROW와 동일
+    // 관례) — "buildLeadsOPS()가 이미 반영한 것으로 간주한 Master 행 수".
+    // 현재는 그림자 계산(diff 검증용, 실제 쓰기는 여전히 전체 재스캔 경로가
+    // 담당)에만 쓰이고, 실제 쓰기 전환 시점에 의미가 커진다.
+    LEADS_OPS_MASTER_LAST_ROW: "LEADS_OPS_MASTER_LAST_PROCESSED_ROW"
 
   },
 

@@ -1,3 +1,65 @@
+# Changelog — 2026-09-16
+
+## `clasp push` 삭제 무시 버그 발견 + `safe-clasp-push.sh` 안전장치 추가
+
+`docs/OpenItems.md` #52(SAL/IC Booked/Completed Date 유실) 재조사 착수 중, 9/15 세션에서
+"사용 후 삭제"로 기록된 `TEMPQA_060_ICFunnelBookedCompletedFullBackfill.js`가 Apps Script
+컨테이너에 여전히 남아있는 걸 발견. 원인 확정 — clasp 3.3.0의 `push`는 로컬 파일만 원격과
+비교해 변경 여부를 판정하는데(`getChangedFiles()`), 원격에만 있고 로컬엔 없는 파일(=삭제
+대상)은 애초에 비교 대상에 안 들어가 "변경"으로 안 잡힘 — 그 push에서 실제 차이가 "파일
+삭제"뿐이면 API 호출 자체를 건너뛰고 "Script is already up to date."만 출력, 삭제가 조용히
+실패한다. `docs/apps-script-gotchas.md` #13에 메커니즘 기록. `scripts/safe-clasp-push.sh`에
+매 push 후 원격을 임시 디렉토리에 pull해 로컬에 없는 원격 전용 파일을 자동 경고하는 검사
+추가(실측으로 TEMPQA_060 정상 탐지 확인) — 발견 시 Apps Script 편집기에서 직접 삭제해야
+함(clasp 재시도는 같은 이유로 무의미). TEMPQA_060은 사용자가 편집기에서 직접 삭제 완료.
+
+## SAL/IC Booked/Completed Date 대량 유실(#52) — 유력한 원인 확정, 락 가드 수정
+
+사용자가 공유한 9/13~9/16 Apps Script Executions 로그를 원본 발견 시점(9/15 11:04 AM) 이전
+구간과 대조. 그날 아침 `runLeadsPipelineTail`이 편집기(Editor)에서 두 번 수동 실행됐고,
+두 번째 실행(9:43:36 AM)이 `PIPELINE_LOCK`을 정상 보유 중이던 `periodicRefreshRevenue_`
+(9:38:25~9:44:20 AM)와 44초간 겹쳐 돌았음을 확인. 코드 확인 결과 `runLeadsPipelineTail()`
+등 4개 파이프라인 tail 함수는 "수동 재실행 진입점(디버깅/재시도용)"으로 편집기 직접 Run이
+의도적으로 허용돼 있었는데, 이 경로엔 `PIPELINE_LOCK` 체크가 전혀 없었음(트리거 경로만 앞문
+`appendNewLeads()`에서 락을 체크). `buildLeadsOPS()`가 시트 전체를 스냅샷→재작성하는 구조라
+그 사이 다른 프로세스가 SYNC_COLUMNS(SAL/IC Booked/Completed Date 포함)에 쓴 값이 조용히
+되돌아갈 수 있는 구조 — IC Funnel Sync가 8:55~8:57 AM에 IC Booked/Completed Date를 새로
+쓴 직후 이 경합이 일어난 것과 시간상 일치. **수정**: `runLeadsPipelineTail()`/
+`runMTAPipelineTail()`/`runICFunnelPipelineTail()`/`runSALPipelineTail()` 4개 진입점 전부에
+`guardPipelineTailEntry_()`(+ 순수 판정 함수 `computeTailEntryGuardDecision_()`, 테스트
+`testComputeTailEntryGuardDecision()`) 가드 추가 — 다른 타입의 살아있는 락이 있으면 실행
+거부, 없으면 직접 획득, 같은 타입/stale이면 기존 트리거 흐름 그대로 통과. `MASTER_002_
+PipelineAsync.js` v1.33.0, clasp push 완료. 실사용 재검증(락 경합 재발 시 거부 로그 확인)은
+`docs/OpenItems.md` #52에 TODO로 남김.
+
+## `docs/OpenItems.md` #18 — 최근 성능 수정 4건 실사용 재검증 (부분 확인, 마커 유지)
+
+Executions 로그로 약한 대용 지표 확인: `periodicRefreshAdSpendCache_`가 수정 전(9/13) 겪던
+1126초/746초급 극단치가 수정 후(9/15 09:01 KST 이후)엔 한 번도 재현되지 않음(최대 368.7초),
+수정 후 유일한 `runLeadsPipelineTail` 실행(436.7초)도 락 경합까지 낀 채로 수정 전 베이스라인
+(536~607초)보다 빠름 — 방향은 개선을 가리키지만 표본이 작고 외부 API 자연 변동과 완전히
+분리되지 않아 "실사용 재검증 필요" 마커는 사용자 결정으로 그대로 유지.
+
+## `docs/OpenItems.md` #50 — `buildLeadsOPS()` 증분화 설계 확정 + 그림자 모드 구현
+
+성능 최적화가 보류해뒀던 "더 어려운 절반"(Leads_OPS 병합 자체의 전체 재스캔) 설계 논의를
+진행 — 정렬 불변식은 "증분은 정렬 포기 + 하루 1회 전체 재정렬(자동 주기 트리거)로 절충",
+검증은 "병렬 실행 후 diff"로 사용자 확정. 구현 착수 직전 재점검 중 "IC Requested" 체크박스
+스윕이 전체 재스캔에 얹혀 매 sync마다 시트 전체를 스윕하는 역할도 겸하고 있었음을 발견 —
+증분화 시 그 배치와 무관한 행은 영원히 리셋 안 될 뻔한 회귀를 미리 잡아 "별도 경량
+전체-컬럼 스윕으로 분리"하기로 확정(아직 미구현, 쓰기 전환 전 필수 항목으로 등록).
+**구현(그림자 모드, 실제 쓰기는 무변경)**: `OPS_004_Merge.js`(v3.4.0) — `mergeOPS()`를
+`resolveEmailGroupEarliestWins_()`/`buildOpsRowFromMasterRow_()`(순수 함수)로 리팩터(동작
+100% 동일), 신규 `planIncrementalOpsMerge_()`(순수)/`computeIncrementalOpsMergePlan_()`(IO
+래퍼, Email/Create Date 2개 컬럼만 targeted read). `OPS_003_Build.js`(v1.3.0) —
+`buildLeadsOPS()`의 `mergeOPS()` 직후·`writeOPS()` 전에 `verifyIncrementalOpsShadowDiff_()`
+호출해 매 Import마다 증분 계획과 전체 재스캔 결과를 diff, Logger에만 기록(시트 쓰기 없음,
+독립 try/catch). 체크포인트 `CONFIG.PROPERTIES.LEADS_OPS_MASTER_LAST_ROW` 신규(`CORE_001_
+Config.js` v1.70.0). Node.js로 신규 테스트 4개 + 기존 회귀 테스트 전부 PASS 확인,
+clasp push 완료 — Apps Script 편집기에서 테스트 재실행 및 다음 실 Leads Import의 diff 로그
+확인은 `docs/OpenItems.md` #50에 TODO로 남김. 실제 쓰기 경로 전환은 이번 범위 밖(별도 승인
+필요).
+
 # Changelog — 2026-09-15
 
 ## 전체 문서 정리 — 완료 항목 legacy 분리 + 설계 문서 정확도 정정
