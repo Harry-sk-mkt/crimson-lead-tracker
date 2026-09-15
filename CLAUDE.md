@@ -48,7 +48,7 @@ Google Apps Script 기반 마케팅 리드 ETL 파이프라인 프로젝트입�
 - `docs/PerformanceBenchmark.md` — 전체 Rebuild(Leads/MTA Master, Leads_OPS 등) 실행 시간 기록, 리팩토링 전후 성능 비교용
 - `docs/TargetReportDesign.md` — Target_REP(주간 세그먼트 그룹별 New P1/CPNP1 목표·달성률) 설계, top-down 목표 역산 로직
 - `docs/FYReportDesign.md` — FY_REP(FY별 Sales Funnel 대시보드, 트렌드+세그먼트별 달성률) 설계, 2026-07-30 설계 착수 → 구현 완료(FYREP_001_Engine.js/FYREP_002_Report.js), 2026-09-01부터 Import 시 자동 Generate
-- `docs/OpenItems.md` — 현재 알려진 미해결 항목 전체 목록 (2026-07-29 CLAUDE.md 다이어트로 이관)
+- `docs/OpenItems.md` — 현재 알려진 미해결 항목 전체 목록 (2026-07-29 CLAUDE.md 다이어트로 이관). 완전히 해결된 항목은 `docs/OpenItems_Legacy.md`로 분리됨(2026-09-15) — 번호 breadcrumb만 남음.
 - `docs/QAAgentDesign.md` — QA 에이전트(`qa-review` 스킬: 코드 품질/데이터 정합성/리포트 값 검증) 설계, 2026-08-09 구현
 - `docs/Roadmap.md` — 장기 방향/우선순위 (계속 갱신되는 문서, OpenItems와 별개)
 - `docs/ExecPlanConvention.md` — `docs/exec-plans/`(작업 단위 실시간 진행 기록) 작성 규칙

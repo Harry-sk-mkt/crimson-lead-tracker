@@ -149,15 +149,16 @@ Trigger(`onEdit()`)로 실행되는데, Simple Trigger는 권한이 제한적이
 
 ## 계획 중 (End Goal과 별개)
 
-### FY별 Sales Funnel 대시보드 — 2026-08-07 재착수, 독립 FY_REP 시트로 최종 확정
+### FY별 Sales Funnel 대시보드 — ✅ 구현 완료(2026-08-07 재착수 → 완료, 2026-09-01부터 Import 시 자동 Generate)
 
 **2026-08-07 재확정**: 2026-07-30엔 "별도 리포트 대신 ACQ_REP/NewP1_REP 확장"으로 방향을
 틀었으나, 사용자가 "FY24/25/26 monthly Segment/Sales Funnel 비교"를 다시 요청하면서 요구
 범위가 커짐(Marketing/ACQ/Pipeline/Revenue 4개 섹션, 플랫폼별 채널 데이터까지) — 이번엔
-**독립 `FY_REP` 신규 시트로 최종 확정**(기존 리포트에 끼워넣기엔 grain이 안 맞음). 상세 설계/
-진행 상황은 `docs/exec-plans/active/2026-08-07-fy-rep-implementation.md` 참고.
-`docs/FYReportDesign.md`(2026-07-30 superseded 처리됐던 원래 설계 검토 기록)는 이번 재착수의
-배경 참고 자료로 남겨두되, 실제 구조는 새 exec-plan 기준.
+**독립 `FY_REP` 신규 시트로 최종 확정**(기존 리포트에 끼워넣기엔 grain이 안 맞음). 구현은
+`FYREP_001_Engine.js`/`FYREP_002_Report.js`로 완료됨 — 설계/진행 기록은
+`docs/exec-plans/completed/2026-08-07-fy-rep-implementation.md` 참고.
+`docs/FYReportDesign.md`(2026-07-30 superseded 처리됐던 원래 설계 검토 기록, 전문은
+`docs/FYReportDesign_Legacy.md`로 이관됨)는 순수 역사 기록일 뿐 현재 구조와 무관.
 
 아래는 2026-07-30 당시의 대안이었고, **FY_REP과 별개로 이미 구현·배포 완료됨**(대체 관계
 아님 — 둘 다 살아있음, `docs/OpenItems.md` #17 참고. 단, Target_Engine이 한 번에 FY 하나만
