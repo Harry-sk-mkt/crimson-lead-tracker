@@ -1,5 +1,42 @@
 # Changelog — 2026-09-15
 
+## 전체 문서 정리 — 완료 항목 legacy 분리 + 설계 문서 정확도 정정
+
+사용자 요청("전체 문서 정리 한번 하자. 완료된것들은 legacy로 따로 빼고 더 이상 사용 안하는
+건 제거해줘, 특히 test 함수들")으로 진행. 두 백그라운드 감사(test 함수 263개 + TEMPQA_0xx
+17개 파일 전수 점검, docs/OpenItems.md 분리 + 나머지 docs/*.md 21개 파일 staleness 스캔)를
+병렬로 돌린 뒤 결과를 검증하며 반영.
+
+**코드**: 고아(dead) test 함수/TEMPQA 파일 감사 결과 **삭제 대상 0건** — 263개 test 함수 전부
+살아있는 함수를 테스트 중이고, 남은 TEMPQA_0xx 17개도 전부 참조 함수가 현재 코드에 존재.
+
+**docs/OpenItems.md → docs/OpenItems_Legacy.md 분리**: 하위 항목까지 완전히 해결된 24개 항목
+(#1,2,3,4,6,8,16,19,23,26,27,28,29,30,31,33,34,41,43,44,45,46,47,48)을 legacy 파일로 이관,
+active 파일엔 breadcrumb 한 줄만 남김(번호 재사용 없음 — 다른 문서/코드가 "N번 항목"으로
+교차 참조하는 경우가 많아서). 27개 진행중/부분해결 항목만 본문 유지, 문서 길이 대폭 축소.
+
+**docs/FYReportDesign.md → docs/FYReportDesign_Legacy.md 분리**: 2026-07-30에 검토됐다가
+채택 안 된 원래 설계 초안 전문(전체 분량의 대부분)을 legacy로 이관, 본문은 실제 구현
+(`FYREP_001_Engine.js`/`FYREP_002_Report.js`, `docs/exec-plans/completed/2026-08-07-fy-rep-
+implementation.md`) 포인터로 축소. 잘못된 exec-plan 경로(`active/` → `completed/`)도 정정,
+`docs/Roadmap.md`의 FY_REP 항목도 "계획 중"에서 완료로 표시.
+
+**docs/OperationsLayer.md 정확도 정정**: 스캔 중 실제 코드와 어긋난 서술 2건 발견 —
+"Duplicate Email Handling"이 문서엔 "미해결"/"첫 발생분만 merge"로 적혀 있었으나 실제
+`mergeOPS()`는 이미 Create Date 최이른값 기준으로 해결돼 있었고, "QA Output"도 "의도적
+미구현"으로 적혀 있었으나 실제로는 2026-07-24에 구현 완료(`docs/OpenItems_Legacy.md` #1).
+구 파일명(`2x_OPS_*.js` 등 8개)도 전부 현재 이름으로 정정.
+
+**docs/BusinessSegmentClassification.md/docs/ACQReportDesign.md 정확도 정정**: 스캔에서
+"순차적 버그수정 히스토리가 길다"는 트림 후보로 나왔으나, 실제로는 지금도 살아있는 분류
+우선순위 로직(`getBusinessSegment()`)의 근거이자 다른 문서가 날짜로 직접 교차 참조하는
+내용이라 legacy 이관은 하지 않기로 판단 — 대신 구 파일명(전자 6개/후자 8개)과 실제로는
+이미 해결된 항목이 여전히 "미확정"/"검증 대기"로 잘못 표시돼 있던 것(ACQReportDesign.md의
+IC Booked/Complete 과소집계 관련 2곳, 2026-08-28에 이미 검증 완료)만 정정. ACQReportDesign.md의
+"성능 아키텍처" 섹션은 2026-08-04 비동기 파이프라인 도입 이전 구조(`appendNewLeads()`가
+직접 `refreshACQSummary_()` 호출)를 그대로 서술하고 있어 현재 구조(스케줄된 백그라운드
+tail에서만 호출, SAL/Revenue Sync는 경량 델타 경로)로 재작성.
+
 ## SAL/IC Booked/Completed Date 대량 유실 발견·복구 (원인 미확정, `docs/OpenItems.md` #52)
 
 사용자가 "S&M_REP/ACQ_REP SAL이 다 0"이라고 보고하며 시작된 조사. 임시 진단
