@@ -28,7 +28,7 @@ N/A       (2026-07-25 추가 — 아래 참고)
 | Content | Campaign/Detail에 `ebook`/`planner`/`guide`/`prospectus`/`booklet`/`curriculum`/`parent ebook`/`infographic`(2026-07-25 추가) 포함(`_lead`는 campaign 전용), Detail에 `on-demand`/`ondemand`(2026-07-25 추가) 포함 |
 | Referral | Lead Source = Referral |
 | N/A | MKT UTM Campaign/Lead Source Detail/Lead Source Category/Lead Source **4개가 전부 빈 값**인 경우(2026-07-25 추가) — 어트리뷰션 데이터 자체가 없는 경우를 "Other"와 구분하기 위함 |
-| Other | 위 4개 필드 중 하나라도 값이 있지만 어떤 룰에도 안 맞는 경우 (일부는 캠페인 집행/네이밍 실수로 보이는 개별 예외 — `25_TempQA_BusinessSegment.js`에서 "Other 잘 분류"로 별도 표시) |
+| Other | 위 4개 필드 중 하나라도 값이 있지만 어떤 룰에도 안 맞는 경우 (일부는 캠페인 집행/네이밍 실수로 보이는 개별 예외 — `TEMPQA_001_BusinessSegment.js`에서 "Other 잘 분류"로 별도 표시) |
 
 **N/A 판정 위치**: 다른 모든 룰(Referral 포함) 체크 이후, 맨 마지막(Other 직전)에 위치. Referral은
 `Lead Source` 값만으로 판정되는데 그 값이 비어있으면 N/A 조건(Lead Source도 빈 값)과 겹치지 않으므로
@@ -51,27 +51,27 @@ N/A       (2026-07-25 추가 — 아래 참고)
   반영하지 못하는 근본 문제가 있었다 (`docs/ACQReportDesign.md` 참고, 실데이터로 검증 완료).
 - **해결(2026-07-22)**: Salesforce MTA 리포트의 추출 필드를 `MKT UTM Campaign`으로 교체.
   이 필드는 **Multi Touch Attribution 객체 자체**의 필드라, 터치별로 그 시점의 실제 캠페인이 찍힌다.
-  `13_MTATransformer.js` v5.0.0에서 `getBusinessSegment()` 입력과 Master 컬럼명(`MKT UTM Campaign`,
+  `MASTER_007_MTATransformer.js` v5.0.0에서 `getBusinessSegment()` 입력과 Master 컬럼명(`MKT UTM Campaign`,
   기존 `Last MKT UTM Campaign`에서 개명)을 이 필드로 교체.
 - **주의**: 이 fix는 필드 교체 이후 새로 append되는 터치부터 적용된다. 기존 MTA_Master row는
   MTA_Raw 재추출 + `resetMTACounterOnly()` + 재Import + `rebuildMTAMaster()` 전까지 구 값(부정확한
   Lead 레벨 스냅샷)을 유지한다.
 
 ### ⚠️ MTA BOFU 판정 버그 — 수정 완료 (2026-07-22, v5.1.0)
-- **문제**: `13_MTATransformer.js`가 `getBusinessSegment(campaign, detail, leadSource)`를 호출할 때
+- **문제**: `MASTER_007_MTATransformer.js`가 `getBusinessSegment(campaign, detail, leadSource)`를 호출할 때
   `detail` 인자를 하드코딩된 `""`로 넘기고 있었음. BOFU 판정 조건은 `detail.includes("bofu")` 단독이라
   (campaign 기반 fallback 없음), MTA_Master에서 BOFU가 구조적으로 절대 나올 수 없는 상태였음.
 - **수정**: `""` → `rawRecord["Lead Source Detail"]`. 이 필드는 Salesforce에서 `Lead:` prefix가
   없어 Multi Touch Attribution 객체 자체 필드로 확인됨(샘플 검증, `MKT UTM Campaign`과 프로그램이
-  일치 — 100% 검증은 아님). Leads_Master 쪽(`12_LeadTransformer.js`)은 원래부터 `Lead Source Detail`을
+  일치 — 100% 검증은 아님). Leads_Master 쪽(`MASTER_006_LeadTransformer.js`)은 원래부터 `Lead Source Detail`을
   정상적으로 넘기고 있어 이 버그의 영향을 받지 않았음.
-- 회귀 테스트: `testTransformMTARecord_BOFU()` (`13_MTATransformer.js`).
+- 회귀 테스트: `testTransformMTARecord_BOFU()` (`MASTER_007_MTATransformer.js`).
 - 기존 MTA_Master 데이터는 이 fix 적용 후 전체 재추출 없이도 `MTA_Raw`/`MTA_Master`를 비우고
   `resetMTACounterOnly()` + 재Import + `appendNewMTA()`(카운터 0이라 Full Rebuild와 동일 효과)로
   재분류 진행 중.
 
 ### ⚠️ Search 판정에 Lead Source 조건 추가 (2026-07-25)
-- **문제**: `temp_QA` 시트(`25_TempQA_BusinessSegment.js`)로 Leads_OPS Business Segment 수동 QA 중,
+- **문제**: `temp_QA` 시트(`TEMPQA_001_BusinessSegment.js`)로 Leads_OPS Business Segment 수동 QA 중,
   First Lead Source에 `Search`가 포함되는데도 Business Segment가 `Other`로 떨어지는 리드 2,264건 확인.
   기존 `getBusinessSegment()`는 Search 판정 시 campaign/detail만 보고 leadSource는 Referral 판정에만
   사용해서, "Lead Source 자체가 Search 계열"인 케이스를 놓치고 있었음.
@@ -130,14 +130,11 @@ N/A       (2026-07-25 추가 — 아래 참고)
   `WB-` 접두사 체크도 동일하게 위치 무관 `includes("wb-")`로 완화.
 - **BOFU**: `ptc`(Push To Consult, 예: campaign에 `yale-ptc-parents_content-...`),
   `consultation request`/`consult page`(예: "KR Consult Page", "...| Consultation Request")
-  추가.
-  - **"Consult" 계열 우선순위 확정**: `book a consult`(Webinar) > `consultation request`/
-    `consult page`(BOFU) > 순수 `consult`(Search, 기존 유지) — 코드 순서(Seminar > Webinar >
-    BOFU > Search)상 더 구체적인 문구가 먼저 체크되어 충돌 없음(사용자 확인).
+  추가(우선순위는 위 확정 세그먼트 표 아래 "Consult 계열 우선순위 확정" 참고 — 동일 내용 중복 생략).
 - **Content**: `infographic`(예: "...Hyperlocalized Korean Army Infographic"), `on-demand`/
   `ondemand`(예: "...15Mins On-Demand", "On-demand & Slide Package") 추가.
 - **일반화 불가능한 나머지 Other**: `comp`/`checklist`/`Mini Digital SAT`/`TOFU` 포함 케이스는
-  `getBusinessSegment()`를 건드리지 않고 `25_TempQA_BusinessSegment.js`에서 "Other 잘 분류"로
+  `getBusinessSegment()`를 건드리지 않고 `TEMPQA_001_BusinessSegment.js`에서 "Other 잘 분류"로
   표시만.
 
 ### ⚠️ BUSINESS_SEGMENT_EXCEPTIONS 하드코딩 도입 (2026-07-25, 계속 7차)
@@ -156,7 +153,7 @@ N/A       (2026-07-25 추가 — 아래 참고)
   Category / MTA: Lead Source Category, 신규 export 필드) 추가. MKT UTM Campaign/Lead Source
   Detail/Lead Source Category/Lead Source 4개가 전부 공백이면 "N/A" 반환, 그 외엔 기존과 동일.
   위치는 맨 마지막(Other 직전) — Referral 등 다른 룰과 충돌 없음(Referral은 Lead Source 값이
-  있어야 매치되므로 애초에 N/A 조건과 겹치지 않음). `12_LeadTransformer.js`/`13_MTATransformer.js`
+  있어야 매치되므로 애초에 N/A 조건과 겹치지 않음). `MASTER_006_LeadTransformer.js`/`MASTER_007_MTATransformer.js`
   호출부 갱신, MTA_Master에 `Lead Source Category` 컬럼 신규 추가. 테스트:
   `testGetBusinessSegmentNA()`.
 
@@ -166,7 +163,7 @@ N/A       (2026-07-25 추가 — 아래 참고)
   on-demand/infographic 등 명확한 Content 키워드가 있어도 그 리드의 `First Lead Source`가 "Paid
   Search"/"Organic Search"면 무조건 Search로 덮어써지는 문제가 있었음. 사용자가 Search_OPS를
   검토하다가 콘텐츠 다운로드성 캠페인 22개가 Search_OPS에 노출되는 걸 보고 발견 — 진단 함수
-  `runInvestigateSearchMisclassifiedCampaigns()`(`71_Search_Engine.js`)로 실측한 결과, 22개 중 20개
+  `runInvestigateSearchMisclassifiedCampaigns()`(`SEARCH_002_Engine.js`)로 실측한 결과, 22개 중 20개
   ·총 약 1,190건이 이 원인으로 잘못 분류돼 있었음 확인(예: detail="WF-2021-09-KOR-MOFU-Core
   Hyperlocalized ECL eBook" + leadSource="Organic Search" → recomputed도 Search, 라이브 버그).
 - **수정**: `leadSource.includes("search")`를 Search 블록에서 제거하고 Content 판정 **뒤**, N/A/Other
@@ -175,14 +172,14 @@ N/A       (2026-07-25 추가 — 아래 참고)
   신호를 추가한 원래 목적(First Lead Source에 "Search" 포함되는데 Other로 떨어지던 2,264건 구제)은
   fallback 위치에서 그대로 유지됨. Seminar/Webinar/BOFU 및 campaign/detail 기반 Search 신호(contact/
   consult/paid search/organic search 문구)의 우선순위는 변경 없음. 테스트:
-  `testGetBusinessSegmentContentBeatsLeadSourceSearch()`(`16_TransformHelper.js`).
+  `testGetBusinessSegmentContentBeatsLeadSourceSearch()`(`UTIL_001_TransformHelper.js`).
 - **소급 적용**: Leads_Master/MTA_Master 기존 행에 반영하려면 `rebuildLeadsMaster()`/`rebuildMTAMaster()`
   Full Rebuild 필요 — ACQ_REP/NewP1_REP/Search_OPS 등 Business Segment를 쓰는 모든 리포트에 영향.
 
 ### ⚠️ campaign의 "_contact"/"consult"도 Content보다 먼저 체크되던 문제 + "search"/"sitelink" 확정 신호 도입 (2026-07-28, 계속)
 - **문제**: 위 항목 수정 후 Full Rebuild + `buildSearchOPS()`까지 실행했는데도, "Downloaded Top 50 NZ
   High Schools", "Prospectus", "Case Study", SAT Practice Test 계열, Webinar 등 명백한 콘텐츠 detail
-  값들이 여전히 Search에 남아있음을 발견(`runAuditSearchSegmentIssues()`, `71_Search_Engine.js`). 원인은
+  값들이 여전히 Search에 남아있음을 발견(`runAuditSearchSegmentIssues()`, `SEARCH_002_Engine.js`). 원인은
   이 계정의 거의 모든 Meta 리타게팅 캠페인이 슬러그 끝에 관례적으로 `_contact`/`consult`를 붙이고
   있어서, `campaign.includes("_contact")`/`"contact"`/`"consult"`가 Content 판정보다 먼저 체크되며
   ebook/prospectus 캠페인까지 가로챈 것 — leadSource 문제와 동일한 패턴이 campaign 레벨에도 있었음.
@@ -198,17 +195,17 @@ N/A       (2026-07-25 추가 — 아래 참고)
   Content 판정 **뒤** fallback으로 이동(`leadSource.includes("search")`와 같은 블록에 통합).
   `detail.includes("contact")`/`"paid search"`/`"organic search"`는 더 구체적인 폼 제출 신호라 기존
   위치(Content보다 먼저) 그대로 유지. 테스트:
-  `testGetBusinessSegmentSearchCampaignSignals()`(`16_TransformHelper.js`) — 49개 검증 중 대표 케이스
+  `testGetBusinessSegmentSearchCampaignSignals()`(`UTIL_001_TransformHelper.js`) — 49개 검증 중 대표 케이스
   포함.
 - **남은 잔여 케이스**: "Downloaded X"/"Case Study"/"Quiz"/공백형 "On Demand"(하이픈 없음)는 아래
   2026-07-28(계속) 항목에서 Content 키워드로 추가돼 해결됨. SAT Practice Test의 다른 문구 변형(예:
   "Core SAT practice test", "Filled out form for Mini SAT Practice Test")은 기존 하드코딩 예외 목록의
   정확한 문자열과 달라 여전히 미해결 — 필요 시 개별 예외 추가.
-- **Search_OPS 죽은 키**: `mergeSearchOPS_()`(`73_Search_Merge.js`)가 "현재 Engine 키 ∪ 기존 Search_OPS
+- **Search_OPS 죽은 키**: `mergeSearchOPS_()`(`SEARCH_004_Merge.js`)가 "현재 Engine 키 ∪ 기존 Search_OPS
   키"로 합치는 구조라, 위 수정들로 Business Segment가 바뀌어도 Search_OPS에 한 번 들어간 키는 지표만
   0이 된 채 행 자체는 남음. `runAuditSearchSegmentIssues()` Part 1로 실측한 결과 죽은 키 116건 전부
   수동 컬럼(PIC/Impressions/Spent 등)이 완전히 비어있어 삭제 확정 — `runDeleteDeadSearchOPSRows()`
-  (`71_Search_Engine.js`)로 실행.
+  (`SEARCH_002_Engine.js`)로 실행.
 
 ### ⚠️ Content 키워드 확장 + BOFU/Search "_contact" 공용 fallback을 leadSource 기반으로 재설계 (2026-07-28, 계속)
 - **Content 키워드 확장(사용자 확정)**: "download"/"case study"/"quiz"/"on demand"(공백형, 하이픈 없음)를
@@ -220,7 +217,7 @@ N/A       (2026-07-25 추가 — 아래 참고)
   기준 확정. campaign에 `search`/`sitelink` 확정 신호가 없는 순수 `_contact`/`contact`/`consult`
   캠페인의 fallback을, 이전(v1.7.0)의 "무조건 Search"에서 **leadSource.includes("search") 여부로
   BOFU/Search를 최종 판별**하도록 재설계(leadSource에 search 계열 값이 있으면 Search, 없으면 BOFU).
-  테스트: `testGetBusinessSegmentContactFallbackToBOFU()`(`16_TransformHelper.js`).
+  테스트: `testGetBusinessSegmentContactFallbackToBOFU()`(`UTIL_001_TransformHelper.js`).
 - **잔여 이슈(별도, 미해결 — CLAUDE.md에도 기록)**: 옛날 ebook Marketo flow가 UTM 값이 없으면
   leadSource를 "Organic Search"로 기본 처리하던 레거시(위 첫 항목 참고) 때문에, leadSource="Organic
   Search"라고 전부 진짜 Search는 아닐 수 있음(사용자 확인). 이번 수정은 leadSource가 Paid Social 등
