@@ -56,9 +56,15 @@
  *   `MASTER_011_RevenueSync.js`/Leads_Master의 전담 필드)
  *
  * Version
- * v1.11.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-09-15)
+ * - **`refreshTargetActuals_()` 호출 제거** — `syncMTAFunnelToOPS_()` 안에서
+ *   이 부분 갱신을 하고 나면, 같은 `runMTAPipelineTail()` 실행 안에서 곧이어
+ *   `generateTargetReport_()`가 Target_REP를 통째로 다시 써서 방금 쓴 값을
+ *   그대로 덮어써 매번 낭비였음(`docs/OpenItems.md` #18, `MASTER_002_
+ *   PipelineAsync.js` v1.32.0과 동일 조사·동일 결정).
  * v1.11.0 (2026-09-04)
  * - **`computeDirectUpdateRowWindow_()` 신규(순수 함수, 성능 개선
  *   docs/exec-plans/active/2026-09-03-performance-optimization.md #3)** —
@@ -770,7 +776,6 @@ function syncMTAFunnelToOPS_(){
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
-  refreshTargetActuals_();
 
 }
 

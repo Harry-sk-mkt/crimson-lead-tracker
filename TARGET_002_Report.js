@@ -19,9 +19,21 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.10.0
+ * v1.10.2
  *
  * Change Log
+ * v1.10.2 (2026-09-15)
+ * - v1.10.1의 진단용 [TIMING] 로그 제거(원인 확정 완료, 코드 변경 없이 원복) —
+ *   단독 실행 시 `generateTargetReport_()` 전체 39.79s(refreshTargetEngine_
+ *   16.62s + computeTargetActualP1ByWeek_ 20.07s, 나머지 각 1초 미만)로 정상
+ *   범위임을 확인. 이번 조사 계기: 사용자가 `runSALPipelineTail` 안에서
+ *   `generateTargetReport_`가 141.99s(2026-09-03 baseline 25.6s 대비 5.5배)로
+ *   튄 것을 보고, refreshTargetEngine_() 자체는 19.24s로 정상이라 나머지 121s의
+ *   출처를 진단하려 v1.10.1에 임시 계측 추가. 결과: 코드 회귀가 아니라
+ *   `docs/OpenItems.md` #18과 동일한 "파이프라인/트리거 겹침 시 스프레드시트
+ *   I/O 경합으로 실행시간이 늘어나는 현상"의 재발로 확인(사용자가 Executions
+ *   탭에서 겹치는 다른 실행을 직접 확인) — Target_REP 코드 문제 아님, 조치는
+ *   `docs/OpenItems.md` #18 우선순위 재평가 쪽으로 이관.
  * v1.10.0 (2026-08-19)
  * - **Actual CPNP1이 한 달 내내 동일 값으로 반복 표시되던 문제 해소(사용자
  *   리포트: "CPNP1이 3개 주 값이 동일함")** — v1.8.0에서 월 단위 Ad_Spend_Cache로

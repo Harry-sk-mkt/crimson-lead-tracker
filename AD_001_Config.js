@@ -21,9 +21,19 @@
  * 재정비는 별도 세션 예정.)
  *
  * Version
- * v1.24.0
+ * v1.25.0
  *
  * Change Log
+ * v1.25.0 (2026-09-15)
+ * - **`NAVER_SEARCH.API.STATS_LOOKBACK_DAYS`(730) 신규** — 사용자가 파이프라인/
+ *   주기 트리거 실행 시간 변동성 조사 중 "Naver Search에서 계속 긁어오는" 것을
+ *   직접 발견한 계기. `computeNaverSearchAdSpendHistorySummary_()`
+ *   (AD_003_NaverSearch.js)가 매번 `BACKFILL_START`(2022-09)부터 이번 달까지
+ *   전체 월(현재 기준 48개월+)을 순회하며 API를 호출하고, 730일(약 24개월)보다
+ *   오래된 절반가량은 항상 400 에러를 받은 뒤에야 건너뛰고 있었음(호출 자체는
+ *   매번 발생 — API 왕복 시간만큼 매 실행 낭비, Naver 응답 지연 시 파이프라인
+ *   전체 실행시간 변동성의 원인 중 하나로 추정). 이 상수로 사전에 유효 범위
+ *   밖 월을 걸러 호출 자체를 없앰(`AD_003_NaverSearch.js` 변경 참고).
  * v1.24.0 (2026-09-04)
  * - **`NAVER_SEARCH_CAMPAIGN_STATS.EXTERNAL` 신규**(`docs/OpenItems.md` #49) —
  *   `Naver_Search_Campaign_Stats_Cache`를 Master_DB 폴더 기존 캠페인 시트로
@@ -344,7 +354,21 @@ const AD = {
       ==========================================================
       */
 
-      BACKFILL_START: { YEAR: 2022, MONTH: 9 }
+      BACKFILL_START: { YEAR: 2022, MONTH: 9 },
+
+      /*
+      ==========================================================
+      STATS LOOKBACK DAYS (2026-09-15 사용자 리포트 계기 도입)
+      Naver Search Ad API `/stats`의 공식 제약("최근 730일 이내 기간에서만
+      조회 가능", 위 BACKFILL_START 주석/AD_003_NaverSearch.js 여러 곳 참고).
+      `computeNaverSearchAdSpendHistorySummary_()`가 BACKFILL_START(2022-09)
+      부터 매번 전체 월을 순회하며 이 범위 밖 월은 API 호출 후 400 에러를
+      캐치해 건너뛰고 있었음 — 이 상수로 호출 자체를 사전에 걸러(사후 재시도
+      아님), 매 실행마다 실패가 확정된 API 왕복을 없앤다.
+      ==========================================================
+      */
+
+      STATS_LOOKBACK_DAYS: 730
 
     },
 

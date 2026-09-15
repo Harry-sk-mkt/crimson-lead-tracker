@@ -19,8 +19,11 @@
  * 토큰 발급 응답엔 access_token/token_type/scope만 있고 refresh_token/
  * expires_in이 없음 — 매번 인가 코드로 새로 발급, "장기 미사용 시 자동
  * 만료"(정확한 기간 미명시). 시간 기반 자동 갱신 트리거는 애초에 불가능 —
- * 실제 사용(캠페인 지출 자동 파이프라인의 주기적 호출, 08_PipelineAsync.js
- * refreshCampaignSpend_())이 유일한 "갱신" 수단이고, 만료/철회되면 사용자가
+ * 실제 사용(`periodicRefreshAdSpendCache_()`(`MASTER_002_PipelineAsync.js`)의
+ * 4시간 주기 `syncKakaoMomentsReportToKakaoSMSRaw_()` 호출, 2026-09-15부터 —
+ * 이전엔 파이프라인 tail의 `refreshCampaignSpend_()`가 이 역할도 겸했으나
+ * Ad_Spend_Cache 재계산 중복 제거 과정에서 그 함수 자체가 삭제됨, `docs/
+ * OpenItems.md` #18 참고)이 유일한 "갱신" 수단이고, 만료/철회되면 사용자가
  * runGetKakaoMomentsAuthorizationUrl()로 다시 동의 화면을 통과해야 함(코드가
  * 대신할 수 없음).
  *
@@ -42,9 +45,17 @@
  * AD (2026-07-30 네이밍 컨벤션)
  *
  * Version
- * v1.23.0
+ * v1.24.0
  *
  * Change Log
+ * v1.24.0 (2026-09-15)
+ * - 파일 상단 설계 배경 주석만 갱신(코드 무변경) — 토큰 자동 갱신의 "유일한
+ *   수단"이 `refreshCampaignSpend_()`에서 `periodicRefreshAdSpendCache_()`로
+ *   바뀐 사실을 반영(그 함수가 파이프라인 tail Ad_Spend_Cache 중복 재계산
+ *   제거 과정에서 삭제됨, `docs/OpenItems.md` #18/`MASTER_002_
+ *   PipelineAsync.js` v1.31.0 참고) — 실제 동작은 이미 4시간 주기 트리거가
+ *   `syncKakaoMomentsReportToKakaoSMSRaw_()`를 직접 호출하고 있었으므로
+ *   문서만 뒤늦게 따라잡음.
  * v1.23.0 (2026-08-08)
  * - **`Marketo program` 자동 채움 재시도 로직 추가(사용자 지적)**: v1.22.0은
  *   신규 행에만 자동 채움을 적용하고 기존 행은 항상 보존이라, 처음엔

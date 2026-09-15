@@ -44,9 +44,21 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v2.16.0
+ * v2.17.0
  *
  * Change Log
+ * v2.17.0 (2026-09-15)
+ * - **`computeNaverSearchAdSpendHistorySummary_()` 사전 필터링 추가(성능,
+ *   `docs/OpenItems.md` #18 조사 계기)** — 사용자가 파이프라인/주기 트리거
+ *   실행시간 변동성을 조사하다 "Naver Search에서 계속 긁어온다"고 직접 발견.
+ *   기존엔 `BACKFILL_START`(2022-09)부터 매번 전체 월(현재 48개월+)을 순회하며
+ *   API를 호출하고, 730일보다 오래된 절반가량은 항상 400을 받은 뒤에야
+ *   건너뛰고 있었음(호출 자체는 매번 발생) — `refreshCampaignSpend_()`(매
+ *   Import 백그라운드 tail)와 `periodicRefreshAdSpendCache_()`(4시간 주기)
+ *   양쪽에서 반복 호출되므로 누적 낭비가 큼. 신규 `filterMonthsWithinNaverStatsLookbackWindow_()`
+ *   (순수 함수)로 `AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS`(730, `AD_001_
+ *   Config.js` v1.25.0 신규) 밖 월은 API 호출 전에 걸러냄 — 기존 400 캐치는
+ *   안전망으로 유지. 신규 테스트 `testFilterMonthsWithinNaverStatsLookbackWindow()`.
  * v2.16.0 (2026-09-04)
  * - **`Naver_Search_Campaign_Stats_Cache` 외부 스프레드시트 이관**
  *   (`docs/OpenItems.md` #49) — `openNaverSearchCampaignStatsCacheExternalSpreadsheet_()`
@@ -1014,6 +1026,90 @@ function testGenerateCalendarMonthSequence(){
 
 /**
  * ==========================================================
+ * Filter Months Within Naver Stats Lookback Window (순수 함수)
+ *
+ * WHY (2026-09-15 — 사용자가 실행시간 변동성 조사 중 "Naver Search에서 계속
+ * 긁어온다"고 직접 발견한 계기)
+ * `computeNaverSearchAdSpendHistorySummary_()`가 `BACKFILL_START`(2022-09)
+ * 부터 매번 전체 월을 순회하며, `AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS`
+ * (730일)보다 오래된 달은 API를 호출해봐야 항상 400(`{code:11004}`)이
+ * 확정인데도 매번 실제로 호출한 뒤에야 그 결과를 보고 건너뛰고 있었음 —
+ * 이 함수로 호출 전에 미리 걸러(사전 배제, 사후 캐치 아님) 매 실행마다
+ * 반복되는 "실패가 확정된 API 왕복"을 없앤다. 이 파이프라인은 Import
+ * 백그라운드 tail(`refreshCampaignSpend_()`)과 4시간 주기 트리거
+ * (`periodicRefreshAdSpendCache_()`) 양쪽에서 계속 호출되므로 누적 절감
+ * 효과가 큼.
+ *
+ * INPUT
+ * months : Array<{year, month}>  generateCalendarMonthSequence_() 결과
+ * todayStr : string  "yyyy-MM-dd" (호출부에서 todayDateString_()로 계산)
+ * lookbackDays : number  AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS
+ *
+ * OUTPUT
+ * {kept: Array<{year, month}>, skippedCount: number}
+ *
+ * TEST
+ * testFilterMonthsWithinNaverStatsLookbackWindow() 참고
+ * ==========================================================
+ */
+function filterMonthsWithinNaverStatsLookbackWindow_(months, todayStr, lookbackDays){
+
+  const earliestValidUntil = shiftDateString_(todayStr, -lookbackDays);
+
+  const kept = [];
+  let skippedCount = 0;
+
+  (months || []).forEach(function(m){
+
+    const range = buildCalendarMonthRange_(m.year, m.month);
+
+    if(range.until < earliestValidUntil){
+      skippedCount++;
+      return;
+    }
+
+    kept.push(m);
+
+  });
+
+  return { kept: kept, skippedCount: skippedCount };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — filterMonthsWithinNaverStatsLookbackWindow_()
+ * ==========================================================
+ */
+function testFilterMonthsWithinNaverStatsLookbackWindow(){
+
+  // today = 2026-09-15, lookback 730일 → earliestValidUntil = 2024-09-15.
+  // 2024-08(until 2024-08-31)은 그 이전이라 제외, 2024-09(until 2024-09-30)는
+  // until이 earliestValidUntil보다 늦어 포함.
+  const months = [
+    { year: 2022, month: 9 },
+    { year: 2024, month: 8 },
+    { year: 2024, month: 9 },
+    { year: 2026, month: 9 }
+  ];
+
+  const result = filterMonthsWithinNaverStatsLookbackWindow_(months, "2026-09-15", 730);
+
+  const pass =
+    result.skippedCount === 2 &&
+    result.kept.length === 2 &&
+    result.kept[0].year === 2024 && result.kept[0].month === 9 &&
+    result.kept[1].year === 2026 && result.kept[1].month === 9;
+
+  Logger.log("Result: " + JSON.stringify(result) + " (expected skippedCount=2, kept=[2024-9, 2026-9])");
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
  * Compute NaverSA Spend History Summary (IO 래퍼)
  *
  * WHY
@@ -1029,6 +1125,13 @@ function testGenerateCalendarMonthSequence(){
  * 건너뛰고 계속 진행 — 그 외 에러(인증 실패 등 진짜 문제)는 그대로 던져
  * 전체 갱신을 중단시킨다.
  *
+ * WHY (2026-09-15 — 사전 필터링 추가)
+ * 위 "달 건너뛰기"는 API를 호출한 뒤 400을 받고서야 건너뛰는 사후 처리라
+ * 매번 실패가 확정된 API 왕복 비용이 그대로 남아있었음 —
+ * `filterMonthsWithinNaverStatsLookbackWindow_()`로 호출 전에 미리 걸러
+ * 이 비용을 없앤다. 아래 try/catch는 안전망으로 유지(Naver가 허용 범위를
+ * 바꾸는 등 예외 상황에서도 전체 갱신이 죽지 않도록).
+ *
  * INPUT
  * startYear/startMonth : number  AD.NAVER_SEARCH.API.BACKFILL_START 참고
  *
@@ -1042,13 +1145,25 @@ function computeNaverSearchAdSpendHistorySummary_(startYear, startMonth){
   const ids = Object.keys(campaignMap);
 
   const today = new Date();
-  const months = generateCalendarMonthSequence_(
+  const allMonths = generateCalendarMonthSequence_(
     startYear, startMonth, today.getFullYear(), today.getMonth() + 1
   );
 
+  const windowed = filterMonthsWithinNaverStatsLookbackWindow_(
+    allMonths, todayDateString_(), AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS
+  );
+
+  if(windowed.skippedCount > 0){
+    Logger.log(
+      windowed.skippedCount + "개월 건너뜀(Naver Search Ad API 조회 가능 기간 " +
+      "밖 — 최근 " + AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS + "일 이내만 조회 가능, " +
+      "API 호출 없이 사전 필터링)."
+    );
+  }
+
   const totals = {};
 
-  months.forEach(function(m){
+  windowed.kept.forEach(function(m){
 
     const range = buildCalendarMonthRange_(m.year, m.month);
 
@@ -1062,7 +1177,7 @@ function computeNaverSearchAdSpendHistorySummary_(startYear, startMonth){
 
         Logger.log(
           m.year + "-" + m.month + " 건너뜀(Naver Search Ad API 조회 가능 기간 " +
-          "밖 — 최근 730일 이내만 조회 가능)."
+          "밖 — 최근 " + AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS + "일 이내만 조회 가능)."
         );
 
         return;

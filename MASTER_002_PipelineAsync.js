@@ -22,9 +22,44 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.30.0
+ * v1.32.0
  *
  * Change Log
+ * v1.32.0 (2026-09-15)
+ * - **`refreshTargetActuals_()` 단계를 `runLeadsPipelineTail()`에서 제거** —
+ *   사용자가 실행 로그(`[TIMING] LEADS/refreshTargetActuals_ completed in
+ *   12942ms`)에서 발견: 이 부분 갱신(Target_REP Actual 컬럼만) 직후 같은 tail
+ *   안에서 `refreshReportGenerate_()`의 `generateTargetReport_()`가
+ *   `clearTargetReportArea_()`로 시트를 통째로 지우고 Target/Actual 전체를
+ *   다시 쓰므로, 방금 쓴 값이 같은 실행 안에서 그대로 덮어써져 매번 낭비였음
+ *   (`docs/OpenItems.md` #18 참고). `syncMTAFunnelToOPS_()`(MASTER_003)/
+ *   `syncICFunnelToOPS_()`(MASTER_009) 내부의 동일 호출도 같은 이유로 제거
+ *   (SAL tail은 애초에 이 호출이 없어 해당 없음). **트레이드오프(사용자
+ *   확정, 속도 우선)**: `generateTargetReport_()`가 도중에 실패하면(개별
+ *   try/catch로 격리돼 있어 tail 자체는 계속 진행) 그 주기엔 Target_REP
+ *   Actual이 부분 갱신조차 안 되고 완전히 stale한 채로 남음 — 기존엔
+ *   `refreshTargetActuals_()`가 최소한의 안전망 역할을 했음. `rebuildLeadsMaster()`/
+ *   `rebuildMTAMaster()`(MASTER_004, 이 뒤에 generateTargetReport_가 이어지지
+ *   않는 별도 수동 재구축 경로)의 호출은 유일한 갱신 수단이라 그대로 유지.
+ * v1.31.0 (2026-09-15)
+ * - **`refreshCampaignSpend_()` 단계를 Leads/MTA 파이프라인 tail에서 완전
+ *   제거(사용자 확정)** — 이 단계(Ad_Spend_Cache 전체 재계산: Meta+Naver Search
+ *   이력+Kakao Channel)가 `periodicRefreshAdSpendCache_()`(4시간 독립 주기
+ *   트리거)와 완전히 중복 실행되고 있었음이 확인됨 — 애초 4시간 주기 트리거를
+ *   둔 이유 자체가 이 무거운 재계산을 파이프라인 밖에서 미리 돌려두기
+ *   위함이었는데, 파이프라인 tail이 여전히 매번 전체 재계산을 반복해 그
+ *   의도가 무력화돼 있었음. 특히 Naver Search 이력 스캔(외부 API, 응답
+ *   변동성 큼)이 Leads→MTA→SAL→IC Funnel처럼 짧은 간격의 연속 Import마다
+ *   반복되며 실행시간 변동성의 주요 원인이 됨(`docs/OpenItems.md` #18/
+ *   `AD_003_NaverSearch.js` v2.17.0 조사 계기). `refreshCampaignSpend_()`
+ *   함수 자체도 호출부가 없어져 삭제(다른 어디서도 호출 안 함, 확인 완료 —
+ *   수동 재계산은 기존 `runRefreshAdSpendCache()`로 계속 가능).
+ *   `refreshTargetActuals_()`(Leads tail)/`syncMTAFunnelToOPS_()` 내부의
+ *   같은 함수(MTA tail)는 이제 그 시점의 캐시(최대 4시간 지연 가능)를 그대로
+ *   읽음(사용자 확정 트레이드오프). README Pipeline Status 표의 "Campaign
+ *   Spend" 컬럼도 `CORE_001_Config.js`(v1.68.0)에서 함께 제거,
+ *   `testBuildPipelineStatusGrid()` 기대값(컬럼 수 14→13, 컬럼 인덱스 이동)
+ *   갱신.
  * v1.30.0 (2026-09-08)
  * - **`periodicRefreshRevenue_()` self-rescheduling 체인 끊김 버그 수정**
  *   — `runRevenuePipelineTail()` 실패 시 재예약 호출까지 도달 못 해 Revenue
@@ -2054,44 +2089,6 @@ function refreshOPSSheets_(type, state){
 
 /**
  * ==========================================================
- * Refresh Campaign Spend (Ad_Spend_Cache — Meta+Naver Search+Kakao Channel)
- *
- * WHY
- * `refreshAdSpendCache_()`(AD_004_SpendCache.js)는 원래 ACQ_REP/NewP1_REP/
- * Target_REP Generate·Refresh 전에 사용자가 매번 직접 Run해야 하는 수동
- * 단계였음 — Naver Search "730일 조회 제약" 버그를 고친 직후 사용자가
- * 백그라운드 체인에 포함시켜 완전 자동화해달라고 요청(2026-08-04). Meta_Raw
- * (수기 붙여넣기)/Naver Search API/Kakao Channel(별도 스프레드시트 수기 시트)을
- * 전부 읽어야 해 Simple Trigger로는 못 돌리고, 이 설치형 백그라운드 트리거의
- * Full Authorization이 필요함(파일 상단 WHY와 동일 이유).
- *
- * `refreshTargetActuals_()`/`refreshReportGenerate_()`(ACQ_REP/NewP1_REP/
- * Target_REP의 Spent/CPNP1)가 전부 이 캐시를 읽으므로(2026-08-04 자동 집계
- * 전환), 두 파이프라인 테일 모두에서 그 단계들보다 **먼저** 호출해야 함
- * (runLeadsPipelineTail()/runMTAPipelineTail() 호출 순서 참고).
- *
- * 실패 격리(refreshReportGenerate_()와 동일 원칙) — Naver Search API 인증
- * 만료 등 외부 요인으로 실패해도 Logger에만 남기고 던지지 않음. Ad Spend는
- * Leads_OPS/MTA_Master 핵심 데이터와 무관한 보조 지표(Spent/CPNP1)라, 이
- * 실패로 6분짜리 핵심 데이터 refresh 전체를 재실행하게 만들 필요가 없음.
- * ==========================================================
- */
-function refreshCampaignSpend_(){
-
-  try{
-    refreshAdSpendCache_();
-  } catch(err){
-    Logger.log(
-      "refreshCampaignSpend_: Ad_Spend_Cache 갱신 실패(비필수, 파이프라인은 계속) — " +
-      (err && err.message ? err.message : err)
-    );
-  }
-
-}
-
-
-/**
- * ==========================================================
  * Refresh Naver Search Campaign Stats (Search_OPS Campaign/Impressions/
  * Link clicks 자동화용 누적 캐시)
  *
@@ -2186,11 +2183,6 @@ function runLeadsPipelineTail(){
       refreshOPSSheets_(type, state);
     });
 
-    advancePipelineStage_(
-      type, state, "refreshCampaignSpend_", refreshCampaignSpend_, ["campaignSpend"]
-    );
-
-    advancePipelineStage_(type, state, "refreshTargetActuals_", refreshTargetActuals_);
     advancePipelineStage_(type, state, "refreshReportFYDropdowns_", refreshReportFYDropdowns_);
 
     advancePipelineStage_(type, state, "refreshReportGenerate_", function(){
@@ -2244,12 +2236,23 @@ function runLeadsPipelineTail(){
  * 트리거 대상(schedulePipelineTail_("runMTAPipelineTail")) + 수동 재실행
  * 진입점. syncMTAFunnelToOPS_()가 이미 내부에서 ACQ/NewP1/Events/BOFU/
  * Search/Content Engine + Target Actuals refresh 전체를 실행하므로
- * 여기서는 그 함수 하나만 단계로 감싼다(09_MTAFunnelSync.js 수정 불필요) —
- * 단, `refreshCampaignSpend_()`(Ad_Spend_Cache)는 그 안의 `refreshTargetActuals_()`
- * 가 참조하므로 반드시 그보다 먼저(= syncMTAFunnelToOPS_() 호출 전)
- * 실행해야 함(2026-08-04). `refreshOPSSheets_()`(Events/BOFU/Search/Content
- * OPS 시트 재작성)는 그 안에서 방금 갱신된 Engine 캐시를 읽으므로
- * syncMTAFunnelToOPS_() 바로 다음 단계로 배치(2026-08-05).
+ * 여기서는 그 함수 하나만 단계로 감싼다(09_MTAFunnelSync.js 수정 불필요).
+ * `refreshOPSSheets_()`(Events/BOFU/Search/Content OPS 시트 재작성)는 그
+ * 안에서 방금 갱신된 Engine 캐시를 읽으므로 syncMTAFunnelToOPS_() 바로 다음
+ * 단계로 배치(2026-08-05).
+ *
+ * WHY (2026-09-15 — `refreshCampaignSpend_()` 단계 제거)
+ * 기존엔 이 tail 맨 앞에서 `refreshCampaignSpend_()`(Ad_Spend_Cache 전체
+ * 재계산 — Meta+Naver 이력+Kakao Channel)를 호출해 뒤이은
+ * `refreshTargetActuals_()`가 최신 캐시를 읽도록 했으나, 이 재계산이
+ * `periodicRefreshAdSpendCache_()`(4시간 독립 주기 트리거)와 완전히
+ * 중복이었음이 확인됨(사용자 지적) — Leads→MTA→SAL→IC Funnel처럼 짧은
+ * 간격으로 연달아 Import될 때마다 Naver Search 이력 스캔(외부 API, 응답
+ * 변동성 큼)을 매번 반복해 실행시간 변동성의 주요 원인이 됨
+ * (`docs/OpenItems.md` #18/`AD_003_NaverSearch.js` v2.17.0 조사 참고).
+ * 완전히 제거 — Ad_Spend_Cache 최신화는 이제 4시간 주기 트리거 하나로만
+ * 처리하고, `refreshTargetActuals_()`는 그 시점의 캐시(최대 4시간 지연
+ * 가능)를 그대로 읽는다(사용자 확정 트레이드오프).
  * ==========================================================
  */
 function runMTAPipelineTail(){
@@ -2278,10 +2281,6 @@ function runMTAPipelineTail(){
       "runAutoDeleteExactDuplicateTouchRows",
       runAutoDeleteExactDuplicateTouchRows,
       ["masterUpdate"]
-    );
-
-    advancePipelineStage_(
-      type, state, "refreshCampaignSpend_", refreshCampaignSpend_, ["campaignSpend"]
     );
 
     advancePipelineStage_(
@@ -2826,7 +2825,7 @@ function testBuildPipelineStatusGrid(){
       startedAt: "2026-08-04 09:00:00 KST",
       finishedAt: "2026-08-04 09:05:00 KST",
       error: "Boom",
-      stages: { masterUpdate: "DONE", campaignSpend: "FAILED" }
+      stages: { masterUpdate: "DONE", acqRep: "FAILED" }
     },
     {
       status: "DONE",
@@ -2856,13 +2855,13 @@ function testBuildPipelineStatusGrid(){
 
   const ok =
     grid.length === 6 &&
-    grid[0].length === 14 &&
+    grid[0].length === 13 &&
     grid[0][0] === "Pipeline Status" &&
     grid[0][1] === "Status" &&
     grid[0][2] === "Master Update" &&
-    grid[0][11] === "Target_REP" &&
-    grid[0][12] === "S&M_REP" &&
-    grid[0][13] === "FY_REP" &&
+    grid[0][10] === "Target_REP" &&
+    grid[0][11] === "S&M_REP" &&
+    grid[0][12] === "FY_REP" &&
     grid[1][0] === "New Leads" &&
     grid[1][1] === "RUNNING · started 2026-08-04 10:00:00 KST" &&
     grid[1][2] === "DONE" && grid[1][3] === "RUNNING" && grid[1][4] === "" &&
@@ -2871,13 +2870,13 @@ function testBuildPipelineStatusGrid(){
     grid[2][2] === "DONE" && grid[2][3] === "" && grid[2][8] === "FAILED" &&
     grid[3][0] === "IC Funnel" &&
     grid[3][1] === "DONE · 2026-08-26 08:01:00 KST" &&
-    grid[3][2] === "" && grid[3][13] === "" && // 세부 단계 없음 — 전부 빈 문자열
+    grid[3][2] === "" && grid[3][12] === "" && // 세부 단계 없음 — 전부 빈 문자열
     grid[4][0] === "SAL" &&
     grid[4][1] === "DONE · 2026-09-02 08:01:00 KST" &&
-    grid[4][2] === "" && grid[4][13] === "" && // 세부 단계 없음 — 전부 빈 문자열
+    grid[4][2] === "" && grid[4][12] === "" && // 세부 단계 없음 — 전부 빈 문자열
     grid[5][0] === "Revenue" &&
     grid[5][1] === "DONE · 2026-09-02 08:03:00 KST" &&
-    grid[5][2] === "" && grid[5][13] === ""; // 세부 단계 없음 — 전부 빈 문자열
+    grid[5][2] === "" && grid[5][12] === ""; // 세부 단계 없음 — 전부 빈 문자열
 
   Logger.log(
     "testBuildPipelineStatusGrid: " + (ok ? "PASS" : "FAIL") +

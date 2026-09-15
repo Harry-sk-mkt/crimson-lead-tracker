@@ -9,9 +9,17 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.67.0
+ * v1.68.0
  *
  * Change Log
+ * v1.68.0 (2026-09-15)
+ * - **`PIPELINE.STATUS_COLUMNS`에서 `campaignSpend` 컬럼 제거** — 사용자
+ *   지적으로 `refreshCampaignSpend_()`(Ad_Spend_Cache 전체 재계산, Meta+Naver
+ *   이력+Kakao)가 파이프라인 tail 안에서 4시간 주기 `periodicRefreshAdSpendCache_()`
+ *   와 완전히 중복 실행되고 있었음이 확인돼(외부 API 이력 스캔을 매 Import마다
+ *   반복) tail에서 완전히 제거(`MASTER_002_PipelineAsync.js` 변경 참고) — 더
+ *   이상 파이프라인이 이 단계를 채우지 않으므로 README Pipeline Status 표에서도
+ *   제거. Ad_Spend_Cache 최신화는 이제 독립 4시간 주기 트리거 하나로만 처리.
  * v1.67.0 (2026-09-08)
  * - **`FYREP.MARKETING_SOURCE.TABS`에 27 추가**(사용자 리포트 — "FY_REP에
  *   AUG spending이 없어") — FY27 탭이 아예 등록 안 돼 있어
@@ -913,7 +921,6 @@ const CONFIG = {
       { KEY: "bofuOps", HEADER: "BOFU_OPS" },
       { KEY: "searchOps", HEADER: "Search_OPS" },
       { KEY: "contentOps", HEADER: "Content_OPS" },
-      { KEY: "campaignSpend", HEADER: "Campaign Spend" },
       { KEY: "acqRep", HEADER: "ACQ_REP" },
       { KEY: "newP1Rep", HEADER: "NewP1_REP" },
       { KEY: "targetRep", HEADER: "Target_REP" },

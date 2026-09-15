@@ -86,7 +86,74 @@
     Tracker) API 호출이 지연되는 현상으로 사용자 재현 테스트를 통해 확정**. 자주 일어나는
     패턴은 아니라 낮은 우선순위로 두되, 겹치면 30분 제한에 근접하는 건 사실이므로 완전히
     무시하지 말 것 — 필요 시 파이프라인 큐잉 간 최소 대기시간 도입 등 후속 조치는 별도 결정
-    필요. **✅ 항목 4(딕셔너리 증분)도 2026-09-09 최종 검증 완료** — 2026-09-08 신규 0행
+    필요.
+    **🟡 2026-09-15 재발 조사 — "파이프라인 겹침" 가설은 이번 사례에서 기각, 실제 원인은
+    다른 곳에서 확정·수정**: 같은 현상이 `runSALPipelineTail` 안의 `generateTargetReport_`
+    에서 재현(142.0s, 단독 실행 시 39.79s)돼 재조사 착수. 사용자가 "Apps Script Executions
+    탭에서 이미 계속 겹치는 경합이 보인다"고 확인해 처음엔 위 2026-08-05 사례와 동일한
+    "파이프라인/트리거 겹침" 가설로 조사했으나, **실제 Executions 타임스탬프를 대조한 결과
+    이번 SAL tail 실행 구간(5:47:26~5:53:24 AM)에는 다른 실행이 전혀 겹치지 않았음**(직전
+    `periodicRefreshRevenue_`는 5:34:39에 이미 종료) — "파이프라인 겹침"이 이번 건의 원인은
+    아님이 로그로 확인됨. 대신 사용자가 Executions 로그에서 `periodicRefreshRevenue_`
+    (149s~1506s)/`periodicRefreshAdSpendCache_`(65s~1126s)가 서로 안 겹치는 시간대에도
+    극심하게 널뛰는 것을 발견, "Naver Search에서 계속 긁어오는" 것을 직접 지적 — 코드
+    확인 결과 `computeNaverSearchAdSpendHistorySummary_()`(AD_003_NaverSearch.js)가
+    `BACKFILL_START`(2022-09)부터 **매번** 전체 월(48개월+)을 순회하며 API를 호출하고,
+    Naver `/stats`의 공식 제약(최근 730일)보다 오래된 절반가량은 매번 400을 받은 뒤에야
+    건너뛰고 있었음(호출 자체는 항상 발생 — Naver 응답 지연이 그대로 실행시간 변동성에
+    반영됨, `refreshCampaignSpend_()`/`periodicRefreshAdSpendCache_()` 양쪽에서 반복
+    호출되므로 누적 낭비가 큼). **✅ 수정 완료(2026-09-15)**: 신규
+    `filterMonthsWithinNaverStatsLookbackWindow_()`(순수 함수, `AD.NAVER_SEARCH.API.
+    STATS_LOOKBACK_DAYS`=730 신규, `AD_001_Config.js` v1.25.0)로 범위 밖 월은 API 호출
+    전에 사전 필터링 — `AD_003_NaverSearch.js` v2.17.0, 기존 400 캐치는 안전망으로 유지,
+    신규 테스트 `testFilterMonthsWithinNaverStatsLookbackWindow()` PASS 확인.
+    `TARGET_002_Report.js`는 진단용 계측만 추가했다가(v1.10.1) 원인이 이쪽으로 확정돼
+    코드 변경 없이 원복(v1.10.2). **실사용 재검증 필요** — 다음 Import 파이프라인/주기
+    트리거 실행에서 Naver 관련 API 호출 수·소요시간이 실제로 줄었는지, 전체 실행시간
+    변동성이 완화됐는지 확인 전까지 완료로 간주하지 말 것. 원래의 "SAL 직후 파이프라인이
+    겹쳐 돌 때 외부 API 지연" 가설(2026-08-05 사례)은 별개 현상으로 남아있을 수 있으나
+    이번 재조사로는 재현되지 않음 — 낮은 우선순위 유지.
+    **✅ 2026-09-15 추가 수정 — Ad_Spend_Cache 재계산 자체가 파이프라인 tail과 4시간
+    주기 트리거에서 중복 실행되던 구조적 문제 해소(사용자 지적)**: 위 Naver 조사 중
+    사용자가 "Ad_Spend_Cache를 외부로 뺀 게(4시간 주기 `periodicRefreshAdSpendCache_()`
+    도입, 2026-08-08) 애초에 이 무거운 과정을 미리 돌려두려던 거잖아"라고 지적 — 확인
+    결과 `refreshCampaignSpend_()`(Leads/MTA 파이프라인 tail 맨 앞)가 여전히 매번
+    `refreshAdSpendCache_()`(Meta+Naver 이력+Kakao Channel 전체 재계산)를 직접
+    호출하고 있어, 4시간 주기 트리거와 완전히 같은 무거운 작업을 파이프라인마다
+    반복하고 있었음(주기 트리거를 둔 원래 의도가 무력화된 상태) — 짧은 간격의 연속
+    Import(Leads→MTA→SAL→IC Funnel)마다 이 중복이 그대로 누적. **수정**:
+    `refreshCampaignSpend_()` 단계를 Leads/MTA 파이프라인 tail에서 완전히 제거하고
+    함수 자체도 삭제(다른 호출부 없음 확인 완료, 수동 재계산은 기존
+    `runRefreshAdSpendCache()`로 계속 가능) — `MASTER_002_PipelineAsync.js` v1.31.0.
+    README Pipeline Status 표의 "Campaign Spend" 컬럼도 `CORE_001_Config.js`
+    (v1.68.0)에서 함께 제거, `testBuildPipelineStatusGrid()` 기대값(컬럼 수 14→13)
+    갱신·PASS 확인. `AD_006_KakaoMoments.js`(v1.24.0) 상단 설계 배경 주석도 "토큰
+    자동 갱신의 유일한 수단"이 이제 `periodicRefreshAdSpendCache_()`임을 반영해 갱신.
+    **트레이드오프(사용자 확정)**: Import 직후 `refreshTargetActuals_()`/
+    `syncMTAFunnelToOPS_()`가 참조하는 Ad_Spend_Cache가 최대 4시간 지연될 수 있음 —
+    실시간성보다 중복 제거를 우선. **실사용 재검증 필요** — 다음 Leads/MTA Import
+    파이프라인 실행시간이 실제로 줄었는지, README Pipeline Status 표가 13컬럼으로
+    정상 렌더링되는지 확인 전까지 완료로 간주하지 말 것.
+    **✅ 2026-09-15 세 번째 수정 — `refreshTargetActuals_()`의 같은 tail 내
+    자기잠식(self-clobbering) 제거**: 사용자가 2026-09-14 `runLeadsPipelineTail`
+    로그(`[TIMING] LEADS/refreshTargetActuals_ completed in 12942ms`)를 보고 "더
+    분리할 게 남았는지" 질문 — 확인 결과 `refreshTargetActuals_()`(Target_REP Actual
+    컬럼만 부분 갱신)가 실행된 지 수십 초 후 **같은 tail 실행 안에서** `generateTargetReport_()`
+    (`refreshReportGenerate_()`가 호출)가 `clearTargetReportArea_()`로 시트를 통째로
+    지우고 Target/Actual 전체를 다시 써서, 방금 `refreshTargetActuals_()`가 쓴 값을
+    그대로 덮어쓰고 있었음 — Campaign Spend와 달리 완전 중복은 아니고
+    "generateTargetReport_ 실패 시 최소한의 부분 갱신을 남긴다"는 안전망 역할이
+    있었으나, **사용자가 속도를 우선해 제거 확정**. `runLeadsPipelineTail()`
+    (`MASTER_002_PipelineAsync.js` v1.32.0)/`syncMTAFunnelToOPS_()`
+    (`MASTER_003_MTAFunnelSync.js` v1.12.0)/`syncICFunnelToOPS_()`
+    (`MASTER_009_ICFunnelSync.js` v1.10.0) 세 곳에서 호출 제거(SAL tail은 애초에
+    이 호출이 없어 해당 없음). `rebuildLeadsMaster()`/`rebuildMTAMaster()`
+    (`MASTER_004_MasterBuild.js`, 이 뒤에 generateTargetReport_가 이어지지 않는
+    별도 수동 재구축 경로)의 호출은 유일한 갱신 수단이라 그대로 유지 — 임의로
+    건드리지 않음. **실사용 재검증 필요** — 다음 Leads/MTA/IC Funnel Import 후
+    Target_REP Actual 값이 여전히 정확한지(generateTargetReport_가 정상 완주한다는
+    전제하에 이론상 최종 결과는 동일해야 함), 실행시간이 실제로 더 줄었는지 확인 전까지
+    완료로 간주하지 말 것. **✅ 항목 4(딕셔너리 증분)도 2026-09-09 최종 검증 완료** — 2026-09-08 신규 0행
     사이클에 이어, 같은 날 오후 1시 사이클(당일 Leads Import 이후) 로그에서 "Leads 신규
     61행 / MTA 신규 0행 반영"이 실제 Import 건수(61건)와 정확히 일치함을 확인, 증분 채굴
     정확성까지 확정. **5개 항목 전부 검증 완료로 exec-plan을
@@ -1217,5 +1284,6 @@
 48. ~~외부 P1 리스트 시트 기반 Lead Priority 불일치 검출 및 플래깅~~ — **✅ 완료(2026-09-08 실 Import 검증까지 마무리)** (2026-09-03 등록) — 외부 "P1 School List" 스프레드시트(`15OVBIzK40s7a2mOCPDs9mrINpS9MUFrUse02KtQqW4Q`, 사용자 확정 — E열 대표 학교명 + N열부터 오기입 변형 표기)와 Leads_OPS를 대조해, School Name이 P1 리스트에 있는데 effective Priority(`isEffectiveP1_()` 재사용, Priority Override 우선)가 P1이 아닌 리드를 `P1_School_Mismatch_QA` 시트에 플래깅(사용자 확정 — 이메일 알림 없음, Leads Import 파이프라인에 자동 편입). `runCheckP1SchoolMismatch()` 실행 결과 P1 학교 572개(별칭 포함)/Leads_OPS 36,628건 대조, 불일치 2,116건 기록 — 사용자가 상위 10건 육안 대조해 School Name 매칭 정확함을 확인(2026-09-04). 역방향 체크(`Not_Striked`, 2026-09-04 이후 신규 P1 리드 중 리스트에 없는 학교)도 함께 구현. **✅ 2026-09-08 실 Leads Import로 최종 검증**: `runLeadsPipelineTail()` 안에서 `checkP1SchoolMismatch_` 자동 편입 확인(정방향 불일치 2,119건, 역방향 Not_Striked 신규 학교 13건 — 배포 후 첫 실제 양성 케이스), 에러 없음. 상세: `docs/exec-plans/completed/2026-09-04-p1-school-mismatch-check.md`.
 49. ~~Naver Search API 누적 캐시 시트 외부 Master_DB 스프레드시트로 이관~~ — 구현 및 실행 검증 완료(2026-09-04). `Naver_Search_Campaign_Stats_Cache`/`Ad_Spend_Cache`를 기존 캠페인 시트(Meta_Raw/NaverSA_Raw가 있는 Master_DB 폴더 파일, `1zOZGwnsm0GhLGGe5rATu8jR5WxAQVx7YmmiPZVU88jY`, 사용자 확정 — 새 파일 안 만들고 탭만 추가)로 이관. 재계산 가능한 캐시라는 성질을 이용해 Raw 이관과 달리 별도 복사 스크립트 없이 read/write 함수의 대상만 외부 스프레드시트로 전환(`AD_003_NaverSearch.js` v2.16.0/`AD_004_SpendCache.js` v1.6.0의 opener 함수 신규, `JL_003_Write.js` v1.1.0도 함께 전환). `runRefreshAdSpendCache()`(222행)/`runRefreshNaverSearchAdCampaignStatsCache()`(9개 캠페인) 실행 결과 외부 시트에 탭 정상 생성 확인, ACQ_REP Generate 재실행도 정상 값 확인(사용자 확인, 2026-09-04). 상세: `docs/exec-plans/completed/2026-09-04-ad-spend-cache-external-migration.md`. **남은 낮은 우선순위 항목**: 메인 스프레드시트의 기존 숨김 탭 2개는 안정화 확인 후 별도 삭제(당장 안 함).
 50. **`buildLeadsOPS()`(Leads_OPS 병합) 증분화 — 설계/구현 미착수(TODO)** (2026-09-08 등록, 근거는 2026-09-04 세션에서 이미 논의) — `docs/exec-plans/active/2026-09-03-performance-optimization.md` 항목 5(청크 처리)에서 다룬 5대 성능 개선 중, 사용자가 명시적으로 범위 밖으로 보류한 "더 어려운 절반"이 바로 이것 — `mergeOPS()`(`OPS_004_Merge.js`)의 중복 이메일 해소 로직 자체는 매 Import마다 여전히 Leads_Master(36,741행)+Leads_OPS(36,689행) 전체를 재스캔한다(항목 1~4는 Raw/딕셔너리 레이어의 전체 스캔을 없앴지만 이 레이어는 그대로). 2026-09-08 실 Import 실측: `buildLeadsOPS()`가 61건 신규 처리에 101.18초 소요 — 신규 건수와 무관하게 전체 재스캔 비용이 고정으로 붙는 구조. **보류 사유(사용자 확정, 2026-09-04)**: Leads_OPS는 거의 모든 리포트가 참조하는 핵심 테이블이라 실수 시 파급이 크다는 이유로 청크 처리(안전장치)만 우선 적용하고 증분 병합은 별도 설계/검증 없이는 착수하지 않기로 함(`[[feedback_pause_before_core_merge_logic_change]]` 참고). **착수 시 최소 설계해야 할 것(exec-plan에 이미 기록)**: (1) 이메일이 이미 OPS에 있는데 새 배치 행의 Create Date가 기존보다 이르면 SF_COLUMNS 교체(MANUAL/SYNC_COLUMNS는 계속 보존), 이르지 않으면 duplicate로 카운트만 하고 기존 행 불변, (2) 같은 배치 내 신규 이메일 중복은 기존 로직 그대로 재사용 가능, (3) 실 스프레드시트 데이터로 대조 검증 필수(순수 함수 테스트만으로는 불충분). 임의로 착수하지 말 것 — 설계 논의 먼저.
+51. **2026-09-11 Executions 로그 — 5개 항목 exec-plan 종료(#42/#50 관련) 이후에도 체감 개선 없음, 원인 미조사(TODO)** — 사용자가 그날 Apps Script Executions 대시보드를 그대로 붙여넣으며 "시간이 너무 전체적으로 다 오래걸려서 재설계한 느낌을 못 받는다"고 지적. 로그상 실측치(같은 날 여러 건): `runLeadsPipelineTail` Editor 695.136s / Time-Driven 691.479s(둘 다 약 11분 반), `runMTAPipelineTail` Time-Driven 462.245s(약 7분 42초), `periodicRefreshAdSpendCache_` Time-Driven 697.267s(약 11분 37초), `runRevenuePipelineTail` Time-Driven 217.846s. **`docs/PerformanceBenchmark.md`(2026-09-03) 베이스라인과 대조 결과, 실제로 개선은커녕 악화로 보임**: 같은 문서의 2026-09-03 실측(S&M_REP 증분화 *이전*)이 `runLeadsPipelineTail` 전체 612s(10m12s)였고, 같은 날 S&M_REP 증분화로 Report 레이어에서만 약 115.8s(119.8s→4.0s)가 줄었으니 그 직후 기대치는 대략 497s(8m17s) 수준이어야 하는데, 2026-09-11 실측은 오히려 691~695s로 베이스라인(612s)보다도 13% 더 걸림 — 기대치 대비로는 약 40% 더 걸리는 셈. **원인 미확정, 아래는 후보일 뿐(임의로 확정하지 말 것)**: (1) 데이터 행수 자체가 계속 늘고 있음(#50에 이미 기록된 `buildLeadsOPS()` 전체 재스캔 비용이 대표적 — 이 항목은 애초에 이번 exec-plan 범위 밖으로 보류됐던 부분), (2) #18에 이미 기록된 "파이프라인 겹침 시 락 경합으로 외부 API 호출 지연" 패턴이 이번에도 작용했을 가능성(이 로그만으로는 여러 트리거가 실제로 겹쳐 돌았는지 확인 불가), (3) `periodicRefreshAdSpendCache_`(697s)는 `docs/PerformanceBenchmark.md`에 베이스라인 자체가 없어 이 값이 원래 정상 범위인지조차 판단 불가. **다음에 조사할 때 확인할 것**: 같은 시간대에 다른 파이프라인 tail이 겹쳐 돌고 있었는지(Executions 로그 Start Time 전체 대조), `[TIMING]` Logger 계측(2026-09-03에 이미 도입됨, `MASTER_002_PipelineAsync.js`)으로 이번 실행의 단계별 분해가 가능한지. 사용자 요청으로 지금은 조사 없이 이 관찰만 기록.
 
 
