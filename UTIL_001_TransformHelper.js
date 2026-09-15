@@ -8,9 +8,15 @@
  * getQuarter/getWeek/getMonthKey/getMonthText/getBusinessSegment 등.
  *
  * Version
- * v1.21.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-09-15)
+ * - **`isFYRangeCacheFreshForToday_()` 신규(순수 함수)** — `findFiscalYearRange_()`
+ *   (ACQREP_001_Report.js)/`findNewP1FiscalYearRange_()`(NEWP1REP_001_Report.js)가
+ *   매 파이프라인 tail마다 Leads_OPS/MTA_Master 전체를 재스캔하던 낭비를 하루
+ *   1회 캐싱으로 줄이기 위한 캐시 유효성 판정 로직(`docs/OpenItems.md` #18).
+ *   신규 테스트 `testIsFYRangeCacheFreshForToday()`.
  * v1.21.0 (2026-09-04)
  * - **getBusinessSegment() — SEARCH_CATCHALL_LEAD_SOURCE_OVERRIDES 순서 버그
  *   수정(OpenItems.md #29)**. leadSource="paid social"/"affiliate
@@ -2837,5 +2843,90 @@ function testApplyPriorityDowngradeGuard(){
     funnelByLeadId.L1.leadPriority === "Priority 3"; // 입력 불변(순수 함수 확인)
 
   Logger.log("testApplyPriorityDowngradeGuard: " + (pass ? "PASS" : "FAIL") + " result=" + JSON.stringify(result));
+
+}
+
+
+/**
+ * ==========================================================
+ * Is FY Range Cache Fresh For Today (순수 함수)
+ *
+ * WHY (2026-09-15 — Engine 분리 검토 중 발견한 네 번째 "명백한 낭비")
+ * `findFiscalYearRange_()`(ACQREP_001_Report.js)/`findNewP1FiscalYearRange_()`
+ * (NEWP1REP_001_Report.js)가 Leads_OPS/MTA_Master 전체를 `getDataRange().
+ * getValues()`로 매 파이프라인 tail마다(하루 여러 번) 통째로 스캔해 min/max
+ * Fiscal Year를 구하는데, 이 값은 실제로는 거의 안 바뀜(min은 한 번 정해지면
+ * 고정, max는 매년 8월 한 번만 변경) — `refreshNaverSearchAdCampaignStatsCache_()`
+ * (AD_003_NaverSearch.js)의 "오늘 이미 갱신됨" 캐시와 동일한 원리로, 캐시
+ * 유효성 판정만 순수 함수로 분리해 두 IO 래퍼(ACQ/NewP1)가 각자 재사용한다
+ * (두 함수가 스캔하는 시트 범위가 달라 값이 다를 수 있으므로 캐시 자체는
+ * 통합하지 않고, 이 판정 로직만 공유).
+ *
+ * INPUT
+ * cacheRaw : string  PropertiesService 저장값 — JSON `{min, max, computedDate}`
+ *   문자열 또는 null/빈 문자열(캐시 없음)
+ * todayStr : string  "yyyy-MM-dd" (호출부에서 todayDateString_()로 계산)
+ *
+ * OUTPUT
+ * { fresh: boolean, min?: number, max?: number }  fresh=true일 때만 min/max 포함
+ *
+ * TEST
+ * testIsFYRangeCacheFreshForToday() 참고
+ * ==========================================================
+ */
+function isFYRangeCacheFreshForToday_(cacheRaw, todayStr){
+
+  if(!cacheRaw) return { fresh: false };
+
+  let parsed;
+
+  try{
+    parsed = JSON.parse(cacheRaw);
+  } catch(e){
+    return { fresh: false };
+  }
+
+  if(!parsed || typeof parsed.min !== "number" || typeof parsed.max !== "number" ||
+     parsed.computedDate !== todayStr){
+    return { fresh: false };
+  }
+
+  return { fresh: true, min: parsed.min, max: parsed.max };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isFYRangeCacheFreshForToday_()
+ * ==========================================================
+ */
+function testIsFYRangeCacheFreshForToday(){
+
+  const noCache = isFYRangeCacheFreshForToday_(null, "2026-09-15");
+  const noCacheOk = noCache.fresh === false;
+
+  const malformed = isFYRangeCacheFreshForToday_("not json", "2026-09-15");
+  const malformedOk = malformed.fresh === false;
+
+  const stale = isFYRangeCacheFreshForToday_(
+    JSON.stringify({ min: 18, max: 27, computedDate: "2026-09-14" }), "2026-09-15"
+  );
+  const staleOk = stale.fresh === false;
+
+  const fresh = isFYRangeCacheFreshForToday_(
+    JSON.stringify({ min: 18, max: 27, computedDate: "2026-09-15" }), "2026-09-15"
+  );
+  const freshOk = fresh.fresh === true && fresh.min === 18 && fresh.max === 27;
+
+  const pass = noCacheOk && malformedOk && staleOk && freshOk;
+
+  Logger.log(
+    "testIsFYRangeCacheFreshForToday: " + (pass ? "PASS" : "FAIL") +
+    " noCache=" + JSON.stringify(noCache) +
+    ", malformed=" + JSON.stringify(malformed) +
+    ", stale=" + JSON.stringify(stale) +
+    ", fresh=" + JSON.stringify(fresh)
+  );
 
 }

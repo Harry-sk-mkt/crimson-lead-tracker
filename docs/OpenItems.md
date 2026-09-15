@@ -153,7 +153,47 @@
     건드리지 않음. **실사용 재검증 필요** — 다음 Leads/MTA/IC Funnel Import 후
     Target_REP Actual 값이 여전히 정확한지(generateTargetReport_가 정상 완주한다는
     전제하에 이론상 최종 결과는 동일해야 함), 실행시간이 실제로 더 줄었는지 확인 전까지
-    완료로 간주하지 말 것. **✅ 항목 4(딕셔너리 증분)도 2026-09-09 최종 검증 완료** — 2026-09-08 신규 0행
+    완료로 간주하지 말 것.
+    **✅ 2026-09-15 네 번째 수정 — `refreshReportFYDropdowns_`의 중복 전체 스캔에
+    하루 1회 캐싱 도입**: 사용자가 Engine 6종 독립 트리거 분리(Axis A)를 다시 검토하자고
+    요청 — 설계를 깊이 파다가 (a) OPS hop/Report hop을 진짜 병렬로 돌리려면 이
+    프로젝트에 한 번도 안 쓰인 `LockService` 기반 rendezvous가 필요해 새로운 레이스
+    컨디션 클래스가 생기고, (b) Engine 6종 자체는 시간을 줄이는 게 아니라 트리거
+    경계만 하나 늘리는 것이라(순수 안전마진용) 기대했던 "체감 실행시간 단축"이
+    hop 전환 지연에 상쇄될 수 있음을 발견 — 사용자가 Engine 분리는 보류하고 "더
+    명백한 낭비가 있는지" 재조사를 요청. 그 결과 `refreshReportFYDropdowns_()`
+    (30~44s, 오늘 실측)가 `findFiscalYearRange_()`(ACQREP_001_Report.js —
+    Leads_OPS 36,831행+MTA_Master 86,022행 전체 스캔)와 `findNewP1FiscalYearRange_()`
+    (NEWP1REP_001_Report.js — Leads_OPS를 **완전히 같은 로직으로 또 한 번** 독립
+    스캔) 두 함수의 전체 시트 재스캔 때문임을 확인 — 이 min/max FY 값은 min이
+    한 번 정해지면 고정, max는 매년 8월 한 번만 바뀌어 하루 안에서는 사실상
+    불변인데도 4개 파이프라인(Leads/MTA/SAL/IC Funnel)이 하루 여러 번 돌 때마다
+    매번 12만+ 행을 재스캔하고 있었음 — Naver 캐시(#18 세 번째 수정)와 동일한
+    성격의 낭비. **수정**: 캐시 유효성 판정을 순수 함수 `isFYRangeCacheFreshForToday_()`
+    (`UTIL_001_TransformHelper.js` v1.22.0, 신규 테스트
+    `testIsFYRangeCacheFreshForToday()` 4케이스 통과)로 분리해 두 함수(각자 스캔
+    범위가 달라 값이 다를 수 있어 캐시는 통합하지 않고 판정 로직만 공유)에서
+    재사용 — `ACQREP_001_Report.js` v1.21.0/`NEWP1REP_001_Report.js` v1.8.0,
+    `CONFIG.PROPERTIES.ACQ_FY_RANGE_CACHE`/`NEWP1_FY_RANGE_CACHE` 신규
+    (`CORE_001_Config.js` v1.69.0). 출력값/기존 스캔 로직 자체는 무변경 — 같은 날
+    두 번째 이후 호출부터 스캔을 건너뛰고 캐시만 반환. **Engine 6종 독립 트리거
+    분리(Axis A)는 계속 보류** — 위 레이스 컨디션/hop 지연 상쇄 우려로 착수 안 함,
+    필요해지면 별도 논의.
+    **✅ 실사용 검증 완료(2026-09-15, 통제된 캐시 삭제→재스캔→재사용 테스트)**:
+    배포 직후 첫 파이프라인 실행에서 461ms로 끝나 원인이 불명확했던 것과 별개로,
+    `runClearFYRangeCaches()`(`ACQREP_001_Report.js`, 신규 진단용 수동 실행 함수)
+    로 캐시를 강제 삭제한 뒤 `setupACQDropdowns()`를 재실행 — **캐시 미스 시
+    29.86초**(기존 30~44초 실측과 일치, 스캔 자체가 원래 느린 게 맞음을 재확인)
+    걸렸고, 바로 이어서 한 번 더 실행하니 `findFiscalYearRange_: 캐시 사용(...) —
+    전체 스캔 생략` 로그와 함께 즉시 완료 — FY 범위 값(FY18~FY27)도 두 실행에서
+    동일. 캐시 히트/미스 진단 로그(`ACQREP_001_Report.js`/`NEWP1REP_001_Report.js`
+    v1.21.1/v1.8.1)로 원인을 명확히 구분해 검증 완료. 캐시의 "오늘" 기준은
+    `todayDateString_()`(스크립트 타임존 America/New_York) — Naver 캐시와 동일
+    관례, 한국 시간 기준 날짜와 다르게 표시될 수 있으나 정확도엔 영향 없음(참고
+    사항으로 기록, 문제 아님). 최초 배포 직후 첫 실행이 461ms로 나온 원인은
+    끝내 특정 못 했으나, 이후 통제된 테스트가 양방향(캐시 미스=느림/캐시
+    히트=빠름)으로 명확히 재현돼 로직 정합성 자체는 확실히 확인됨.
+    **✅ 항목 4(딕셔너리 증분)도 2026-09-09 최종 검증 완료** — 2026-09-08 신규 0행
     사이클에 이어, 같은 날 오후 1시 사이클(당일 Leads Import 이후) 로그에서 "Leads 신규
     61행 / MTA 신규 0행 반영"이 실제 Import 건수(61건)와 정확히 일치함을 확인, 증분 채굴
     정확성까지 확정. **5개 항목 전부 검증 완료로 exec-plan을

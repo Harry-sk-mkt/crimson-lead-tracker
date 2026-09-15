@@ -9,9 +9,15 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.68.0
+ * v1.69.0
  *
  * Change Log
+ * v1.69.0 (2026-09-15)
+ * - **`PROPERTIES.ACQ_FY_RANGE_CACHE`/`NEWP1_FY_RANGE_CACHE` 신규** —
+ *   `findFiscalYearRange_()`/`findNewP1FiscalYearRange_()`가 매 파이프라인
+ *   tail마다 Leads_OPS/MTA_Master 전체를 재스캔하던 낭비를 하루 1회 캐싱으로
+ *   줄이기 위함(`docs/OpenItems.md` #18, `UTIL_001_TransformHelper.js`
+ *   `isFYRangeCacheFreshForToday_()` 참고).
  * v1.68.0 (2026-09-15)
  * - **`PIPELINE.STATUS_COLUMNS`에서 `campaignSpend` 컬럼 제거** — 사용자
  *   지적으로 `refreshCampaignSpend_()`(Ad_Spend_Cache 전체 재계산, Meta+Naver
@@ -847,7 +853,13 @@ const CONFIG = {
     UTM_PROGRAM_DICT_LEADS_LAST_ROW: "UTM_PROGRAM_DICT_LEADS_LAST_PROCESSED_ROW",
     UTM_PROGRAM_DICT_MTA_LAST_ROW: "UTM_PROGRAM_DICT_MTA_LAST_PROCESSED_ROW",
     PROGRAM_SEGMENT_DICT_LEADS_LAST_ROW: "PROGRAM_SEGMENT_DICT_LEADS_LAST_PROCESSED_ROW",
-    PROGRAM_SEGMENT_DICT_MTA_LAST_ROW: "PROGRAM_SEGMENT_DICT_MTA_LAST_PROCESSED_ROW"
+    PROGRAM_SEGMENT_DICT_MTA_LAST_ROW: "PROGRAM_SEGMENT_DICT_MTA_LAST_PROCESSED_ROW",
+
+    // 2026-09-15 추가(docs/OpenItems.md #18) — findFiscalYearRange_()/
+    // findNewP1FiscalYearRange_()의 하루 1회 캐시. JSON `{min, max, computedDate}`
+    // 문자열, isFYRangeCacheFreshForToday_()(UTIL_001_TransformHelper.js)가 판정.
+    ACQ_FY_RANGE_CACHE: "ACQ_FY_RANGE_CACHE",
+    NEWP1_FY_RANGE_CACHE: "NEWP1_FY_RANGE_CACHE"
 
   },
 

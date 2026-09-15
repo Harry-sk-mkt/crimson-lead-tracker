@@ -23,9 +23,17 @@
  * 20 Reporting (NewP1)
  *
  * Version
- * v1.7.1
+ * v1.8.1
  *
  * Change Log
+ * v1.8.1 (2026-09-15)
+ * - 캐시 히트/미스 진단 로그 추가(로직 무변경) — `ACQREP_001_Report.js` v1.21.1과
+ *   동일 배경(캐시 덕분인지 다른 변경 때문인지 구분 필요).
+ * v1.8.0 (2026-09-15)
+ * - **`findNewP1FiscalYearRange_()`에 하루 1회 캐싱 추가** — Leads_OPS 전체
+ *   스캔을 매 파이프라인 tail마다 반복하던 것을 하루 1회로 줄임(`docs/
+ *   OpenItems.md` #18, `CONFIG.PROPERTIES.NEWP1_FY_RANGE_CACHE` 신규,
+ *   `isFYRangeCacheFreshForToday_()` 재사용). 출력값/기존 스캔 로직은 무변경.
  * v1.7.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `40_NewP1Report.js` → 신규 `NEWP1REP_001_Report.js`, 코드 내용 변경 없음.
  * v1.7.0 (2026-08-09)
@@ -801,9 +809,33 @@ function testMergeRevenueIntoNewP1EngineRows(){
 /**
  * ==========================================================
  * Find NewP1 Fiscal Year Range (Leads_OPS Create Date 기준)
+ *
+ * WHY (2026-09-15 — 하루 1회 캐싱 추가, docs/OpenItems.md #18)
+ * `findFiscalYearRange_()`(ACQREP_001_Report.js)와 동일한 이유·동일 패턴 —
+ * Leads_OPS 전체 스캔을 매 파이프라인 tail마다 반복하는 대신 하루 1회만
+ * 실제 스캔. ACQ 쪽과 스캔 대상(이쪽은 Leads_OPS만, ACQ는 +MTA_Master)이
+ * 달라 값이 다를 수 있으므로 캐시는 통합하지 않고 별도 키 사용 — 캐시
+ * 판정 로직(`isFYRangeCacheFreshForToday_()`)만 공유.
  * ==========================================================
  */
 function findNewP1FiscalYearRange_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const todayStr = todayDateString_();
+
+  const cached = isFYRangeCacheFreshForToday_(
+    props.getProperty(CONFIG.PROPERTIES.NEWP1_FY_RANGE_CACHE), todayStr
+  );
+
+  if(cached.fresh){
+    Logger.log(
+      "findNewP1FiscalYearRange_: 캐시 사용(오늘 " + todayStr + " 이미 계산됨, FY" +
+      cached.min + "~FY" + cached.max + ") — 전체 스캔 생략."
+    );
+    return { min: cached.min, max: cached.max };
+  }
+
+  const scanStartMs = Date.now();
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OPS.SHEET.OPS);
@@ -848,6 +880,16 @@ function findNewP1FiscalYearRange_(){
 
   if(min === null) min = currentFY;
   if(max === null || max < currentFY) max = currentFY;
+
+  props.setProperty(
+    CONFIG.PROPERTIES.NEWP1_FY_RANGE_CACHE,
+    JSON.stringify({ min: min, max: max, computedDate: todayStr })
+  );
+
+  Logger.log(
+    "findNewP1FiscalYearRange_: 전체 스캔 실행(캐시 없음/오늘 아님) — FY" + min +
+    "~FY" + max + ", " + (Date.now() - scanStartMs) + "ms."
+  );
 
   return { min: min, max: max };
 

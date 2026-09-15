@@ -17,9 +17,24 @@
  * 20 Reporting
  *
  * Version
- * v1.20.0
+ * v1.21.1
  *
  * Change Log
+ * v1.21.1 (2026-09-15)
+ * - **캐시 히트/미스 진단 로그 추가(로직 무변경) + `runClearFYRangeCaches()`
+ *   신규(진단용 수동 실행 전용)** — v1.21.0 배포 후 첫 실행에서
+ *   `refreshReportFYDropdowns_`가 예상(캐시 미스라 전체 스캔, 30~44초)과 달리
+ *   461ms로 끝나 원인이 새 캐시 덕분인지 다른 변경(`refreshTargetActuals_()`
+ *   제거로 인한 `SpreadsheetApp.flush()` 감소가 읽기 캐시에 영향을 줬을 가능성)
+ *   때문인지 로그만으로 구분이 안 됐음 — 캐시 사용/전체 스캔 각각을 명시적으로
+ *   로그에 남기도록 추가, 스캔 시 소요시간도 함께 기록. `runClearFYRangeCaches()`로
+ *   캐시를 강제 삭제하면 내일까지 안 기다리고 바로 "진짜 캐시 미스" 스캔 시간을
+ *   재측정 가능.
+ * v1.21.0 (2026-09-15)
+ * - **`findFiscalYearRange_()`에 하루 1회 캐싱 추가** — Leads_OPS/MTA_Master
+ *   전체 스캔을 매 파이프라인 tail마다 반복하던 것을 하루 1회로 줄임
+ *   (`docs/OpenItems.md` #18, `CONFIG.PROPERTIES.ACQ_FY_RANGE_CACHE` 신규,
+ *   `isFYRangeCacheFreshForToday_()` 재사용). 출력값/기존 스캔 로직은 무변경.
  * v1.20.0 (2026-09-05)
  * - **`handleReportGenerateEdit()`에 `isPipelineTailRunning_()` 가드 추가**
  *   (`docs/OpenItems.md` #46) — installable onEdit이 파이프라인 tail 자신의
@@ -356,10 +371,34 @@ function setupACQDropdowns(){
 /**
  * ==========================================================
  * Find Fiscal Year Range (실제 데이터 기준 min/max)
- * (변경 없음)
+ *
+ * WHY (2026-09-15 — 하루 1회 캐싱 추가, docs/OpenItems.md #18)
+ * Leads_OPS/MTA_Master 전체를 `getDataRange().getValues()`로 스캔하는 비용이
+ * 커서(수십 초), 매 파이프라인 tail마다 반복하는 대신 하루 1회만 실제 스캔하고
+ * 그 결과를 캐싱한다(`refreshNaverSearchAdCampaignStatsCache_()`와 동일 원리 —
+ * 이 값은 min은 한 번 정해지면 고정, max는 매년 8월 한 번만 바뀌어 하루 안에서는
+ * 사실상 불변). 캐시 판정은 `isFYRangeCacheFreshForToday_()`(순수 함수,
+ * UTIL_001_TransformHelper.js)에 위임 — 스캔 로직 자체(아래 `scan()`)는 무변경.
  * ==========================================================
  */
 function findFiscalYearRange_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const todayStr = todayDateString_();
+
+  const cached = isFYRangeCacheFreshForToday_(
+    props.getProperty(CONFIG.PROPERTIES.ACQ_FY_RANGE_CACHE), todayStr
+  );
+
+  if(cached.fresh){
+    Logger.log(
+      "findFiscalYearRange_: 캐시 사용(오늘 " + todayStr + " 이미 계산됨, FY" +
+      cached.min + "~FY" + cached.max + ") — 전체 스캔 생략."
+    );
+    return { min: cached.min, max: cached.max };
+  }
+
+  const scanStartMs = Date.now();
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -404,7 +443,44 @@ function findFiscalYearRange_(){
   if(min === null) min = currentFY;
   if(max === null || max < currentFY) max = currentFY;
 
+  props.setProperty(
+    CONFIG.PROPERTIES.ACQ_FY_RANGE_CACHE,
+    JSON.stringify({ min: min, max: max, computedDate: todayStr })
+  );
+
+  Logger.log(
+    "findFiscalYearRange_: 전체 스캔 실행(캐시 없음/오늘 아님) — FY" + min +
+    "~FY" + max + ", " + (Date.now() - scanStartMs) + "ms."
+  );
+
   return { min: min, max: max };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — FY Range 캐시 수동 강제 삭제 (Apps Script 편집기에서 직접 실행 전용,
+ * 진단용)
+ *
+ * WHY (2026-09-15)
+ * 캐시 도입 직후 실측에서 `refreshReportFYDropdowns_`가 예상보다 훨씬 빨리
+ * 끝나(461ms) 캐시 덕분인지 다른 변경(`refreshTargetActuals_()` 제거로 인한
+ * `SpreadsheetApp.flush()` 감소) 때문인지 구분이 안 됐음 — 이 함수로 캐시를
+ * 강제로 비우고 `setupACQDropdowns()`/`setupNewP1Dropdowns_()`를 다시 실행하면
+ * "진짜 캐시 미스" 상태의 스캔 소요시간을 즉시 재측정할 수 있다(내일까지
+ * 기다릴 필요 없음). 원인 확정 후에도 필요 시 계속 진단용으로 활용 가능 —
+ * 삭제 예정 없음.
+ * ==========================================================
+ */
+function runClearFYRangeCaches(){
+
+  const props = PropertiesService.getScriptProperties();
+
+  props.deleteProperty(CONFIG.PROPERTIES.ACQ_FY_RANGE_CACHE);
+  props.deleteProperty(CONFIG.PROPERTIES.NEWP1_FY_RANGE_CACHE);
+
+  Logger.log("FY Range 캐시(ACQ/NewP1) 강제 삭제 완료 — 다음 호출은 전체 스캔을 다시 실행합니다.");
 
 }
 

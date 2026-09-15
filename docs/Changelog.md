@@ -1,3 +1,44 @@
+# Changelog — 2026-09-15
+
+## `docs/OpenItems.md` #18 — 파이프라인 실행시간 낭비 4건 발견·수정, 전부 실사용 검증 완료
+
+"재설계 이후에도 체인이 여전히 느리다"는 사용자 보고로 시작된 조사. Executions 로그를
+직접 대조해가며 "파이프라인끼리 겹쳐서 느려진다"는 최초 가설을 하나씩 검증하고 기각하는
+과정에서, 실제로는 네 가지 독립적인 낭비가 있었음을 확인·수정했다.
+
+1. **Naver Search 이력 스캔이 매번 실패 확정 API 호출을 반복** — `computeNaverSearchAdSpendHistorySummary_()`
+   (`AD_003_NaverSearch.js`)가 `BACKFILL_START`(2022-09)부터 매번 전체 48개월+을 순회하며
+   API를 호출하고, Naver의 공식 제약(최근 730일)보다 오래된 절반가량은 매번 400을 받은
+   뒤에야 건너뛰고 있었음. `AD.NAVER_SEARCH.API.STATS_LOOKBACK_DAYS` 신규 도입해 범위 밖
+   월은 API 호출 전에 사전 필터링(v2.17.0). `periodicRefreshAdSpendCache_` 실행 로그로
+   "24개월 건너뜀(...API 호출 없이 사전 필터링)" 확인.
+2. **`refreshCampaignSpend_()`가 4시간 주기 트리거와 완전 중복** — Ad_Spend_Cache 전체
+   재계산(Meta+Naver+Kakao)을 Leads/MTA 파이프라인 tail마다 반복하고 있었는데, 이미
+   `periodicRefreshAdSpendCache_()`(4시간 주기)가 같은 일을 미리 해두고 있어 애초에
+   그 트리거를 둔 목적 자체가 무력화된 상태였음. tail에서 완전히 제거하고 함수 자체도
+   삭제(`MASTER_002_PipelineAsync.js` v1.31.0), README Pipeline Status "Campaign Spend"
+   컬럼도 제거(`CORE_001_Config.js` v1.68.0).
+3. **`refreshTargetActuals_()`가 같은 tail 안에서 자기 결과를 스스로 덮어씀** — Target_REP
+   Actual 컬럼만 부분 갱신한 직후, 같은 실행 안에서 곧이어 `generateTargetReport_()`가
+   시트를 통째로 재작성해 방금 쓴 값을 그대로 덮어쓰고 있었음. Leads/MTA/IC Funnel tail
+   세 곳에서 호출 제거(`MASTER_002_PipelineAsync.js` v1.32.0/`MASTER_003_MTAFunnelSync.js`
+   v1.12.0/`MASTER_009_ICFunnelSync.js` v1.10.0) — 사용자가 "generateTargetReport_ 실패 시
+   최소한의 부분 갱신을 남기는 안전망" 트레이드오프를 감수하고 속도 우선으로 결정.
+4. **`refreshReportFYDropdowns_`가 매번 Leads_OPS/MTA_Master 전체를 3번 재스캔** —
+   `findFiscalYearRange_()`(ACQ)/`findNewP1FiscalYearRange_()`(NewP1) 두 함수가 거의
+   안 바뀌는 min/max Fiscal Year를 매 파이프라인 tail마다 12만+ 행 재스캔으로 다시
+   계산하고 있었음. 하루 1회 캐싱 도입(`isFYRangeCacheFreshForToday_()` 순수 함수,
+   `UTIL_001_TransformHelper.js` v1.22.0/`ACQREP_001_Report.js` v1.21.1/`NEWP1REP_001_
+   Report.js` v1.8.1/`CORE_001_Config.js` v1.69.0). 통제된 캐시 삭제→재스캔→재사용
+   테스트로 캐시 미스 29.86초/캐시 히트 즉시 완료를 직접 확인.
+
+**보류된 것**: Engine 6종 독립 트리거 분리(Axis A)는 설계를 깊이 검토한 끝에 착수하지
+않기로 함 — 진짜 병렬 실행에는 이 프로젝트에 한 번도 안 쓰인 `LockService` 기반
+rendezvous가 필요해 새로운 레이스 컨디션 위험이 생기고, Engine 분리 자체는 총 작업량을
+줄이는 게 아니라 트리거 경계만 늘리는 것이라 기대 효과(체감 속도)가 hop 전환 지연에
+상쇄될 수 있다는 판단. 상세 배경/코드 위치/각 수정의 검증 로그는 `docs/OpenItems.md`
+#18 참고.
+
 # Changelog — 2026-09-09
 
 ## `docs/OpenItems.md` #39 — Revenue Sync 복수 딜 Email 집계 가정 실측 검증 완료
