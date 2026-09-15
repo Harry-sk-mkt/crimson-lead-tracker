@@ -1,5 +1,41 @@
 # Changelog — 2026-09-15
 
+## SAL/IC Booked/Completed Date 대량 유실 발견·복구 (원인 미확정, `docs/OpenItems.md` #52)
+
+사용자가 "S&M_REP/ACQ_REP SAL이 다 0"이라고 보고하며 시작된 조사. 임시 진단
+스크립트(`TEMPQA_058_SALHistoricalDataWipeDiagnostic.js`, 이후 삭제)로 확인한
+결과: SAL_Raw(외부 원본)엔 8,207건이 2018~2026 전체에 걸쳐 정상 존재했으나
+Leads_OPS의 "Sales Accepted Date"는 36,831행 중 18건만 남아있었음(같은 배치에
+항상 같이 쓰이는 "SAL Segment"는 8,182건으로 정상) — SAL Sync 코드
+(`MASTER_010_SALSync.js`)는 2026-09-09 정상 검증 이후 무변경이라 코드 회귀가
+아니라 데이터 자체의 유실로 확정.
+
+같은 패턴을 IC Funnel 쪽에서도 확인 — "IC Booked Date"(5건)/"IC Completed
+Date"(3건)만 비정상으로 낮고, 같은 배치의 "Lead Priority"는 정상. 두 사고
+모두 "Date 타입 컬럼만 지워지고 같이 쓰인 문자열 컬럼은 멀쩡"이라는 동일한
+패턴이라 같은 메커니즘(원인 미확정)으로 추정.
+
+**복구**: 두 임시 백필 스크립트(`TEMPQA_059_SALSalesAcceptedDateFullBackfill.js`/
+`TEMPQA_060_ICFunnelBookedCompletedFullBackfill.js`, 둘 다 사용 후 삭제)로
+각 원본(SAL_Raw/ICFunnel_Raw 외부 스프레드시트) 전체를 체크포인트 무시하고
+다시 읽어 기존 `computeSALByLeadId_()`/`computeICFunnelByLeadId_()`/
+`computeMTASyncColumnUpdates_()`(빈 값으로 기존 값을 덮어쓰지 않음) 로직 그대로
+재사용해 복구. 결과: "Sales Accepted Date" 18→8,177건, "IC Booked Date" 5→3,213건,
+"IC Completed Date" 3→3,010건. 이후 `EVENTS_003_Build.js`의 `buildEventsOPS()`/
+`BOFU_003_Build.js`의 `buildBOFUOPS()`/`SEARCH_003_Build.js`의 `buildSearchOPS()`/
+`CONTENT_003_Build.js`의 `buildContentOPS()`로 OPS 시트까지 재작성해 반영
+완료(Engine 캐시만 갱신하고 OPS 시트 재작성을 빠뜨렸던 것을 사용자가 발견).
+
+"Opportunity Won Date"(87건)도 같은 패턴으로 의심했으나, `runSyncRevenueToOPS()`
+재실행 결과 Deal Tracker 자체가 원래 딜 792건/고유 이메일 124건뿐이고 그중
+78건 미매칭(2026-09-09 이미 알려진 수치와 정확히 일치)이라 46건만 갱신됨 —
+Revenue(6,235건 non-blank)는 2026-07-28 이전 구 MTA_Master 기반 sync 시절의
+레거시 값이 섞여있어 비교 자체가 안 맞았던 것으로 확인, 정상 판단 철회.
+
+**원인 미확정**: 사용자 요청으로 이번 세션에선 원인 조사(Google Sheets 버전
+기록/Apps Script Executions 로그 대조)를 보류하고 복구만 진행 — `docs/OpenItems.md`
+#52에 재발 방지용 조사 항목으로 등록.
+
 ## `docs/OpenItems.md` #18 — 파이프라인 실행시간 낭비 4건 발견·수정, 전부 실사용 검증 완료
 
 "재설계 이후에도 체인이 여전히 느리다"는 사용자 보고로 시작된 조사. Executions 로그를
