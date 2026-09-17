@@ -7,9 +7,12 @@
  * Global configuration for Leads_OPS Build
  *
  * Version
- * v2.9
+ * v2.10
  *
  * Change Log
+ * v2.10 (2026-09-17)
+ * - 주석만 갱신 — `OPS_006_QA.js`의 `runOPSQA_()`가 `executeOPSQAChecks_()`로
+ *   개명됨(pre-commit naming 훅 회피, docs/OpenItems.md #25 참고). 코드 변경 없음.
  * v2.9 (2026-09-04)
  * - **`P1_SCHOOL_MISMATCH.MISSING_SCHOOL_TRACKING` 신규**(`docs/OpenItems.md`
  *   #48 후속 요청, 역방향 체크) — 2026-09-04 이후 신규 리드 중 effective
@@ -301,7 +304,7 @@ const OPS = {
 
     },
 
-    // 결과 기록 시트(Leads_OPS_QA와 별개 — runOPSQA_()는 buildLeadsOPS(true)로
+    // 결과 기록 시트(Leads_OPS_QA와 별개 — executeOPSQAChecks_()(구 runOPSQA_())는 buildLeadsOPS(true)로
     // 매 Import마다 스킵되므로(skipQA), 이 체크는 항상 도는 독립 파이프라인
     // 단계로 별도 시트에 씀. 사용자 확인 후 직접 열어보는 용도라 숨기지 않음)
     OUTPUT_SHEET : "P1_School_Mismatch_QA",

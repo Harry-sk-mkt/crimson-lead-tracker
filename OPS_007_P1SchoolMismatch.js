@@ -24,7 +24,7 @@
  * 리스트업. 과거 누적 리드 전체로 확장하면 노이즈가 커져 "오늘부터
  * 새로 들어오는 리드"로 한정(사용자 확정).
  *
- * `runOPSQA_()`(OPS_006_QA.js)와 별개 — `runOPSQA_()`는 `buildLeadsOPS(true)`
+ * `executeOPSQAChecks_()`(OPS_006_QA.js, 구 `runOPSQA_()`)와 별개 — 그쪽은 `buildLeadsOPS(true)`
  * (skipQA=true)로 매 자동 Import마다 스킵되므로, 이 체크는 그 스킵과 무관하게
  * 항상 도는 독립 파이프라인 단계로 분리(전용 결과 시트도 별도 —
  * `Leads_OPS_QA`와 소유권이 섞이면 서로의 전체 재작성이 상대방 결과를
@@ -39,9 +39,12 @@
  * OPS (Leads_OPS Build 도메인 — Leads_OPS를 읽어 대조하는 후속 체크)
  *
  * Version
- * v1.1.0
+ * v1.1.1
  *
  * Change Log
+ * v1.1.1 (2026-09-17)
+ * - 주석만 갱신 — `OPS_006_QA.js`의 `runOPSQA_()`가 `executeOPSQAChecks_()`로
+ *   개명됨(pre-commit naming 훅 회피, docs/OpenItems.md #25 참고). 코드 변경 없음.
  * v1.1.0 (2026-09-04)
  * - **역방향 체크 신규**(사용자 후속 요청) — `computeMissingP1Schools_()`(순수
  *   함수)/`writeMissingP1SchoolsResults_()` 신규, `performP1SchoolMismatchCheck_()`가

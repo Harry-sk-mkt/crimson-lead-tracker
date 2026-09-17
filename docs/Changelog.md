@@ -1,3 +1,89 @@
+# Changelog — 2026-09-17
+
+## OPS QA(`docs/OpenItems.md` #25) — 옛 아키텍처 기준 오탐 발견·재설계, 9765건 → 0건
+
+2026-08-09에 기록된 OPS QA Total Issues 9765건을 다시 보다가, `OPS_006_QA.js`의
+`checkMTAFunnelAndMatching_()`가 IC Booked/Completed/Opportunity Won Date/Revenue를 여전히
+MTA_Master 대표값과 비교하고 있는 걸 발견 — 이 4개 필드의 소유권은 2026-08-26(IC Booked/
+Completed/Won Date → ICFunnel_Raw)과 2026-09-02(Revenue/Won Date → Deal Tracker 역싱크)에
+이미 MTA_Master에서 완전히 이관됐음(`docs/OperationsLayer.md`). 즉 이 체크는 설계상 당연히
+갈라지는 값을 오탐으로 잡고 있었음. `checkMTAFunnelAndMatching_()`를 `checkMatchingAccuracy_()`
+(MTA_Master 기준 Lead ID/Email 교차검증, 그대로 유지)/`checkICFunnelMatch_()`(ICFunnel_Raw
+기준, 신규)/`checkRevenueMatch_()`(Deal Tracker 기준, 신규) 3개로 분리(`OPS_006_QA.js` v1.9.0).
+신규 두 체크는 외부 스프레드시트 전체 스캔이 필요해 자동 Import 경로에는 배선하지 않고
+`executeOPSQAChecks_()`(구 `runOPSQA_()` — 3번째 파라미터 추가로 pre-commit naming 훅에
+걸려 개명, 호출부 `OPS_003_Build.js`도 갱신)의 신규 3번째 파라미터
+`includeExternalSourceChecks=true`(`runOPSQAManual()` 전용)일 때만 실행 — 자동 경로
+성능 회귀 없음(오히려 옛 오탐 체크가 빠지며 소폭 개선).
+`computeQADashboardMetrics_()`도 같은 원칙으로 optional 파라미터 추가. 사용자가
+`runOPSQAManual()` 재실행 결과 **Total Issues 9765 → 0**(113.14초) 확인 — 재설계와 무관하게
+유효했던 "Exact Duplicate Lead Row"(당시 650건)도 0건으로 나와 별도 조치 불필요.
+`.claude/skills/qa-review/SKILL.md`의 옛 파일명(`24_OPSQA.js`)/함수명도 함께 정정.
+
+## `#52`(SAL/IC Date 유실) 재검증 — 락 가드 자체의 결함 발견·수정, 재발 없음 확인
+
+2026-09-16에 도입한 `guardPipelineTailEntry_()`/`computeTailEntryGuardDecision_()`(수동 tail
+재실행 락 가드)를 재검증하며 코드 리뷰만으로 결함을 발견 — stale 락과 "같은 타입" 락을
+같은 분기(`shouldAcquire:false`)로 묶어 처리하고 있어서, stale 락일 때 `acquirePipelineLock_()`가
+호출 안 되고 락 타임스탬프가 갱신되지 않는 구멍이었음. 두 개의 수동 tail 실행이 동시에 같은
+죽은 락을 보면 둘 다 "그냥 통과"해버려 원 사고(9/15)와 동일 클래스의 경합이 stale-락
+케이스에서 재현될 수 있었음 — 기존 테스트(`testComputeTailEntryGuardDecision`)도 이 잘못된
+동작을 그대로 기대값으로 검증하고 있어 통과했던 것. stale 분기를 분리해 타입 무관
+`shouldAcquire:true`로 교정, 테스트 갱신(`sameTypeStale` 케이스 신규) — `MASTER_002_
+PipelineAsync.js` v1.34.0. 신규 읽기 전용 진단 `TEMPQA_061_SALICDateHealthCheck.js`
+(`runCheckSALICDateHealth()`)로 Leads_OPS의 Sales Accepted Date/IC Booked Date/IC Completed
+Date 건수를 확인 — 8,177/3,213/3,010으로 2026-09-15 복구 직후 기준값과 정확히 일치, 유실
+재발 없음 확인(단 그 사이 새 SAL/IC Funnel Import가 없어 락 가드가 실제 겹침 상황에서
+작동하는 걸 직접 목격한 건 아님 — 다음 실제 Import 때 재확인 필요).
+
+## `#42`(Target_REP/FY_REP 증분화 + Engine 트리거 분리) — 설계 확정 및 그림자 모드 구현
+
+Report 레이어 캐싱 경계를 논의 — 리포트마다 "과거가 바뀌는지"가 다름을 확인(ACQ_REP/
+S&M_REP/FY_REP/Target_REP은 과거 불변, NewP1_REP은 코호트 기준이라 과거도 계속 바뀜, 단
+NewP1_REP은 Report 레이어 자체가 이미 가벼워 이번 대상 아님). 경계 확정(사용자 결정):
+Target_REP은 진행 중인 이번 주만 재계산·그 이전은 캐시, FY_REP은 이미 끝난 월(진행 중인
+FY 안이어도)은 캐시·진행 중인 월만 재계산 — "한 번 공지된 목표/실적이 나중에 조용히
+바뀌면 안 된다"는 원칙(3개월 단위 moving average 적용 계획은 있으나 아직 미실현).
+
+코드 확인 결과 이 캐싱을 Report 출력 단계가 아니라 **Engine 집계 단계**에 적용해야 함을
+발견 — `generateTargetReport_()`/`computeFYRepFlatRows_()` 둘 다 매번 Leads_OPS 전체를
+`sheetToObjects()`로 재스캔하는 게 가장 비싼 부분이라, Report 출력만 캐싱해선 이 스캔
+자체가 그대로 실행돼 시간이 안 줄어듦. `#50`(buildLeadsOPS 증분화)과 동일한 그림자 모드
+원칙으로 두 리포트 모두 구현:
+- **Target_REP**: `computeTargetLeadsOPSAggregates_()`의 순수 계산부를
+  `computeTargetLeadsOPSAggregatesForRecords_()`(레코드 + optional seed → 병합)로 분리,
+  신규 `computeTargetLeadsOPSAggregatesIncremental_()`(체크포인트 `TARGET_LEADS_OPS_AGG_
+  LAST_ROW`/`TARGET_LEADS_OPS_AGG_CACHE`)/`computeTargetLeadsOPSAggregatesDiff_()`/
+  `verifyTargetLeadsOPSAggregatesShadowDiff_()` — `TARGET_001_Engine.js` v1.31.0.
+- **FY_REP**: `aggregateFYRepLeadsOPSFromRecords_()`(기존 함수)에 optional `seedRows` 추가
+  (하위호환 확인), 신규 `computeFYRepLeadsOPSAggregatesIncremental_()`(체크포인트
+  `FYREP_LEADS_OPS_AGG_LAST_ROW`/`FYREP_LEADS_OPS_AGG_CACHE`, Target_REP의
+  `readOPSRecordsFrom_()` 재사용)/`computeFYRepLeadsOPSAggregatesDiff_()`/
+  `verifyFYRepLeadsOPSAggregatesShadowDiff_()` — `FYREP_001_Engine.js` v1.9.0.
+- `CORE_001_Config.js` v1.71.0/v1.72.0에 4개 PROPERTIES 키 신규.
+
+양쪽 다 **실제 계산 경로는 여전히 기존 전체 재스캔이 담당** — 증분 경로는 매 실행마다
+Logger로 diff만 검증(시트 쓰기 없음), 실제 쓰기 전환은 범위 밖(별도 승인 필요). 신규
+테스트 4개(`testComputeTargetLeadsOPSAggregatesForRecords`/`testComputeTargetLeadsOPSAggregatesDiff`/
+`testAggregateFYRepLeadsOPSFromRecordsIncremental`/`testComputeFYRepLeadsOPSAggregatesDiff`)
+Node 시뮬레이션 사전 검증 + 사용자가 Apps Script 편집기에서 직접 Run해 전부 PASS 확인.
+
+## 그 외 OpenItems 정리(코드 변경 없음, 문서만)
+
+- **#20**(ACQ_REP New P1 불일치) — 2026-08-05에 이미 해결됐는데 헤더가 "조사 진행 중"으로
+  stale하게 남아있던 걸 발견, 헤더만 정정.
+- **#11**(Target_REP 실사용 검증) — 사용자가 라이브 시트 확인, Target_REP 주별 목표/실적·
+  Target_Engine Block A CPNP1 벤치마크 모두 정상(0 아님) 확인 → 완료 처리. 문서 §12 #6~8
+  (개선계수 placeholder 등)은 별개 낮은 우선순위로 유지.
+- **#37**(JL 시트 자동 export 검증) — 사용자 요청으로 잠정 보류.
+- **#38**(SAL 8월 갭 잔여 9~14건) — Salesforce Lead 검색 자체가 안 되는 리드들로 확인
+  (Global Search가 레코드 ID를 검색 대상으로 안 봐서 직접 URL 접근 필요하다는 점부터
+  확인), Lead → Contact/Account 전환 가설과 부합 — 잠정 해결로 넘김.
+- **#35**(New P1 8월 갭 잔여 10건) — 사용자가 IC Funnel 리포트 재export/재import 완료 후
+  재검증했으나 정확히 같은 10명이 그대로 남음, `ICFunnel_Raw` 직접 조회 결과도 재export
+  전후 완전히 동일(1행, 공란) — `#38`과 같은 Lead→Contact 전환 클래스로 판단, 잠정 해결로
+  넘김.
+
 # Changelog — 2026-09-16
 
 ## `clasp push` 삭제 무시 버그 발견 + `safe-clasp-push.sh` 안전장치 추가

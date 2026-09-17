@@ -49,7 +49,7 @@ Email은 마케팅 팀이 사용하는 운영 조회 키다. Salesforce의 lead 
 4. Leads_Master 내 중복 이메일 검증
 5. 유효 레코드 Merge
 6. 새 Leads_OPS 쓰기
-7. QA Report 생성 (`runOPSQA_()` — 자동 트리거 경로는 생략, 아래 "QA Output" 참고)
+7. QA Report 생성 (`executeOPSQAChecks_()` — 자동 트리거 경로는 생략, 아래 "QA Output" 참고)
 ```
 
 ## 자동 Sync 연결 (2026-07-22 추가)
@@ -142,11 +142,11 @@ Funnel+SAL+Revenue = 6행).
 **확정된 동작**: 이메일별 그룹핑 → `Create Date` 실제 비교 → 가장 이른 날짜(진짜 First Touch)만 merge,
 나머지는 duplicate로 분류(`OPS_004_Merge.js`의 `mergeOPS()`). 정렬 순서에 의존하지 않음.
 동일 날짜 tie-break은 별도 규칙 없이 "먼저 나온 것 유지". 제외된 레코드는 `summary.duplicate` 카운트로
-집계되고(대량 발생 시 개별 로그는 2026-08-09부터 생략, 사용자 요청) `runOPSQA_()`가 별도로
+집계되고(대량 발생 시 개별 로그는 2026-08-09부터 생략, 사용자 요청) `executeOPSQAChecks_()`가 별도로
 완전 동일 중복 행(`docs/OpenItems_Legacy.md` #3/#13)을 탐지해 `Leads_OPS_QA`에 기록한다.
 
 ## QA Output — `Leads_OPS_QA` (✅ 구현 완료, 2026-07-24)
-`OPS_006_QA.js`의 `runOPSQA_()`/`writeOPSQAResults_()` — Dashboard(Master vs Leads_OPS 지표 대조) +
+`OPS_006_QA.js`의 `executeOPSQAChecks_()`/`writeOPSQAResults_()` — Dashboard(Master vs Leads_OPS 지표 대조) +
 Issues 테이블(완전 동일 중복 Lead/Touch 행 등)을 `Leads_OPS_QA` 시트에 기록. `buildLeadsOPS()`
 (파라미터 없이 수동 실행 시) 또는 메뉴 "✅ QA → Run Leads_OPS QA"에서 실행됨 — `appendNewLeads()`
 자동 트리거 경로는 대기시간 절감을 위해 `skipQA=true`로 생략(위 "자동 Sync 연결" 섹션 참고).
@@ -160,7 +160,7 @@ Valid Email
       NO  → 새 레코드 생성
 Duplicate Email(같은 Email이 Master에 여러 번 등장)
   → Create Date 가장 이른 레코드만 merge, 나머지는 duplicate로 카운트만(Leads_OPS엔 안 들어감)
-  → 완전 동일 중복 행 탐지/삭제는 별도 QA 로직(runOPSQA_()/runAutoDeleteExactDuplicateLeadRows())
+  → 완전 동일 중복 행 탐지/삭제는 별도 QA 로직(executeOPSQAChecks_()/runAutoDeleteExactDuplicateLeadRows())
 ```
 
 ## Current Schema (OPS.HEADER, `OPS_001_Config.js` 기준)

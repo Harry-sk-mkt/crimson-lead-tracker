@@ -46,7 +46,7 @@
 | 영역 | 이미 커버하는 곳 | `qa-review`가 추가하는 것 |
 | --- | --- | --- |
 | 네이밍(`_` 접미사)/버전헤더 존재/중복 선언/문법 | `scripts/check-*.sh` + pre-commit (결정적, 커밋마다 강제) | 재검사 안 함 |
-| Master/OPS 데이터 정합성(중복, 동기화 컬럼 보존, Dashboard 대조) | `24_OPSQA.js` (`runOPSQA_`, 파이프라인 자동 실행) | 새 로직이 기존 체크로 안 커버되는 **갭**을 찾아 제안(Mode 2) |
+| Master/OPS 데이터 정합성(중복, 동기화 컬럼 보존, Dashboard 대조) | `OPS_006_QA.js` (`executeOPSQAChecks_`, 파이프라인 자동 실행) | 새 로직이 기존 체크로 안 커버되는 **갭**을 찾아 제안(Mode 2) |
 | 한 리포트 값의 일회성 조사 | `9X_TempQA_*.js`, 각 Engine의 `runInvestigate*`/`runDiagnose*` 등 (수동 실행, 축적된 관행) | 이미 있으면 재사용 안내, 없으면 같은 컨벤션으로 새로 작성(Mode 3) |
 | Engineering Constitution 조항 중 스크립트로 못 잡는 것 (No Assumptions/TDD/Backward Compat/Single Responsibility/Config Centralization/Error Handling) | 사람이 리뷰 시 기억에 의존 | 체크리스트로 명시화(Mode 1) |
 

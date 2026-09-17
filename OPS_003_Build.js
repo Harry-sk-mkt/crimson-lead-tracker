@@ -7,9 +7,12 @@
  * Orchestrate Leads_OPS Build Process
  *
  * Version
- * v1.3.0
+ * v1.3.1
  *
  * Change Log
+ * v1.3.1 (2026-09-17)
+ * - 호출부 갱신 — `OPS_006_QA.js`의 `runOPSQA_()`가 `executeOPSQAChecks_()`로
+ *   개명됨(pre-commit naming 훅 회피, docs/OpenItems.md #25 참고). 동작 변경 없음.
  * v1.3.0 (2026-09-16)
  * - **증분 병합 그림자 diff 추가(`docs/OpenItems.md` #50)** — `mergeOPS()`
  *   직후, `writeOPS()` 전에 `verifyIncrementalOpsShadowDiff_()`를 호출해 신규
@@ -93,7 +96,7 @@ function buildLeadsOPS(skipQA) {
 
     } else {
 
-      runOPSQA_(ops, result.rows);
+      executeOPSQAChecks_(ops, result.rows);
 
     }
 

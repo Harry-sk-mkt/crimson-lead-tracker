@@ -1,6 +1,6 @@
 ---
 name: qa-review
-description: Use this skill when the user asks to QA or verify this project — "QA 해줘", "검증해줘", "이 숫자/값 맞는지 확인해줘", "코드 리뷰해줘", "정합성 확인" — or proactively before a clasp push that changes business logic (Master Build / OPS Merge / Report Engine 파일). Covers three modes: (1) code/engineering-quality review against docs/EngineeringConstitutionalRULES.md, (2) data-integrity gap-check against existing 24_OPSQA.js coverage, (3) guided report-value verification against Salesforce/Deal Tracker source-of-truth. Claude cannot read the live Google Sheet directly, so Mode 3 is a human-in-the-loop workflow, not an automated check.
+description: Use this skill when the user asks to QA or verify this project — "QA 해줘", "검증해줘", "이 숫자/값 맞는지 확인해줘", "코드 리뷰해줘", "정합성 확인" — or proactively before a clasp push that changes business logic (Master Build / OPS Merge / Report Engine 파일). Covers three modes: (1) code/engineering-quality review against docs/EngineeringConstitutionalRULES.md, (2) data-integrity gap-check against existing OPS_006_QA.js coverage, (3) guided report-value verification against Salesforce/Deal Tracker source-of-truth. Claude cannot read the live Google Sheet directly, so Mode 3 is a human-in-the-loop workflow, not an automated check.
 ---
 
 # QA Review (crimson-lead-tracker 전용)
@@ -13,10 +13,13 @@ description: Use this skill when the user asks to QA or verify this project — 
 - `scripts/check-naming.sh` / `check-version-header.sh` / `check-duplicate-declarations.sh` / `check-syntax.sh`가
   이미 pre-commit에서 강제하는 항목(`_` 접미사 실수, version header 존재, 전역 이름 중복, 문법 에러)은
   **이 스킬이 다시 검사하지 않는다** — 재검사는 시간 낭비이자 결과 중복.
-- `24_OPSQA.js`가 이미 자동 실행 중인 체크(`checkRowCount_`/`checkMTAFunnelAndMatching_`/
+- `OPS_006_QA.js`(구 `24_OPSQA.js`)가 이미 자동 실행 중인 체크(`checkRowCount_`/`checkMatchingAccuracy_`/
   `checkLeadIdUniqueness_`/`checkExactDuplicateLeadRows_`/`checkExactDuplicateTouchRows_`/
-  `checkSyncColumnsPreserved_`)와 겹치는 걸 새로 제안하지 않는다 — 이미 있으면 "이미 커버됨"이라고
-  말하고 끝낸다.
+  `checkUnprotectedDateLikeRawColumns_`/`checkSyncColumnsPreserved_`)와 겹치는 걸 새로 제안하지
+  않는다 — 이미 있으면 "이미 커버됨"이라고 말하고 끝낸다. `checkICFunnelMatch_`/`checkRevenueMatch_`
+  (ICFunnel_Raw/Deal Tracker 기준, 2026-09-17 재설계 — `docs/OpenItems.md` #25)는 외부 스프레드시트
+  전체 스캔이 필요해 자동 경로가 아니라 `runOPSQAManual()`(`includeExternalSourceChecks=true`)에서만
+  돈다는 점도 함께 고려.
 - **Claude는 라이브 Google Sheet를 읽을 방법이 없다.** Sheets API/MCP/서비스 계정 전무, `clasp
   run-function`도 미도입 상태(CLAUDE.md 확정 사실). 리포트 실제 값 확인이 필요한 모든 경우는
   반드시 "사용자가 Apps Script 편집기에서 특정 함수를 직접 Run → 결과를 채팅에 붙여넣기"로
@@ -59,9 +62,9 @@ description: Use this skill when the user asks to QA or verify this project — 
 **대상**: `Leads_Master`/`MTA_Master`/`Leads_OPS`에 영향을 주는 merge/transform 로직 변경.
 
 1. 변경된 로직이 새 필드/새 조인 키/새 dedup 기준을 도입했는지 확인한다.
-2. `24_OPSQA.js`의 기존 체크 목록과 대조해서, 이 변경이 기존 체크로 커버되는지 판단한다.
-3. 커버 안 되는 갭이 있으면 — **조용히 새 체크 함수를 추가하지 않는다.** 갭을 설명하고, `24_OPSQA.js`의
-   기존 패턴(`checkXxx_()` + `runOPSQA_()`에 배선하는 구조)을 따르는 새 체크를 제안한 뒤 사용자
+2. `OPS_006_QA.js`의 기존 체크 목록과 대조해서, 이 변경이 기존 체크로 커버되는지 판단한다.
+3. 커버 안 되는 갭이 있으면 — **조용히 새 체크 함수를 추가하지 않는다.** 갭을 설명하고, `OPS_006_QA.js`의
+   기존 패턴(`checkXxx_()` + `executeOPSQAChecks_()`에 배선하는 구조)을 따르는 새 체크를 제안한 뒤 사용자
    승인을 받는다.
 4. **배선 무결성 확인**: `runLeadsPipelineTail()`/`runMTAPipelineTail()`/`buildLeadsOPS()` 등에서
    QA/자동삭제 함수 호출이 최근 리팩터링 중 조용히 빠지지 않았는지 grep으로 확인한다. 이 프로젝트는

@@ -14,9 +14,43 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.8.1
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-17)
+ * - **버그 수정 — Funnel Match/Revenue Existence 체크가 옛 아키텍처(MTA_Master)를
+ *   "정답" 소스로 비교하고 있었음(`docs/OpenItems.md` #25 재조사로 발견)**.
+ *   IC Booked/Completed Date는 2026-08-26부터 `ICFunnel_Raw`
+ *   (MASTER_009_ICFunnelSync.js)로, Revenue/Opportunity Won Date는
+ *   2026-09-02부터 Deal Tracker 역싱크(MASTER_011_RevenueSync.js)로 필드
+ *   소유권이 완전히 이관됐는데(`docs/OperationsLayer.md` 필드 소유권 표),
+ *   `checkMTAFunnelAndMatching_()`는 여전히 `computeMTAFunnelByLeadId_()`
+ *   (MTA_Master 대표 터치)를 기준으로 비교하고 있어 설계상 당연히 갈라지는
+ *   값을 오탐으로 잡고 있었음 — 2026-08-09에 보고된 9765건(Funnel Match
+ *   2904/2769/2696, Revenue Existence 746)이 이 오탐을 상당 부분 포함했을
+ *   것으로 추정(정확한 비중은 재실행 전까지 알 수 없음, 사용자 확인 하에
+ *   재설계로 결정). **변경**: `checkMTAFunnelAndMatching_()`를
+ *   `checkMatchingAccuracy_()`(Lead ID/Email 교차검증 — MTA_Master 기준
+ *   그대로 유지, 필드 소유권과 무관해 계속 유효)/`checkICFunnelMatch_()`
+ *   (ICFunnel_Raw 기준, 신규)/`checkRevenueMatch_()`(Deal Tracker 기준,
+ *   신규) 3개로 분리. 신규 두 체크는 외부 스프레드시트 전체 스캔이 필요해
+ *   (`readAllICFunnelRawRecords_()` 신규, `readDealTrackerRawRows_()` 재사용)
+ *   자동 Import 경로(`buildLeadsOPS()` → `executeOPSQAChecks_(ops, result.rows)`)에는
+ *   배선하지 않고, `executeOPSQAChecks_()`의 신규 3번째 파라미터
+ *   `includeExternalSourceChecks`가 true일 때만(`runOPSQAManual()` 전용)
+ *   실행 — 매 Import마다 도는 자동 경로의 성능 회귀를 피함(`docs/OpenItems.md`
+ *   #18/#50/#51 계열과 동일 원칙). 오히려 자동 경로는 옛 오탐 체크가
+ *   빠지면서 더 빨라짐. `computeQADashboardMetrics_()`도 같은 이유로
+ *   `icFunnelByLeadId`/`revenueByEmail`(둘 다 optional) 파라미터를 받아
+ *   전달되면 새 소스로, 없으면(자동 경로) 기존 MTA_Master 기준으로 계산 —
+ *   자동 경로의 기존 동작은 100% 보존.
+ * - **함수명 변경 — `runOPSQA_()` → `executeOPSQAChecks_()`**: 3번째 파라미터
+ *   추가로 시그니처를 건드리면서 pre-commit naming 훅(`scripts/check-naming.sh`,
+ *   "run"/"test"로 시작 + `_`로 끝나는 새 diff 줄을 진입점 오탈자로 감지)에
+ *   걸림 — 실제로는 `buildLeadsOPS()`/`runOPSQAManual()`이 파라미터를 넘겨
+ *   호출하는 내부 오케스트레이션 함수라 원래도 Run 드롭다운 진입점이 아니었지만,
+ *   "run"으로 시작하는 이름이 그 오해를 유발할 수 있어 이참에 개명(호출부
+ *   `OPS_003_Build.js`도 함께 갱신). 동작 변경 없음, 이름만 변경.
  * v1.8.1 (2026-09-04)
  * - 코드 변경 없음. `runAutoDeleteExactDuplicateTouchRows()`/
  *   `runAutoDeleteExactDuplicateLeadRows()` 헤더 주석의 "매 append마다
@@ -121,7 +155,7 @@ const OPS_QA_HEADERS = ["Check", "Lead ID", "Email", "Detail"];
  * Run OPS QA (전체 검증 오케스트레이션)
  * ==========================================================
  */
-function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
+function executeOPSQAChecks_(preMergeOpsSnapshot, newlyWrittenRows, includeExternalSourceChecks) {
 
   const start = new Date();
 
@@ -132,17 +166,44 @@ function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
   const issues = [];
 
   checkRowCount_(issues);
-  checkMTAFunnelAndMatching_(issues);
+  checkMatchingAccuracy_(issues);
   checkLeadIdUniqueness_(issues);
   checkExactDuplicateLeadRows_(issues);
   checkExactDuplicateTouchRows_(issues);
   checkUnprotectedDateLikeRawColumns_(issues);
 
+  let icFunnelByLeadId = null;
+  let revenueByEmail = null;
+
+  if (includeExternalSourceChecks) {
+
+    try {
+      icFunnelByLeadId = computeICFunnelByLeadId_(pickLatestICFunnelRecords_(readAllICFunnelRawRecords_()));
+    } catch (e) {
+
+      issues.push({
+        check: "Funnel Match — IC Funnel source unavailable",
+        leadId: "",
+        email: "",
+        detail: "ICFunnel_Raw 외부 스프레드시트를 읽을 수 없어 이 체크를 건너뜀 : " + e.message
+      });
+
+      icFunnelByLeadId = null;
+
+    }
+
+    revenueByEmail = computeRevenueByEmail_(readDealTrackerRawRows_());
+
+    if (icFunnelByLeadId) checkICFunnelMatch_(issues, icFunnelByLeadId);
+    checkRevenueMatch_(issues, revenueByEmail);
+
+  }
+
   if (preMergeOpsSnapshot && newlyWrittenRows) {
     checkSyncColumnsPreserved_(preMergeOpsSnapshot, newlyWrittenRows, issues);
   }
 
-  const metrics = computeQADashboardMetrics_();
+  const metrics = computeQADashboardMetrics_(icFunnelByLeadId, revenueByEmail);
 
   writeOPSQAResults_(metrics, issues);
 
@@ -171,16 +232,17 @@ function runOPSQA_(preMergeOpsSnapshot, newlyWrittenRows) {
 
 /**
  * ==========================================================
- * Check 2 + 3 + 4 — MTA Funnel 값 일치 + 매칭 정확성 (통합)
+ * Check — Matching Accuracy (Lead ID ↔ Email 교차검증, MTA_Master 기준)
  *
- * Change Log
- * v1.1.0 (2026-07-21)
- * - Revenue는 금액 완전 일치(compareFunnelField_) 대신 존재 여부만
- *   비교(checkRevenueExistence_)하도록 변경 — 환율 변환 시점 차이로
- *   인한 오탐 방지.
+ * WHY
+ * 옛 `checkMTAFunnelAndMatching_()`에서 분리(2026-09-17,
+ * `docs/OpenItems.md` #25 재조사). Funnel 날짜/Revenue 값 자체는 더 이상
+ * MTA_Master 소유가 아니지만(아래 checkICFunnelMatch_/checkRevenueMatch_
+ * 참고), MTA_Master의 Lead ID/Email 관계 자체는 그 필드 소유권 재편과
+ * 무관해 계속 유효한 체크라 그대로 유지.
  * ==========================================================
  */
-function checkMTAFunnelAndMatching_(issues) {
+function checkMatchingAccuracy_(issues) {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -192,10 +254,8 @@ function checkMTAFunnelAndMatching_(issues) {
   const mtaRecords = sheetToObjects(mtaSheet);
   const opsRecords = sheetToObjects(opsSheet);
 
-  const mtaFunnelByLeadId = computeMTAFunnelByLeadId_(mtaRecords);
-
   //----------------------------------------------------------
-  // MTA Lead ID별 Email도 같이 확보 (가장 이른 터치 기준, 동일 로직)
+  // MTA Lead ID별 Email 확보 (가장 이른 터치 기준)
   //----------------------------------------------------------
 
   const mtaEmailByLeadId = {};
@@ -236,7 +296,7 @@ function checkMTAFunnelAndMatching_(issues) {
   });
 
   //----------------------------------------------------------
-  // Leads_OPS를 Lead ID로 인덱싱
+  // Leads_OPS를 Lead ID로 인덱싱, 비교
   //----------------------------------------------------------
 
   const opsByLeadId = {};
@@ -245,23 +305,10 @@ function checkMTAFunnelAndMatching_(issues) {
     opsByLeadId[String(record["Lead ID"] || "").trim()] = record;
   });
 
-  //----------------------------------------------------------
-  // 비교
-  //----------------------------------------------------------
-
-  Object.keys(mtaFunnelByLeadId).forEach(function (leadId) {
+  Object.keys(mtaEmailByLeadId).forEach(function (leadId) {
 
     const opsRecord = opsByLeadId[leadId];
-
-    if (!opsRecord) {
-      return;   // Row Count 체크에서 이미 잡힘
-    }
-
-    const mtaFunnel = mtaFunnelByLeadId[leadId];
-
-    //------------------------------------------------------
-    // 매칭 정확성 — Email 교차 검증
-    //------------------------------------------------------
+    if (!opsRecord) return;   // Row Count 체크에서 이미 잡힘
 
     const mtaEmail = mtaEmailByLeadId[leadId] || "";
     const opsEmail = String(opsRecord["Email"] || "").trim().toLowerCase();
@@ -277,32 +324,142 @@ function checkMTAFunnelAndMatching_(issues) {
 
     }
 
-    //------------------------------------------------------
-    // Funnel 날짜 필드 — 완전 일치 확인
-    //------------------------------------------------------
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Read All ICFunnel_Raw Records (QA 전용 — 체크포인트 무시, 전체 스캔)
+ *
+ * WHY
+ * `syncICFunnelToOPS_()`(MASTER_009_ICFunnelSync.js)는 성능상 이번에 새로
+ * Import된 배치만 읽지만(`ICFUNNEL_LAST_ROW` 체크포인트), QA는 Leads_OPS
+ * 전체가 ICFunnel_Raw 전체 이력과 여전히 일치하는지 확인하는 목적이라
+ * 체크포인트와 무관하게 항상 전체를 읽어야 한다. `executeOPSQAChecks_()`의
+ * `includeExternalSourceChecks`(수동 실행 전용)일 때만 호출되므로 자동
+ * Import 경로 성능에는 영향 없음.
+ * ==========================================================
+ */
+function readAllICFunnelRawRecords_() {
+
+  const externalFile = openICFunnelRawExternalSpreadsheet_();
+  const rawSheet = externalFile.getSheetByName(CONFIG.IC_FUNNEL.SHEET);
+
+  if (!rawSheet) {
+    throw new Error(CONFIG.IC_FUNNEL.SHEET + " sheet not found.");
+  }
+
+  return sheetToObjects(rawSheet);
+
+}
+
+
+/**
+ * ==========================================================
+ * Check — IC Booked/Completed Date Match (ICFunnel_Raw 기준)
+ *
+ * WHY (2026-09-17, docs/OpenItems.md #25 재조사)
+ * IC Booked Date/IC Completed Date의 소유권은 2026-08-26부터 MTA_Master에서
+ * ICFunnel_Raw(MASTER_009_ICFunnelSync.js)로 완전히 이관됐다
+ * (`docs/OperationsLayer.md` 필드 소유권 표 참고) — MTA_Master는 더 이상
+ * 이 필드들의 최신 상태를 반영하지 않는다. 옛 `checkMTAFunnelAndMatching_()`가
+ * 여전히 MTA_Master 대표값을 "정답"으로 놓고 비교해 설계상 당연히 갈라지는
+ * 값을 오탐으로 잡던 문제를 이 체크로 대체.
+ *
+ * INPUT
+ * icFunnelByLeadId : Object  (computeICFunnelByLeadId_() 출력, ICFunnel_Raw
+ *                    전체 기준 — readAllICFunnelRawRecords_()로 읽은 것)
+ * ==========================================================
+ */
+function checkICFunnelMatch_(issues, icFunnelByLeadId) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!opsSheet) return;
+
+  const opsRecords = sheetToObjects(opsSheet);
+  const opsByLeadId = {};
+
+  opsRecords.forEach(function (record) {
+    opsByLeadId[String(record["Lead ID"] || "").trim()] = record;
+  });
+
+  Object.keys(icFunnelByLeadId).forEach(function (leadId) {
+
+    const opsRecord = opsByLeadId[leadId];
+    if (!opsRecord) return;   // Row Count 체크에서 이미 잡힘
+
+    const expected = icFunnelByLeadId[leadId];
+    const opsEmail = String(opsRecord["Email"] || "").trim().toLowerCase();
 
     compareFunnelField_(
       issues, leadId, opsEmail,
-      "IC Booked Date", mtaFunnel.icBookedDate, opsRecord["IC Booked Date"], true
+      "IC Booked Date", expected.icBookedDate, opsRecord["IC Booked Date"], true
     );
 
     compareFunnelField_(
       issues, leadId, opsEmail,
-      "IC Completed Date", mtaFunnel.icCompletedDate, opsRecord["IC Completed Date"], true
+      "IC Completed Date", expected.icCompletedDate, opsRecord["IC Completed Date"], true
     );
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Check — Revenue / Opportunity Won Date Match (Deal Tracker 기준)
+ *
+ * WHY (2026-09-17, docs/OpenItems.md #25 재조사)
+ * checkICFunnelMatch_() 상단 주석과 동일한 배경 — Revenue/Opportunity Won
+ * Date의 소유권은 2026-09-02부터 Deal Tracker 역싱크
+ * (MASTER_011_RevenueSync.js)로 이관됐다. Deal Tracker에는 Lead ID가 없어
+ * Email로 매칭(`syncRevenueToOPS_()`와 동일 기준, Leads_OPS Primary Key도
+ * Email).
+ *
+ * INPUT
+ * revenueByEmail : Object  (computeRevenueByEmail_() 출력)
+ * ==========================================================
+ */
+function checkRevenueMatch_(issues, revenueByEmail) {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if (!opsSheet) return;
+
+  const opsRecords = sheetToObjects(opsSheet);
+  const opsByEmail = {};
+
+  opsRecords.forEach(function (record) {
+
+    const email = String(record["Email"] || "").trim().toLowerCase();
+    if (!email) return;
+
+    opsByEmail[email] = record;
+
+  });
+
+  Object.keys(revenueByEmail).forEach(function (email) {
+
+    const opsRecord = opsByEmail[email];
+    if (!opsRecord) return;   // Row Count 체크에서 이미 잡힘(Lead ID 기준이라 완전히 겹치진 않지만 매칭 안 되는 Email은 #7/#39 기존 미매칭 계열로 별도 취급)
+
+    const expected = revenueByEmail[email];
+    const leadId = String(opsRecord["Lead ID"] || "").trim();
 
     compareFunnelField_(
-      issues, leadId, opsEmail,
-      "Opportunity Won Date", mtaFunnel.wonDate, opsRecord["Opportunity Won Date"], true
+      issues, leadId, email,
+      "Opportunity Won Date", expected.wonDate, opsRecord["Opportunity Won Date"], true
     );
-
-    //------------------------------------------------------
-    // Revenue — 존재 여부만 확인 (환율 변동으로 인한 오탐 방지)
-    //------------------------------------------------------
 
     checkRevenueExistence_(
-      issues, leadId, opsEmail,
-      mtaFunnel.revenue, opsRecord["Revenue"]
+      issues, leadId, email,
+      expected.revenue, opsRecord["Revenue"]
     );
 
   });
@@ -919,16 +1076,23 @@ function writeOPSQAResults_(metrics, issues) {
  * Compute QA Dashboard Metrics
  *
  * WHY
- * #Leads는 Leads_Master 기준, 나머지(IC Booked/Complete/Won/Revenue)는
- * MTA_Master 기준(Lead ID 중복 제거된 대표값)으로 Leads_OPS와 대조.
+ * #Leads는 Leads_Master 기준. 나머지(IC Booked/Complete/Won/Revenue)는
+ * 가능하면(수동 실행, `includeExternalSourceChecks=true`) 실제 소유
+ * 소스(ICFunnel_Raw/Deal Tracker)로 Leads_OPS와 대조하고, 없으면(자동
+ * Import 경로) 기존과 동일하게 MTA_Master 대표값으로 근사 — 2026-09-17
+ * 재설계(`docs/OpenItems.md` #25), checkICFunnelMatch_/checkRevenueMatch_
+ * 상단 주석 참고. 자동 경로의 기존 동작(비용/출력 모두)은 100% 보존.
+ *
+ * INPUT (둘 다 optional — null/undefined면 MTA_Master 기준으로 fallback)
+ * icFunnelByLeadId : Object|null  (computeICFunnelByLeadId_() 출력)
+ * revenueByEmail   : Object|null  (computeRevenueByEmail_() 출력)
  * ==========================================================
  */
-function computeQADashboardMetrics_() {
+function computeQADashboardMetrics_(icFunnelByLeadId, revenueByEmail) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
     const leadsMasterSheet = ss.getSheetByName(CONFIG.SHEETS.LEADS_MASTER);
-    const mtaSheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
     const opsSheet = ss.getSheetByName(OPS.SHEET.OPS);
 
     const leadsMasterCount =
@@ -937,20 +1101,32 @@ function computeQADashboardMetrics_() {
     const opsRecords =
         opsSheet ? sheetToObjects(opsSheet) : [];
 
-    const mtaRecords =
-        mtaSheet ? sheetToObjects(mtaSheet) : [];
-
-    const mtaFunnelByLeadId = computeMTAFunnelByLeadId_(mtaRecords);
-    const mtaFunnelValues = Object.values(mtaFunnelByLeadId);
-
     function isValidDate(v) {
         return v instanceof Date && !isNaN(v.getTime());
     }
 
-    const icBookedMTA = mtaFunnelValues.filter(function (f) { return isValidDate(f.icBookedDate); }).length;
-    const icCompleteMTA = mtaFunnelValues.filter(function (f) { return isValidDate(f.icCompletedDate); }).length;
-    const wonMTA = mtaFunnelValues.filter(function (f) { return isValidDate(f.wonDate); }).length;
-    const totalRevenueMTA = mtaFunnelValues.reduce(function (sum, f) { return sum + (Number(f.revenue) || 0); }, 0);
+    let mtaFunnelValuesCache = null;
+
+    function getMtaFunnelValuesFallback() {
+
+        if (mtaFunnelValuesCache) return mtaFunnelValuesCache;
+
+        const mtaSheet = ss.getSheetByName(CONFIG.SHEETS.MTA_MASTER);
+        const mtaRecords = mtaSheet ? sheetToObjects(mtaSheet) : [];
+
+        mtaFunnelValuesCache = Object.values(computeMTAFunnelByLeadId_(mtaRecords));
+
+        return mtaFunnelValuesCache;
+
+    }
+
+    const icFunnelValues = icFunnelByLeadId ? Object.values(icFunnelByLeadId) : getMtaFunnelValuesFallback();
+    const revenueValues = revenueByEmail ? Object.values(revenueByEmail) : getMtaFunnelValuesFallback();
+
+    const icBookedMTA = icFunnelValues.filter(function (f) { return isValidDate(f.icBookedDate); }).length;
+    const icCompleteMTA = icFunnelValues.filter(function (f) { return isValidDate(f.icCompletedDate); }).length;
+    const wonMTA = revenueValues.filter(function (f) { return isValidDate(f.wonDate); }).length;
+    const totalRevenueMTA = revenueValues.reduce(function (sum, f) { return sum + (Number(f.revenue) || 0); }, 0);
 
     const icBookedOPS = opsRecords.filter(function (r) { return isValidDate(r["IC Booked Date"]); }).length;
     const icCompleteOPS = opsRecords.filter(function (r) { return isValidDate(r["IC Completed Date"]); }).length;
@@ -977,13 +1153,17 @@ function computeQADashboardMetrics_() {
  * Run OPS QA (수동 실행용 — Append/Rebuild/Sync 이후 아무 때나)
  *
  * WHY
- * Check 5(SYNC_COLUMNS 보존)는 buildLeadsOPS() 실행 시점에서만
- * 정확히 검증 가능해서 이 경로에서는 제외. 나머지 5개 체크만 수행.
+ * SYNC_COLUMNS Preservation 체크는 buildLeadsOPS() 실행 시점에서만
+ * 정확히 검증 가능해서 이 경로에서는 제외. 대신 `includeExternalSourceChecks=true`로
+ * ICFunnel_Raw/Deal Tracker 기준 Funnel Match/Revenue Existence 체크
+ * (checkICFunnelMatch_/checkRevenueMatch_, 2026-09-17 재설계,
+ * `docs/OpenItems.md` #25)를 포함 — 이 둘은 외부 스프레드시트 전체 스캔이
+ * 필요해 자동 Import 경로에는 배선하지 않고 이 수동 경로에서만 실행한다.
  * ==========================================================
  */
 function runOPSQAManual() {
 
-    runOPSQA_();
+    executeOPSQAChecks_(undefined, undefined, true);
 
 }
 

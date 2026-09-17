@@ -201,7 +201,13 @@
     정확성까지 확정. **5개 항목 전부 검증 완료로 exec-plan을
     `docs/exec-plans/completed/2026-09-03-performance-optimization.md`로 이동.**
 10. **SAL에 "Lead Status = Nurturing" 제외 조건 추가 필요 (데이터 대기, TODO)** — 6번에서 SAL을 `Sales Accepted Date` 이벤트 기준으로 전환했지만, `Lead Status`(Salesforce 표준 필드, `Sales Funnel Stage`와는 다른 별개 필드 — 픽리스트 순서: Nurturing → New (Not Contacted) → Attempting Contact → Contacted → Disqualified → IC Booked → Qualified)가 "Nurturing"인 리드도 Sales Accepted Date가 찍혀 SAL로 카운트되는 문제를 2026-07-25 사용자가 발견(Search 세그먼트 SAL 8건이 전부 IC Booked인 게 이상해서 개별 확인하다 발견). **확정된 처리 방식**: SAL 제외 조건은 `Lead Status === "Nurturing"` 하나뿐 — New/Attempting Contact/Contacted/Disqualified/IC Booked/Qualified는 전부 SAL로 그대로 카운트(사용자 확인, "New부터는 전부 SAL"). **막힌 지점**: `Lead: Lead Status` 필드가 아직 MTA export에 없어 파이프라인에 전혀 없는 상태 — Salesforce 리포트에 이 필드 추가 + 재export 되기 전까지 구현 불가. 필드 도착 시 `13_MTATransformer.js`에 매핑(리드 레벨 스냅샷이라 `computeMTAFunnelByLeadId_()`처럼 대표값 로직 필요할 수 있음) → `30_ACQReport.js`의 SAL 카운트 조건에 `leadStatus !== "Nurturing"` 추가. 임의로 처리하지 말 것.
-11. **Target_REP(주간 세그먼트 목표·달성률 리포트) 구현 완료, Generate 자동화 완료(2026-08-05) — 실사용 검증 진행 중, TODO** — 2026-07-27 설계 확정(`docs/TargetReportDesign.md`) 후 같은 날 구현 및 실 시트 검증 진행. New P1/CPNP1을 top-down(마케팅 Revenue 타겟 × 딜 비중 ÷ P1당 가치)으로 역산해 주간 목표를 세우고 실적과 대조. 구현 파일: `90_TargetEngine.js`(Block A~D 계산/작성, 주 캘린더 생성, 가중평균, 외부 채널시트/Naver gid 매칭), `91_TargetReport.js`(`setupTargetReport()`, `runGenerateTargetReport()`, `refreshTargetActuals_()` — 기존 `refreshACQSummary_()` 호출 4곳에 배선), `92_TargetStyles.js`, `CONFIG.TARGET`(`00_Config.js`). **막힌 지점 5개는 구현 착수 전 전부 해소됨**(상세는 `docs/Changelog.md` 2026-07-27 항목). **실행 중 실측 버그 2건 발견·수정**: (1) Block 0 입력값을 셀 단위로 개별 읽고/쓰던 게(최대 27회 왕복) 대용량 워크북에서 타임아웃 유발 → 배치 호출로 수정, 해결 확인. (2) **Generate를 체크박스+onEdit(Simple Trigger)로 구현했으나, Simple Trigger는 제한된 권한이라 `SpreadsheetApp.openById()`(외부 채널시트 참조)를 아예 호출할 수 없음이 실측 확인됨**("Specified permissions are not sufficient") — ACQ_REP/NewP1_REP는 외부 파일을 안 열어서 이 문제가 없었음, Target_REP만 해당. 사용자 확인 후 체크박스/onEdit 분기 제거, `runGenerateTargetReport()`를 Apps Script 편집기에서 직접 Run하는 방식으로 전환(직접 Run은 Full Authorization). **2026-08-05 자동화**: 사용자 요청("deal tracker도 import 체인에 포함시키자")으로 `generateTargetReport_()`를 `08_PipelineAsync.js`의 `refreshReportGenerate_()`(설치형 트리거, Full Authorization이라 Simple Trigger 제약 자체가 없음)에 추가 — 매 Leads/MTA 백그라운드 실행마다 자동 호출됨, 편집기 직접 Run은 재시도/디버깅용으로 계속 가능. **아직 검증 필요**: 자동 호출된 Target_REP 리포트 행/Target_Engine Block A~D 실제 값(특히 CPNP1 벤치마크가 외부 gid 매칭 성공해서 0이 아닌지) 확인 전까지 완료로 간주하지 말 것. 그 외 `docs/TargetReportDesign.md` §12 #6~8(개선계수 초기값 0.9 placeholder, Seminar/Webinar 분해 표시, 월 소계 행)은 실물 확인 후 결정 예정.
+11. ~~Target_REP(주간 세그먼트 목표·달성률 리포트) 구현 완료, Generate 자동화 완료(2026-08-05)~~ —
+    **✅ 실사용 검증 완료(2026-09-17)**: 사용자가 라이브 시트를 직접 확인 —
+    `Target_REP` 주별 목표/실적 행 정상, `Target_Engine` Block A CPNP1 벤치마크도
+    0이 아닌 값으로 정상 확인(외부 채널시트/Naver gid 매칭 정상 동작 확정).
+    `docs/TargetReportDesign.md` §12 #6~8(개선계수 placeholder/Seminar·Webinar
+    분해/월 소계)은 이 검증과 별개의 낮은 우선순위 설계 결정 항목으로 계속
+    미해결 남음 — 별도로 다룰 것. 2026-07-27 설계 확정(`docs/TargetReportDesign.md`) 후 같은 날 구현 및 실 시트 검증 진행. New P1/CPNP1을 top-down(마케팅 Revenue 타겟 × 딜 비중 ÷ P1당 가치)으로 역산해 주간 목표를 세우고 실적과 대조. 구현 파일: `90_TargetEngine.js`(Block A~D 계산/작성, 주 캘린더 생성, 가중평균, 외부 채널시트/Naver gid 매칭), `91_TargetReport.js`(`setupTargetReport()`, `runGenerateTargetReport()`, `refreshTargetActuals_()` — 기존 `refreshACQSummary_()` 호출 4곳에 배선), `92_TargetStyles.js`, `CONFIG.TARGET`(`00_Config.js`). **막힌 지점 5개는 구현 착수 전 전부 해소됨**(상세는 `docs/Changelog.md` 2026-07-27 항목). **실행 중 실측 버그 2건 발견·수정**: (1) Block 0 입력값을 셀 단위로 개별 읽고/쓰던 게(최대 27회 왕복) 대용량 워크북에서 타임아웃 유발 → 배치 호출로 수정, 해결 확인. (2) **Generate를 체크박스+onEdit(Simple Trigger)로 구현했으나, Simple Trigger는 제한된 권한이라 `SpreadsheetApp.openById()`(외부 채널시트 참조)를 아예 호출할 수 없음이 실측 확인됨**("Specified permissions are not sufficient") — ACQ_REP/NewP1_REP는 외부 파일을 안 열어서 이 문제가 없었음, Target_REP만 해당. 사용자 확인 후 체크박스/onEdit 분기 제거, `runGenerateTargetReport()`를 Apps Script 편집기에서 직접 Run하는 방식으로 전환(직접 Run은 Full Authorization). **2026-08-05 자동화**: 사용자 요청("deal tracker도 import 체인에 포함시키자")으로 `generateTargetReport_()`를 `08_PipelineAsync.js`의 `refreshReportGenerate_()`(설치형 트리거, Full Authorization이라 Simple Trigger 제약 자체가 없음)에 추가 — 매 Leads/MTA 백그라운드 실행마다 자동 호출됨, 편집기 직접 Run은 재시도/디버깅용으로 계속 가능. **아직 검증 필요**: 자동 호출된 Target_REP 리포트 행/Target_Engine Block A~D 실제 값(특히 CPNP1 벤치마크가 외부 gid 매칭 성공해서 0이 아닌지) 확인 전까지 완료로 간주하지 말 것. 그 외 `docs/TargetReportDesign.md` §12 #6~8(개선계수 초기값 0.9 placeholder, Seminar/Webinar 분해 표시, 월 소계 행)은 실물 확인 후 결정 예정.
 12. ~~ACQ_REP Referral 세그먼트 Revenue가 Salesforce/딜트래커 대비 연간 기준 과소집계~~ — 2026-07-28 해소 확인(사용자 확인, FY26 전체 연간 대조 완료). 원래 발견: 이번 FY(FY26) 전체로 보면 ACQ_REP Referral 합계($2,157,628.79)가 딜트래커 Referral 합계($2,794,367.69)보다 **$636,739(약 22.8%) 적음**(당시 ACQ_REP은 Leads_OPS `Opportunity Won Date`/`Revenue` 기준이었음). 7번 항목의 2트랙 아키텍처 적용(Deal Tracker 기반 + 수동 Segment 컬럼 + 타임존 버그 수정)으로 ACQ_REP Revenue가 Deal Tracker와 정의상 같은 소스가 되면서 갭 해소 — 5·6·7월 개별 대조(7월 전체 $999,931.89 vs ACQ_REP $999,932) 및 FY26 전체 연간 대조 둘 다 사용자 확인 완료. **KRW/환율 관련 가설(별도 낮은 우선순위 항목으로 유지)**: Revenue를 KRW 원본 값으로 가져와서 일관된 환율로 NZD 변환하면 더 정확해질 수 있다는 가설은 미검증 상태로 남음 — 딜트래커 시트엔 KRW 원본 컬럼이 없고 `Revenue (NZD)`(이미 변환된 값)만 있음, Salesforce Opportunity 객체 자체에 KRW 원본 금액 필드가 있는지 확인 필요. Revenue 통화 처리 방식은 Target_REP뿐 아니라 ACQ_REP 등 여러 리포트에 걸친 문제라 별도 세션에서 다룰 것.
 13. **Leads_Master 완전 동일 중복 행 탐지/자동삭제 — 구현 및 실데이터 검증 완료(2026-07-28), 자동삭제는 실제 발생 시 확인 필요** — 2026-07-28 사용자 요청으로 3/8번 항목(MTA_Master 완전 동일 중복 터치)과 동일한 문제가 Leads_Master에도 있는지 확인하다가, 해당 로직이 MTA_Master 전용이라 Leads_Master(Leads_Raw로부터 빌드)에는 없다는 게 확인됨 — 새로 설계·구현. **발생 원인 가정(사용자 확인)**: MTA와 동일하게 주간 Lead export 날짜 범위가 겹치면 `appendNewLeads()`가 같은 Lead ID를 Leads_Master에 중복 append. **완전 동일 판정 기준(사용자 확정)**: MTA_Master(터치 단위라 한 Lead가 여러 번 나오는 게 정상)와 달리 Leads_Master는 Lead ID 1개 = 행 1개가 정상 구조이므로, 5필드 복합키 대신 **Lead ID 단독**을 그룹 키로 사용 — 같은 Lead ID가 2번 이상 등장하면 완전 동일 중복. IC Booked/Completed/Won Date, Revenue 등 export 시점마다 바뀌는 스냅샷 필드는 비교에서 제외(MTA와 동일 원칙). **구현(`24_OPSQA.js` v1.4.1)**: `checkExactDuplicateLeadRows_()`/`findExactDuplicateLeadRows_()`(탐지 — `runOPSQA_()`에 배선되어 자동 실행, `Leads_OPS_QA`에 "Exact Duplicate Lead Row" 이슈로 기록)와 `findExactDuplicateLeadRowsToDelete_()`/`readLeadsMasterRowsWithIndex_()`/`runAutoDeleteExactDuplicateLeadRows()`(자동삭제 — 수동 실행 전용, 그룹당 "가장 진행된 단계"만 남기는 tie-break 로직은 `computeTouchProgressionScore_()` 재사용, 필드명이 Leads_Master와 동일해 그대로 호환됨). ~~자동삭제 함수만 MTA_Master 버전과 동일한 방침으로 자동 실행 체인에는 배선하지 않음~~ — **2026-08-04부터 배선됨**: `08_PipelineAsync.js`의 `runLeadsPipelineTail()` 첫 단계(`buildLeadsOPS`보다 먼저)로 매 Leads 백그라운드 실행마다 자동 호출(사용자 요청). 수동 실행(`runAutoDeleteExactDuplicateLeadRows()` 직접 Run)도 계속 가능. **검증 완료(2026-07-28)**: 단위 테스트(`testFindExactDuplicateLeadRows()`/`testFindExactDuplicateLeadRowsToDelete()`/`testFindExactDuplicateLeadRowsToDeleteTieBreak()`) 전부 PASS, `runOPSQA_()` 실행 결과 현재 Leads_Master에는 완전 동일 중복 0건(탐지 로직이 실데이터에 대해 정상 동작함을 확인, 다만 지금 삭제할 대상이 없어 `runAutoDeleteExactDuplicateLeadRows()`의 실제 삭제 동작 자체는 아직 실물 검증 전) — 향후 겹치는 날짜로 Lead export가 올라와 중복이 실제 발생하면 그때 삭제 동작을 검증할 것. 테스트 함수명 관련 사이드노트: 최초 구현 시 `testFindExactDuplicateLeadRowsToDelete_()`처럼 끝에 `_`를 붙였다가 Run 드롭다운에 안 보이는 문제 발견(`docs/apps-script-gotchas.md` #2) → `_` 제거(v1.4.1). MTA_Master용 동명 함수(`testFindExactDuplicateTouchRowsToDelete_()` 등, v1.3.0)도 같은 문제가 있는 것으로 추정되나 사용자가 그대로 두기로 결정(2026-07-28) — 임의로 변경하지 말 것.
 14. **Search_OPS 정리 작업 중 발견된 Business Segment 분류 개선 — 대부분 완료, 잔존 leadSource="Organic Search" 레거시만 미해결** — 2026-07-28 사용자가 Search_OPS에서 콘텐츠성 캠페인(ebook/guide/SAT practice test 등)이 Search로 잘못 분류된 걸 발견하면서 시작된 연쇄 개선. 상세 이력은 `docs/BusinessSegmentClassification.md`의 2026-07-28 날짜 항목들 참고, 요약: (1) `leadSource.includes("search")`가 Content보다 먼저 체크되던 우선순위 반전, (2) campaign의 `_contact`/`consult`도 동일 문제 있어 `search`/`sitelink`를 확정 신호로 분리, (3) Content 키워드에 download/case study/quiz/공백형 on demand 추가, (4) SAT Practice Test 계열 개별 하드코딩 예외 추가, (5) BOFU/Search "_contact" 공용 fallback을 leadSource 기반(Naver/Google/Organic/Paid Search면 Search, 그 외는 BOFU)으로 재설계. Search_OPS 죽은 키(합집합 병합으로 지워지지 않던 레거시 행) 116건도 `runDeleteDeadSearchOPSRows()`(`71_Search_Engine.js`)로 삭제 완료. **잔존 미해결**: 옛날 ebook Marketo flow가 UTM 값이 없으면 `First Lead Source`를 "Organic Search"로 기본 처리하던 레거시 때문에, leadSource가 문자 그대로 "Organic Search"인 리드 중 일부는 실제로는 진짜 검색 유입이 아닐 수 있음(사용자 확인). 이번 라운드 수정들은 leadSource가 Paid Social 등 **명확히 다른 값**인 케이스만 해소했고, leadSource 필드 자체가 "Organic Search"로 잘못 찍혀 남아있는 잔존 레거시 리드는 식별 기준이 아직 없어(campaign/detail에 다른 신호가 전혀 없어 진짜/가짜 구분이 안 됨) 처리되지 않음 — 이후 재검토 시 별도로 다시 다룰 필요가 있다는 메모, 임의로 처리하지 말 것.
@@ -220,8 +226,10 @@
     (2026-07-30)**: "타겟 설계를 바꿔봐야 할 것 같지만 캠페인 구축이 먼저" — 지금은 그대로
     두고 미해결로 남김, 임의로 처리하지 말 것. 상세: 위 exec-plan 참고.
 19. (완료 — 상세는 `docs/OpenItems_Legacy.md` #19 "캠페인 지출(Ad_Spend_Cache) 독립 스케줄 갱신" 참고)
-20. **ACQ_REP New P1 건수가 Salesforce 자체 리포트와 불일치(2026-07 기준) — 조사 진행 중,
-    범위 정정됨(2026-08-05)** — **범위 정정**: 최초 보고 때는 "New Leads"(전체 Lead 수) 비교로
+20. ~~ACQ_REP New P1 건수가 Salesforce 자체 리포트와 불일치(2026-07 기준)~~ — **✅ 완료
+    (2026-08-05, 헤더 갱신 누락으로 stale하게 "조사 진행 중"으로 남아있던 것을
+    2026-09-17 재확인 중 발견·수정 — 본문은 처음부터 해결 완료로 기록돼 있었음)** —
+    **범위 정정**: 최초 보고 때는 "New Leads"(전체 Lead 수) 비교로
     이해했으나, 사용자 재확인 결과 **New P1**(ACQ_REP I열, Priority 1 유효 리드만) 비교였음 —
     Salesforce 쪽 205건도 전부 Priority 1로 필터된 값. ACQ_REP New P1 = **183건**, Salesforce
     Priority 1 Lead 수 = **205건**.
@@ -345,12 +353,38 @@
     biz-segment-qa.md`/`.claude/agents/utm-matching-qa.md`) 자체는 이미 생성 완료(§9,
     `docs/QAAgentDesign.md`) — 수동으로 부를 때는 정상 사용 가능. 향후 `clasp run-function` 또는
     Sheets API/MCP 연동이 생기면 이 routine 자동화를 재검토할 것 — 임의로 착수하지 말 것.
-25. **OPS QA 결과(Total Issues 9765건) — 미해결로 보류, 다음 세션 확인 필요(2026-08-09)** —
-    Biz Segment 룰 수정(24번 항목 인접 세션 작업, `UTIL_001_TransformHelper.js` v1.15.0/v1.16.0)
-    반영을 위한 `rebuildLeadsMaster()` → `buildLeadsOPS()` 재실행 중 `runOPSQA_()`가 출력한 값 —
-    Funnel Match 불일치(IC Booked Date 2904/IC Completed Date 2769/Opportunity Won Date 2696),
-    Revenue Existence 746, Exact Duplicate Lead Row 650. 사용자 확인 — 오늘 세션 범위 밖이라
-    **의도적으로 미해결 상태로 둠**, 원인 조사·처리는 다음 세션에서. 임의로 손대지 말 것.
+25. ~~OPS QA 결과(Total Issues 9765건)~~ — **✅ 완료(2026-09-17)** — 재조사 결과 QA 체크
+    자체가 옛 아키텍처 기준으로 오탐 생성 중이었음을 발견, 체크 로직 재설계 후 실사용
+    검증까지 완료(9765건 → 0건, 아래 참고) —
+    2026-08-09 원본 기록: Biz Segment 룰 수정(24번 항목 인접 세션 작업,
+    `UTIL_001_TransformHelper.js` v1.15.0/v1.16.0) 반영을 위한 `rebuildLeadsMaster()` →
+    `buildLeadsOPS()` 재실행 중 `runOPSQA_()`가 출력한 값 — Funnel Match 불일치(IC Booked
+    Date 2904/IC Completed Date 2769/Opportunity Won Date 2696), Revenue Existence 746,
+    Exact Duplicate Lead Row 650. 당시엔 세션 범위 밖이라 의도적으로 미해결 상태로 보류.
+    **2026-09-17 재조사 발견**: `OPS_006_QA.js`의 `checkMTAFunnelAndMatching_()`가 IC
+    Booked/Completed/Opportunity Won Date/Revenue를 여전히 MTA_Master 대표값과 비교하고
+    있었는데, 이 4개 필드의 소유권은 2026-08-26(IC Booked/Completed/Won Date →
+    ICFunnel_Raw)과 2026-09-02(Revenue/Won Date → Deal Tracker 역싱크)에 이미 MTA_Master에서
+    완전히 이관됐음(`docs/OperationsLayer.md` 필드 소유권 표) — 즉 이 체크는 설계상 당연히
+    갈라지는 값을 오탐으로 잡고 있었던 것으로 확인됨. 2026-08-09의 9765건 중 정확히 몇 건이
+    이 오탐이었는지는 그 시점 이관 여부에 따라 다름(IC 3개 필드는 08-09 시점엔 아직 MTA_Master
+    소유였을 수 있어 당시엔 유효했을 가능성 있음, Revenue는 그보다 늦게 이관돼 08-09 당시엔
+    확실히 유효) — **정확한 재산정은 재실행 전까지 알 수 없음**. **수정(사용자 확정 —
+    "현재 아키텍처 기준으로 재설계")**: `checkMTAFunnelAndMatching_()`를 `checkMatchingAccuracy_()`
+    (Lead ID/Email 교차검증, MTA_Master 기준 그대로 유지)/`checkICFunnelMatch_()`(ICFunnel_Raw
+    전체 스캔 기준, 신규)/`checkRevenueMatch_()`(Deal Tracker 기준, 신규) 3개로 분리 —
+    `OPS_006_QA.js` v1.9.0. 신규 두 체크는 외부 스프레드시트 전체 스캔이 필요해 자동
+    Import 경로(`buildLeadsOPS()`)에는 배선하지 않고, `executeOPSQAChecks_()`(구 `runOPSQA_()`,
+    시그니처 변경으로 pre-commit naming 훅에 걸려 개명됨)의 신규 3번째 파라미터
+    `includeExternalSourceChecks=true`(`runOPSQAManual()` 전용)일 때만 실행 — 자동 경로
+    성능 회귀 없음(오히려 옛 오탐 체크가 빠지면서 약간 빨라짐). `computeQADashboardMetrics_()`도
+    같은 원칙으로 optional 파라미터 추가, 전달 안 되면(자동 경로) 기존 MTA_Master 기준
+    그대로 fallback. `clasp push` 완료(2026-09-17). **✅ 실사용 검증 완료(2026-09-17)**:
+    사용자가 `runOPSQAManual()`(`OPS_006_QA.js`)을 Apps Script 편집기에서 직접 Run —
+    Total Issues **0건**(113.14초), 옛 9765건에서 완전히 해소됨. 재설계와 무관하게 계속
+    유효했던 "Exact Duplicate Lead Row"(당시 650건)도 이번 실행에서 0건으로 나와, 그 사이
+    (자동 삭제 체인이 이미 배선돼 있던) 다른 세션에서 이미 정리된 것으로 보임 — 별도
+    조치 불필요. 이 항목은 완전히 해소된 것으로 간주.
 26. (완료 — 상세는 `docs/OpenItems_Legacy.md` #26 "Sales Accepted Date 과거 오염 데이터 복구" 참고)
 27. (완료 — 상세는 `docs/OpenItems_Legacy.md` #27 "S&M_REP Leads breakdown New P1 Salesforce 불일치" 참고)
 28. (완료 — 상세는 `docs/OpenItems_Legacy.md` #28 "Events_OPS 데이터 오염 여부 감사" 참고)
@@ -434,8 +468,8 @@
     Import IC Funnel" 재업로드 → 재sync 후 이 5건 해소 확인.
 33. (완료 — 상세는 `docs/OpenItems_Legacy.md` #33 "Won/Lost Deal IC Booked/Completed Date 없이 전환" 참고)
 34. (완료 — 상세는 `docs/OpenItems_Legacy.md` #34 "Business Segment 딕셔너리 특이 분류 모니터링 프로세스" 참고)
-35. **New P1 8월 갭(279 vs 267) — `Lead Priority` 필드 스냅샷 지연 확인·부분 해결(2026-08-28),
-    나머지는 사용자 액션 대기(TODO)** — 사용자가 제공한 Salesforce 8월 New Leads CSV(739건,
+35. ~~New P1 8월 갭(279 vs 267)~~ — **🟡 잠정 해결로 넘김(2026-09-17, #38과 동일 이유,
+    사용자 확정)** — `Lead Priority` 필드 스냅샷 지연 확인·부분 해결(2026-08-28), 사용자가 제공한 Salesforce 8월 New Leads CSV(739건,
     Priority 1=279건)를 `TEMPQA_037_NewP1AugustSalesforceLeadTrace.js`로 대조한 결과 10건이
     `Leads_Master`의 `Lead Priority`가 예전 스냅샷(Salesforce에서 이미 승급됐는데 반영 안 됨)인
     것으로 확인 — IC Booked/Completed/Won Date(#32)와 같은 클래스의 "Lead 레벨 스냅샷이 새
@@ -468,6 +502,17 @@
     재업로드**하면 이 10명 포함 유사 케이스 전체가 갱신될 것 — 아직 실행 전, 사용자 액션
     대기(TODO). 재export 후 `runCompareAugustNewP1AgainstSalesforce()` 재실행으로 최종
     확인할 것.
+    **2026-09-17 재검증 — 재export/재import 후에도 전혀 변화 없음, #38과 동일한 결론으로
+    잠정 해결 넘김**: 사용자가 IC Funnel 리포트 재export/재import를 실제로 완료한 뒤
+    `runCompareAugustNewP1AgainstSalesforce()` 재실행 — 279건 중 266건 일치, 정확히
+    **같은 10명**이 여전히 스냅샷 지연으로 남음(3건 mergeOPS 배제는 그대로 정상).
+    `runCheckICFunnelLeadPriorityBacklog()`로 이 10명을 다시 조회한 결과도 재export
+    이전과 **완전히 동일**(ICFunnel_Raw 여전히 1행, IC Booked Date/Lead Priority 둘 다
+    공란) — 재export 자체는 됐지만 이 10명은 애초에 그 리포트의 export 대상에 안 잡히는
+    것으로 확인됨. `#38`(SAL 잔여 3건)에서 발견한 "Lead → Contact/Account로 전환(convert)된
+    리드는 표준 Lead 리포트 export에서 아예 빠진다" 가설과 정확히 같은 증상 패턴 — 사용자
+    판단으로 근본 원인 확정(Convert 여부 개별 확인)은 보류하고 **잠정 해결(provisional)로
+    넘김**, 코드 조치 없음. 재검토가 필요해지면 이 메모와 `#38`의 동일 메모부터 다시 볼 것.
 36. ~~Events_OPS Meta 캠페인 오매칭(CVR 71.3% 등 비정상 수치)~~ — **✅ 근본 원인 규명 및 수정
     완료(2026-08-28)**, "Recording" 변형 0 문제만 별도 미해결로 남음. 사용자 보고로 "WB-2026-07-
     KOR-MOFU-Core Game Changing Common Application Tips & Case Studies" 웨비나의 CVR 71.3%/
@@ -492,7 +537,8 @@
     MTA_Master 행의 Business Segment는 소급 반영 안 됨(표본 1~2건씩이라 영향 미미로 판단,
     #22 기존 방침대로 rebuild는 보류 — 사용자 확인, 필요시 diff 먼저 확인 후 별도 결정).
 37. **JL(외부 "[FY27] Korea Sales and Marketing Monthly Metrics" 시트) 자동 export — 구현
-    완료(2026-09-01), Aug-26 실측 대조 검증 대기(TODO)** — 사용자가 공유 중인 외부 시트
+    완료(2026-09-01), Aug-26 실측 대조 검증은 🟡 잠정 보류(2026-09-17, 사용자 확정)** —
+    사용자가 공유 중인 외부 시트
     (gid `316435961`, Josephine/Junyong/Simon과 공유)의 B21:M26(Monthly Sales Achieved/No of
     MQLs/No of SALs/No of ICs Completed/Marketing Spend/No of New Accounts Won), B42:M44
     (Referral IC Complete/Revenue/Accounts Won), B49:M50(Non-Referral IC Complete/Revenue)를
@@ -514,8 +560,8 @@
     위함(사용자 확인 후 한 줄 추가로 편입 예정). 상세 매핑 근거는 `JL_001_Config.js` 파일
     헤더 참고.
 38. **SAL 8월 갭(305 vs 243) — 근본 원인 해결 및 87.5% 회복 완료(2026-09-01),
-    잔여 38건은 Salesforce 리포트 쪽 별개 이슈로 확정, 코드로 처리 불가 — 잔여 항목 P1(최우선)
-    TODO로 지정(2026-09-01 사용자 확정)** — 37번(JL) 검증
+    잔여 38건은 Salesforce 리포트 쪽 별개 이슈로 확정, 코드로 처리 불가 — TODO #1은 종료,
+    TODO #2는 🟡 잠정 해결로 넘김(2026-09-17, 아래 참고)** — 37번(JL) 검증
     작업 중 New P1/SAL/IC Complete가 전부 known 실측값보다 낮게 나오는 것을 발견하며 시작.
     `TEMPQA_041_AugustACQSummaryStalenessCheck.js`로 ACQ_Summary 캐시=원본재계산 일치 확인
     (캐시 지연 아님, 진짜 데이터 갭). **근본 원인**: SAL(`Sales Accepted Date`)도 IC Booked/
@@ -580,16 +626,22 @@
     필터 범위)으로 흡수.
 
     **P1 TODO #2 — 잔여 9~14건(재검증 시점에 따라 변동): Leads 리포트 필터 범위 문제로 별개,
-    코드로 처리 불가, 사용자 액션 대기**: 이 리드들이 `Leads_OPS`(및 상당수는 `Leads_Master`)에
-    아예 없음 — IC Funnel/SAL 리포트엔 잡히는데 "Leads" 수동 export 리포트
-    ("LeadsIC_KR_mkt_2.0")에서만 빠짐. 재import 타이밍 문제 아님(Leads가 IC Funnel보다
-    오히려 최신인데도 재현됨, 실측 확인) — **사용자가 Salesforce에서 두 리포트("Leads" vs
-    IC Funnel/SAL)의 필터 조건을 직접 나란히 비교해야 함**, 임의로 처리하지 말 것. IC
-    Booked/Complete(TEMPQA_042/043)도 같은 종류의 미등록 리드(3건, Lead ID
-    `00QRC00000ZsV97`/`00QRC00000D1CCY`/`00QRC000011JJ3o`) 영향을 받고 있어 이 필터
-    이슈가 해결되면 같이 개선될 것으로 예상. **#35(New P1 8월 갭)의 남은 10건도 같은 계열의
-    "export 최신성" 문제로 확인됨** — 별개 원인(Salesforce IC Funnel 리포트 자체를 오랫동안
-    재export 안 한 것)이지만 처방은 동일(전체 재export/재import).
+    코드로 처리 불가 — 🟡 잠정 해결로 넘김(2026-09-17, 사용자 확정)**: 이 리드들이
+    `Leads_OPS`(및 상당수는 `Leads_Master`)에 아예 없음 — IC Funnel/SAL 리포트엔 잡히는데
+    "Leads" 수동 export 리포트("LeadsIC_KR_mkt_2.0")에서만 빠짐. 재import 타이밍 문제
+    아님(Leads가 IC Funnel보다 오히려 최신인데도 재현됨, 실측 확인). IC Booked/Complete
+    (TEMPQA_042/043)도 같은 종류의 미등록 리드(3건, Lead ID `00QRC00000ZsV97`/
+    `00QRC00000D1CCY`/`00QRC000011JJ3o`) 영향을 받고 있음.
+    **2026-09-17 확인(사용자)**: 이 3건을 Salesforce에서 직접 조회하니 안 나오고,
+    `Leads_OPS`에도 없음 — 그런데 `ICFunnel_Raw`(Import 원본)에는 존재. 사용자 판단 —
+    Salesforce Lead 검색에 안 걸리는 건 **Lead가 Contact로 전환(convert)됐기 때문일
+    가능성이 높음**(전환된 Lead는 표준 Lead 검색/리스트에서 빠짐, #39에서 이미 나온
+    "Account 전환 리드는 Leads 리포트에서 안 보인다" 가설과 같은 계열). **결정**: 근본
+    원인 확정(Convert 여부 하나하나 검증)은 보류하고 **잠정 해결(provisional)로 넘김** —
+    코드 조치 없음, 추가 조사도 지금은 안 함. 재검토가 필요해지면 이 메모부터 다시 볼 것.
+    **#35(New P1 8월 갭)의 남은 10건도 같은 계열의 "export 최신성" 문제로 확인됨** —
+    별개 원인(Salesforce IC Funnel 리포트 자체를 오랫동안 재export 안 한 것)이지만
+    처방은 동일(전체 재export/재import), 이건 이 잠정 해결과는 무관.
 39. **Leads_OPS 필드 소유권 전면 재편 — 구현 완료(2026-09-02), 핵심 실사용 검증 완료(2026-09-09)** —
     38번 항목(SAL 8월 갭) 조사 중 "Revenue가 MTA_Master 터치 기반으로만 동기화돼 Search_OPS가
     SAL과 동일한 구조적 문제를 겪고 있다"는 게 발견되면서 사용자가 전체 재설계를 결정.
@@ -782,6 +834,73 @@
       커서로 "어디까지 처리했는지" 기억)와 같은 원칙을 Report 레이어에도 적용하는 셈.
       경계 조건(무엇을 "확정된 과거"로 볼지, Revenue 역싱크 지연이 걸리는 구간을 어떻게
       다룰지)은 설계 단계에서 반드시 확정 필요 — 임의로 처리하지 말 것.
+    - **✅ 2026-09-17 경계 확정(사용자 결정)**: "과거는 안 바뀐다"는 전제는 리포트마다
+      다르다는 게 확인됨 — **ACQ_REP**(현재 구간만 변함)/**S&M_REP**(이미 증분화 완료,
+      2026-09-03)/**FY_REP**/**Target_REP** 4개는 과거 불변, 반면 **NewP1_REP**은
+      코호트 기준(Created Date 축, Won/Revenue가 nurturing으로 몇 달~몇 년 뒤에도
+      붙을 수 있음, `#7` P1당 가치 코호트2 참고)이라 과거도 계속 바뀜 — 캐싱 부적합
+      (단 NewP1_REP은 이미 Report 레이어 자체가 가벼움이 확인돼 있어 애초에 이번
+      캐싱 대상이 아님, 무관). 이번 캐싱 대상은 **Target_REP/FY_REP 둘뿐**(S&M_REP은
+      이미 완료). 경계:
+      - **Target_REP(주 단위)**: 진행 중인 이번 주만 "현재"로 재계산, 그 이전 모든
+        주는 캐시 고정.
+      - **FY_REP(FY·월 단위)**: 월 단위로 캐시 — 이미 끝난 월(진행 중인 FY 안이어도,
+        예: 지금이 9월이면 7월/8월)은 캐시 고정, 진행 중인 월만 재계산.
+      **아직 확정 안 된 것(다음 설계 세션에서 이어갈 것)**: 캐시 저장 방식(hidden
+      캐시 시트 vs PropertiesService JSON vs 다른 방식), 캐시 무효화 트리거(주/월
+      경계를 넘는 시점을 어떻게 판정할지 — `isFYRangeCacheFreshForToday_()`류 "오늘
+      기준 캐시 신선도" 패턴 재사용 가능성), 구현 순서(Target_REP 먼저 vs FY_REP
+      먼저). 실행시간 재측정(#40)은 여전히 이 설계 확정 이후 순서.
+    - **✅ Target_REP 쪽 캐시 구조 설계+구현(그림자 모드) 완료(2026-09-17)**: 코드 확인 결과
+      "과거 주는 캐시"라는 경계를 Report 출력 단계가 아니라 **Engine 집계 단계
+      (`computeTargetLeadsOPSAggregates_()`)에 적용해야 함을 발견** — `generateTargetReport_()`는
+      매번 `refreshTargetEngine_()`를 무조건 통째로 다시 돌리고, 그 안의
+      `computeTargetLeadsOPSAggregates_()`가 Leads_OPS 36,000+행 전체를 `sheetToObjects()`로
+      매번 재스캔해 FY×월×그룹별 New P1 집계를 내는 게 가장 비싼 부분 — Report 레이어에서
+      "지난 주는 다시 안 쓴다"고 캐싱해도 이 전체 스캔 자체는 그대로 실행되어 시간이 안 줄어듦.
+      **구현(그림자 모드, `#50`/`#52`와 동일 원칙 — 실제 계산 경로는 그대로 두고 증분 경로는
+      검증만)**: `TARGET_001_Engine.js` v1.31.0 — 순수 계산부를 `computeTargetLeadsOPSAggregatesForRecords_()`
+      (레코드 배열 + optional seed 집계 → 병합, seed 없으면 기존 함수와 100% 동일)로 분리해 전체
+      재스캔/증분 스캔이 이 함수 하나만 재사용. 신규 `readOPSRecordsFrom_()`(windowed IO)/
+      `computeTargetLeadsOPSAggregatesIncremental_()`(체크포인트 `CONFIG.PROPERTIES.
+      TARGET_LEADS_OPS_AGG_LAST_ROW`/`TARGET_LEADS_OPS_AGG_CACHE` 신규, `CORE_001_Config.js`
+      v1.71.0, `#50`의 `LEADS_OPS_MASTER_LAST_ROW`+`computeDictionaryRefreshWindow_()` 패턴
+      재사용 — 행 수 감소 시 안전하게 전체 재계산)/`computeTargetLeadsOPSAggregatesDiff_()`
+      (key 순서 무관 deep-compare)/`verifyTargetLeadsOPSAggregatesShadowDiff_()`(그림자 검증
+      오케스트레이션, 독립 try/catch). `refreshTargetEngine_()`의 실제 계산은 여전히 기존
+      전체 재스캔 경로가 담당 — 증분 경로는 매 실행마다 Logger로 diff만 남김(시트 쓰기 없음).
+      신규 테스트 2개(`testComputeTargetLeadsOPSAggregatesForRecords`/
+      `testComputeTargetLeadsOPSAggregatesDiff`) Node 시뮬레이션으로 사전 검증 완료(전체
+      계산과 seed 체이닝 증분 계산이 정확히 일치, seed 원본 불변 확인), pre-commit 체크
+      전부 통과, `clasp push` 완료. **✅ 다음 단계 (1) 완료(2026-09-17)**: 사용자가 위
+      2개 테스트를 Apps Script 편집기에서 직접 Run — 둘 다 PASS, 로그 값도 기대값과
+      일치 확인. **다음 단계 (2) — 대기 중(TODO)**: 다음 실제 Leads/MTA Import 때
+      Executions 로그에서 "refreshTargetEngine_ 그림자 diff" 로그로 일치 여부 확인 —
+      몇 차례 반복해 계속 일치하면 실제 전환(쓰기 경로 교체) 논의.
+
+    - **✅ FY_REP 쪽도 동일 패턴으로 그림자 모드 구현 완료(2026-09-17)**: Target_REP과
+      완전히 같은 발견(`computeFYRepFlatRows_()`가 매번 `computeFYRepLeadsOPSAggregates_()`
+      로 Leads_OPS 전체를 재스캔) — 순수 계산부 `aggregateFYRepLeadsOPSFromRecords_()`
+      (기존 함수, `FYREP_001_Engine.js`)에 optional `seedRows` 파라미터를 추가해 전체
+      재스캔/증분 스캔이 이 함수 하나만 재사용하도록 확장(seedRows 생략 시 기존 동작
+      100% 동일 — 기존 호출부/테스트 무변경, 하위호환 확인). 신규
+      `computeFYRepLeadsOPSAggregatesIncremental_()`(체크포인트 `CONFIG.PROPERTIES.
+      FYREP_LEADS_OPS_AGG_LAST_ROW`/`FYREP_LEADS_OPS_AGG_CACHE` 신규, `CORE_001_Config.js`
+      v1.72.0 — `readOPSRecordsFrom_()`(TARGET_001_Engine.js)를 그대로 재사용, Leads_OPS
+      windowed 읽기 로직을 리포트마다 중복 구현하지 않음)/`computeFYRepLeadsOPSAggregatesDiff_()`
+      (배열 순서 무관 비교)/`verifyFYRepLeadsOPSAggregatesShadowDiff_()`(그림자 검증,
+      독립 try/catch) 추가, `FYREP_001_Engine.js` v1.9.0. `computeFYRepFlatRows_()`의
+      실제 계산은 여전히 기존 전체 재스캔 경로가 담당 — 증분 경로는 매 실행마다 Logger로
+      diff만 검증(시트 쓰기 없음). 신규 테스트 2개
+      (`testAggregateFYRepLeadsOPSFromRecordsIncremental`/`testComputeFYRepLeadsOPSAggregatesDiff`)
+      Node 시뮬레이션으로 사전 검증 완료(기존 unseeded 테스트 하위호환 포함), pre-commit
+      체크 전부 통과, `clasp push` 완료. **✅ 다음 단계 (1) 완료(2026-09-17)**: 사용자가
+      위 2개 테스트를 Apps Script 편집기에서 직접 Run — 둘 다 PASS, 로그 값도 Node
+      시뮬레이션과 정확히 일치 확인. **다음 단계 (2) — 대기 중(TODO)**: 다음 실제
+      Leads/MTA Import 때 Executions 로그에서 "computeFYRepFlatRows_ 그림자 diff"
+      로그로 일치 여부 확인. **양쪽 다(Target_REP/FY_REP) 쓰기 경로 전환 자체는 이번
+      구현 범위 밖 — 별도 승인 필요**
+      (`[[feedback_pause_before_core_merge_logic_change]]`).
 43. (완료 — 상세는 `docs/OpenItems_Legacy.md` #43 "Lead Priority(P1) 리스트 기반 자동 Flagging" 참고)
 44. (완료 — 상세는 `docs/OpenItems_Legacy.md` #44 "SAL Sync 무관 Engine 재실행 제거" 참고)
 45. (완료 — 상세는 `docs/OpenItems_Legacy.md` #45 "Salesforce Export 타입별 필드 정리" 참고)
@@ -797,13 +916,29 @@
     - **검증 방식**: 컷오버 전 구현 직후 몇 차례 Import 동안 **기존 `mergeOPS()`(전체 재스캔)와 신규 증분 경로를 같은 Import에 둘 다 나란히 돌리되, 실제 시트 쓰기는 기존 경로만 하고 신규 경로는 결과만 메모리에서 계산** → 두 결과를 행별/컬럼별로 diff해서 완전히 일치하는지 여러 차례 확인한 뒤에야 기존 경로를 걷어내고 증분 경로로 전환. 순수 함수 테스트만으로는 불충분(이미 합의된 사항)이라는 원칙과 일치. **✅ 구현 완료(아래 참고), 실 Import diff 결과는 아직 미확인.**
     - **구현 중 추가 발견 — "IC Requested" 체크박스 스윕은 별도 분리(사용자 확정)**: 설계 논의 이후 구현 착수 직전 재점검 중 발견 — `applyICRequestTracking_()`(체크된 행을 찾아 카운터+1/체크박스 리셋)가 지금은 `mergeOPS()`가 전체를 훑기 때문에 사실상 "매 sync마다 시트 전체를 스윕"하는 역할까지 겸하고 있었음(`docs/OperationsLayer.md`: "IC Requested — Marketing, 매 sync마다 리셋됨"). 증분 경로가 "새 Master 배치에 해당하는 이메일만" 건드리면, 그 배치와 무관한 기존 행에서 마케팅이 체크한 "IC Requested"는 그 이메일이 다시 Master에 나타날 때까지(사실상 영원히 안 나타날 수 있음) 리셋도 카운트도 안 되는 회귀가 생김 — 순수 성능 문제가 아니라 기능 손실이라 별도 확인 후 **"별도 경량 전체-컬럼 스윕으로 분리"로 확정**(매 Import마다 "IC Requested"/"Total IC Requests"/"IC Booked Date" 3개 컬럼만 targeted read해 체크된 행만 처리 — 전체 시트 read/write보다 훨씬 가벼움, 기존 "매 sync마다" 동작은 100% 유지). **아직 미구현** — 그림자 모드 diff 검증에는 영향 없음(diff는 SF_COLUMNS/MANUAL/SYNC_COLUMNS 값 일치만 봄, IC Requested 스윕 자체가 아직 어느 경로에도 없어도 두 경로 다 이 필드를 건드리지 않으므로 diff는 정상 작동), 하지만 **쓰기 전환(컷오버) 전에 반드시 구현해야 하는 필수 항목**으로 등록.
     - **✅ 구현 완료(2026-09-16, 그림자 모드)**: `OPS_004_Merge.js` v3.4.0 — `mergeOPS()`를 `resolveEmailGroupEarliestWins_()`/`buildOpsRowFromMasterRow_()`(순수 함수)로 리팩터(동작 100% 동일, 기존 테스트 PASS 유지), 신규 `planIncrementalOpsMerge_()`(순수 함수, 테스트 `testPlanIncrementalOpsMerge()`)/`computeIncrementalOpsMergePlan_()`(IO 래퍼 — Email/Create Date 2개 컬럼만 targeted read, 교체후보만 전체 행 read). `OPS_003_Build.js` v1.3.0 — `buildLeadsOPS()`의 `mergeOPS()` 직후·`writeOPS()` 전에 `verifyIncrementalOpsShadowDiff_()` 호출, 독립 try/catch로 격리, 시트에는 아무것도 안 씀(Logger 로그만). 체크포인트 `CONFIG.PROPERTIES.LEADS_OPS_MASTER_LAST_ROW` 신규(`CORE_001_Config.js` v1.70.0), Master 행 수 감소 시 `computeDictionaryRefreshWindow_()`(기존 딕셔너리 캐시가 쓰던 순수 함수 재사용) 판정으로 안전하게 diff 생략+체크포인트만 갱신. Node.js로 신규 테스트 4개 + 기존 회귀 테스트(`testMergeOPS_EarliestWins`/`testApplyICRequestTracking`) 전부 PASS 확인, `clasp push` 완료. **실 Apps Script 환경에서 테스트 함수들 재확인 필요** — `OPS_004_Merge.js`의 `testResolveEmailGroupEarliestWins()`/`testBuildOpsRowFromMasterRow()`/`testComputeICRequestCounterUpdate()`/`testPlanIncrementalOpsMerge()`/`testMergeOPS_EarliestWins()`/`testApplyICRequestTracking()` 전부 편집기에서 직접 Run.
-    - **다음 단계**: (1) 위 6개 테스트 Apps Script 편집기에서 실행 확인, (2) 다음 실제 Leads Import 때 Executions 로그에서 "buildLeadsOPS 그림자 diff 결과" 로그로 일치 여부 확인 — 몇 차례 반복해 계속 일치하면, (3) IC Requested 스윕 구현 + 정렬 불변식 절충(하루 1회 재정렬 트리거) 구현 + 실제 쓰기 경로 전환. **쓰기 전환 자체는 이번 구현 범위 밖 — 별도 승인 필요**(`[[feedback_pause_before_core_merge_logic_change]]` 원칙 유지).
+    - **✅ 다음 단계 (1) 완료(2026-09-17)**: `OPS_004_Merge.js`의 6개 테스트
+      (`testResolveEmailGroupEarliestWins`/`testBuildOpsRowFromMasterRow`/
+      `testComputeICRequestCounterUpdate`/`testPlanIncrementalOpsMerge`/
+      `testMergeOPS_EarliestWins`/`testApplyICRequestTracking`) 전부 Apps
+      Script 편집기에서 직접 Run — 6개 전부 PASS, 로그 값도 기대값과 일치
+      확인(단순 "PASS" 텍스트만 아니라 각 케이스 출력값 대조 완료).
+    - **다음 단계 (2) — 대기 중(TODO)**: 다음 실제 Leads Import 때 Executions
+      로그에서 "buildLeadsOPS 그림자 diff 결과" 로그로 신규/기존 증분 경로와
+      기존 전체 재스캔 경로의 결과가 일치하는지 확인 — 몇 차례 반복해 계속
+      일치하면 (3) IC Requested 스윕 구현 + 정렬 불변식 절충(하루 1회 재정렬
+      트리거) 구현 + 실제 쓰기 경로 전환으로 진행. **쓰기 전환 자체는 이번
+      구현 범위 밖 — 별도 승인 필요**(`[[feedback_pause_before_core_merge_logic_change]]`
+      원칙 유지).
 51. **2026-09-11 Executions 로그 — 5개 항목 exec-plan 종료(#42/#50 관련) 이후에도 체감 개선 없음, 원인 미조사(TODO)** — 사용자가 그날 Apps Script Executions 대시보드를 그대로 붙여넣으며 "시간이 너무 전체적으로 다 오래걸려서 재설계한 느낌을 못 받는다"고 지적. 로그상 실측치(같은 날 여러 건): `runLeadsPipelineTail` Editor 695.136s / Time-Driven 691.479s(둘 다 약 11분 반), `runMTAPipelineTail` Time-Driven 462.245s(약 7분 42초), `periodicRefreshAdSpendCache_` Time-Driven 697.267s(약 11분 37초), `runRevenuePipelineTail` Time-Driven 217.846s. **`docs/PerformanceBenchmark.md`(2026-09-03) 베이스라인과 대조 결과, 실제로 개선은커녕 악화로 보임**: 같은 문서의 2026-09-03 실측(S&M_REP 증분화 *이전*)이 `runLeadsPipelineTail` 전체 612s(10m12s)였고, 같은 날 S&M_REP 증분화로 Report 레이어에서만 약 115.8s(119.8s→4.0s)가 줄었으니 그 직후 기대치는 대략 497s(8m17s) 수준이어야 하는데, 2026-09-11 실측은 오히려 691~695s로 베이스라인(612s)보다도 13% 더 걸림 — 기대치 대비로는 약 40% 더 걸리는 셈. **원인 미확정, 아래는 후보일 뿐(임의로 확정하지 말 것)**: (1) 데이터 행수 자체가 계속 늘고 있음(#50에 이미 기록된 `buildLeadsOPS()` 전체 재스캔 비용이 대표적 — 이 항목은 애초에 이번 exec-plan 범위 밖으로 보류됐던 부분), (2) #18에 이미 기록된 "파이프라인 겹침 시 락 경합으로 외부 API 호출 지연" 패턴이 이번에도 작용했을 가능성(이 로그만으로는 여러 트리거가 실제로 겹쳐 돌았는지 확인 불가), (3) `periodicRefreshAdSpendCache_`(697s)는 `docs/PerformanceBenchmark.md`에 베이스라인 자체가 없어 이 값이 원래 정상 범위인지조차 판단 불가. **다음에 조사할 때 확인할 것**: 같은 시간대에 다른 파이프라인 tail이 겹쳐 돌고 있었는지(Executions 로그 Start Time 전체 대조), `[TIMING]` Logger 계측(2026-09-03에 이미 도입됨, `MASTER_002_PipelineAsync.js`)으로 이번 실행의 단계별 분해가 가능한지. 사용자 요청으로 지금은 조사 없이 이 관찰만 기록.
 52. **Leads_OPS "Sales Accepted Date"/"IC Booked Date"/"IC Completed Date" 대량 유실 — 복구 완료, 원인 미확정(TODO)** (2026-09-15 등록) — 사용자 보고("S&M_REP/ACQ_REP SAL이 다 0")로 발견. Leads_OPS의 "Sales Accepted Date"가 36,831행 중 18건만 남아있었음(SAL_Raw 원본엔 8,207건 정상 존재 확인, SAL Sync 코드는 2026-09-09 정상 검증 이후 무변경 — 코드 회귀 아님). 같은 배치에 항상 같이 쓰이는 "SAL Segment"(문자열)는 8,182건으로 멀쩡했음. IC Funnel 쪽도 동일 패턴 — "IC Booked Date"(5건)/"IC Completed Date"(3건)만 비정상으로 낮고 같은 배치의 "Lead Priority"는 정상. **패턴**: 두 사고 모두 "Date 타입 sync 컬럼만 지워지고 같이 쓰인 문자열 컬럼은 안 지워짐" — 우연이라기엔 일관적이라 같은 메커니즘일 가능성이 높음(예: Date 타입 컬럼 전체를 대상으로 한 어떤 일괄 작업의 부작용, 혹은 삭제된 줄 알았던 옛 임시 복구 스크립트가 실은 아직 컨테이너에 남아있다가 재실행됨 등 — 전부 가설일 뿐, 확인 안 됨). **복구**: 각 원본(SAL_Raw/ICFunnel_Raw 외부 스프레드시트)에서 체크포인트 무시하고 전체 재백필해 정상화 완료(`Sales Accepted Date` 18→8,177건/`IC Booked Date` 5→3,213건/`IC Completed Date` 3→3,010건, 상세는 `docs/Changelog.md` 2026-09-15 참고). "Opportunity Won Date"(87건)도 같은 패턴으로 의심했으나 Deal Tracker 자체 원본이 원래 딜 792건/고유 이메일 124건뿐임을 확인해 정상 판단, 조치 불필요. **원인 조사는 사용자 요청으로 이번엔 보류** — 재발 시 다음을 확인할 것(임의로 처리하지 말 것): (1) Leads_OPS 시트의 Google Sheets 버전 기록(파일 > 버전 기록)에서 값이 사라진 정확한 시점과 편집 주체(사람 vs Apps Script) 확인, (2) Apps Script 편집기 Executions 탭에서 그 시점 전후 실행된 함수 중 낯선/오래된 것이 있는지 확인, (3) 편집기 파일 목록에 로컬 저장소에서 이미 삭제된 옛 `TEMPQA_0xx_SalesAcceptedDate...` 계열 스크립트가 남아있는지 확인(이번 세션 중 `clasp push`의 삭제 반영이 즉시가 아니라 약간의 지연이 있는 것도 함께 확인됨 — 몇 초~몇 분 내 정상 반영되긴 함, 영구적 버그는 아님).
 
 **2026-09-16 후속 — 항목 (3) 실측, "지연"이 아니라 clasp 자체 버그로 확정**: #52 조사 착수 시점에 컨테이너를 임시 디렉토리에 pull해 로컬과 diff한 결과, `TEMPQA_060_ICFunnelBookedCompletedFullBackfill.js`(Changelog엔 "사용 후 삭제"로 기록됨)가 로컬엔 없는데 원격에 그대로 남아있음을 발견(TEMPQA_059는 정상 삭제 확인). `clasp push`/`clasp push -f` 둘 다 재실행했으나 "Script is already up to date."만 출력하고 실제로는 삭제 안 됨을 재pull로 재확인 — 위 "몇 초~몇 분 내 정상 반영"이라는 기존 판단은 **철회**, 실제로는 clasp 3.3.0의 구조적 버그(`push`가 "파일 삭제만" 있는 변경은 원격 비교 없이 조용히 스킵 — 상세 메커니즘은 `docs/apps-script-gotchas.md` #13)로 확정. 원본 데이터 유실 사고의 직접 원인은 아니지만(TEMPQA_060은 사고 이후 복구용으로 만든 스크립트), "삭제했다"고 기록된 과거의 다른 임시/TEMPQA 스크립트도 실제로는 컨테이너에 남아있을 가능성이 있다는 뜻이라 재발 방지 조치를 이번에 바로 적용: `scripts/safe-clasp-push.sh`가 매 push 후 원격을 임시 디렉토리에 pull해 로컬에 없는 원격 전용 파일을 자동 경고하도록 수정(2026-09-16, 실측으로 TEMPQA_060 정상 탐지 확인) — 경고 시 Apps Script 편집기에서 직접 삭제해야 함(clasp 재시도는 같은 이유로 무의미). TEMPQA_060은 사용자가 Apps Script 편집기에서 직접 삭제 완료(재push로 "원격 전용 파일 없음" 확인).
 
 **2026-09-16 후속 — 항목 (1)/(2) 실측, 유력한 원인 확정(100% 재현은 아니나 코드+로그로 뒷받침됨)**: 사용자가 공유한 9/13~9/16 Executions 로그를 원본 발견 시점(`runDiagnoseSALHistoricalDataWipe` 최초 실행 9/15 11:04:24 AM) 이전 구간과 대조한 결과, 그날 아침 `runLeadsPipelineTail`이 **편집기(Editor)에서 두 번** 수동 실행됨(8:35:25 AM/9:43:36 AM) — 두 번째 실행이 락을 정상 보유 중이던 `periodicRefreshRevenue_`(Time-Driven, 9:38:25~9:44:20 AM)와 **44초간 겹쳐 돌았음**. 코드 확인 결과 `runLeadsPipelineTail()`(`MASTER_002_PipelineAsync.js`)은 트리거 대상 겸 "수동 재실행 진입점(디버깅/재시도용)"으로 **의도적으로** 편집기 직접 Run이 허용돼 있었는데, 트리거 경로(`appendNewLeads()`가 앞문에서 `acquirePipelineLock_()`)와 달리 **이 진입점 자체엔 락 체크가 전혀 없었음** — 무조건 실행되고 끝에서 `releasePipelineLockAndProcessQueue_()`만 무조건 호출(자기가 잡지도 않은 락을 반납 시도). 한편 `buildLeadsOPS()`(`OPS_003_Build.js`)는 `readOPS()`로 Leads_OPS 전체를 메모리 스냅샷 → `mergeOPS()`(SYNC_COLUMNS를 그 스냅샷 값 그대로 복사, `OPS_004_Merge.js:219`) → `writeOPS()`로 시트 전체 재작성하는 구조라, **스냅샷~재작성 사이에 다른 프로세스가 SYNC_COLUMNS(SAL/IC Booked/Completed Date 포함)에 쓴 값은 조용히 되돌아갈 수 있음**. `periodicRefreshRevenue_` 자신은 Revenue/Opportunity Won Date 2개 컬럼만 좁게 쓰기 때문에 SAL/IC 필드를 직접 덮어쓴 증거는 아니지만, 같은 날 아침 `runICFunnelPipelineTail`(8:55~8:57 AM, IC Booked/Completed Date를 새로 씀)이 두 번째 `runLeadsPipelineTail`(9:43 AM) 직전에 실행됐다는 점, 그리고 "락 체크 없는 수동 tail 실행이 다른 살아있는 락과 실제로 겹쳐 돌았다"는 사실 자체가 로그로 증명됐다는 점에서 **이 클래스의 경합이 유력한 원인**으로 결론. **수정 완료(2026-09-16)**: `runLeadsPipelineTail()`/`runMTAPipelineTail()`/`runICFunnelPipelineTail()`/`runSALPipelineTail()` 4개 진입점 전부에 `guardPipelineTailEntry_()`(+ 순수 판정 함수 `computeTailEntryGuardDecision_()`, 테스트 `testComputeTailEntryGuardDecision()` PASS 확인) 가드 추가 — 타입이 다른 살아있는 락이 있으면 실행 거부, 락이 없으면 직접 획득, 같은 타입/stale이면 기존 트리거 흐름 그대로 통과. `MASTER_002_PipelineAsync.js` v1.33.0, clasp push 완료. **실사용 재검증 필요** — 다음에 같은 상황(수동 tail 실행이 다른 파이프라인과 겹침)이 발생하면 Logger에 거부 로그가 남는지, 그리고 이후 SAL/IC 유실이 재발하지 않는지 확인 전까지 완료로 간주하지 말 것. Google Sheets 버전 기록 대조(항목 1)는 이번엔 Executions 로그만으로 충분한 설명이 나와 별도로 진행하지 않음.
+
+**🟡 2026-09-17 재검증 중 코드 리뷰로 발견·수정 — v1.33.0 가드 구현 자체에 결함 있었음**: 실사용 재검증(재발 여부는 시간이 더 지나야 확인 가능)에 앞서 가드 로직을 코드로 직접 재검토한 결과, `computeTailEntryGuardDecision_()`가 "stale 락"과 "같은 타입 락"을 하나의 분기(`shouldAcquire:false`)로 묶어 처리하고 있었음을 발견 — 헤더 주석은 "stale 락은 self-heal로 새로 획득"이라고 적어놓았지만 실제 코드는 stale이어도 `acquirePipelineLock_()`를 호출하지 않아 락 타임스탬프가 갱신되지 않는 구멍이었음. 이 상태에서는 **두 개의 수동 tail 실행이 동시에 같은 죽은(stale) 락을 보면 둘 다 "그냥 통과"**해버려, 원 사고(9/15)와 동일한 클래스의 경합(락 없이 `buildLeadsOPS()` 등이 동시에 도는 것)이 "다른 타입의 살아있는 락"이 아니라 "stale 락" 케이스에서 재현될 수 있었음. 기존 테스트(`testComputeTailEntryGuardDecision`)도 이 잘못된 기대값을 그대로 검증하고 있어 통과했던 것 — 테스트 자체가 버그를 못 잡는 흔한 패턴. **수정**: stale 분기를 분리해 타입 무관 `shouldAcquire:true`(`computePipelineLockState_()`의 self-heal과 동일하게 재획득)로 교정, `differentTypeStale` 기대값 갱신 + `sameTypeStale` 케이스 신규 추가, `MASTER_002_PipelineAsync.js` v1.34.0, clasp push 완료. **실사용 재검증 필요(v1.33.0 항목과 통합)** — 다음에 파이프라인이 30분 넘게 걸려 락이 stale해지는 상황에서 수동 재실행이 겹치면(드문 경로) Logger 거부/재획득 로그가 정상 남는지, SAL/IC 유실이 재발하지 않는지 확인 전까지 완료로 간주하지 말 것.
+
+**🟢 2026-09-17 헬스체크 결과 — 유실 재발 없음 확인, 단 가드가 실제로 시험된 건 아님**: 신규 읽기 전용 진단 `TEMPQA_061_SALICDateHealthCheck.js`(`runCheckSALICDateHealth()`)로 Leads_OPS의 Sales Accepted Date/IC Booked Date/IC Completed Date 건수를 확인 — 8,177/3,213/3,010으로 2026-09-15 복구 직후 기준값과 **정확히 일치**(사용자 실행 확인). 감소는 없었으므로 재발은 아님. 다만 정확히 일치한다는 건 그 이후로 SAL/IC Funnel Import 자체가 새로 없었다는 뜻이기도 해서, 락 가드가 실제 겹침 상황에서 작동하는 걸 직접 목격한 것은 아님 — **다음 실제 SAL/IC Funnel Import 이후 이 건수가 정상적으로 늘어나는지, 그리고 그 사이 겹침이 있었다면 거부/재획득 로그가 남는지 재확인 필요**. 완료로 간주하지 말 것.
 
 
 

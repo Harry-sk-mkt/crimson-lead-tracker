@@ -40,9 +40,29 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-17)
+ * - **`aggregateFYRepLeadsOPSFromRecords_()` 증분화 — 그림자 모드 도입
+ *   (`docs/OpenItems.md` #42)** — `computeFYRepFlatRows_()`가 매번 Leads_OPS
+ *   전체를 재스캔하는 게 가장 비싼 구간으로 확인됨(TARGET_001_Engine.js
+ *   v1.31.0의 Target_REP 쪽 조사와 동일 발견). "한 번 확정된 과거 월 수치는
+ *   조용히 안 바뀐다"는 동일 정책(사용자 확정)에 따라 이미 처리한 행은
+ *   다시 안 훑어도 됨 — `#50`/`#42`(Target_REP)의 체크포인트+그림자 diff
+ *   패턴을 그대로 재사용. `aggregateFYRepLeadsOPSFromRecords_()`에 optional
+ *   `seedRows` 파라미터 추가(생략 시 기존 동작 100% 동일, 기존 테스트/호출부
+ *   무변경). 신규 `computeFYRepLeadsOPSAggregatesIncremental_()`(체크포인트
+ *   `CONFIG.PROPERTIES.FYREP_LEADS_OPS_AGG_LAST_ROW`/`FYREP_LEADS_OPS_AGG_CACHE`
+ *   신규, `CORE_001_Config.js` v1.72.0 — `readOPSRecordsFrom_()`(TARGET_001_Engine.js)
+ *   재사용)/`computeFYRepLeadsOPSAggregatesDiff_()`(배열 순서 무관 비교)/
+ *   `verifyFYRepLeadsOPSAggregatesShadowDiff_()`(그림자 검증, 독립 try/catch)
+ *   추가. **`computeFYRepFlatRows_()`의 실제 계산은 여전히 기존 전체
+ *   재스캔 경로가 담당** — 증분 경로는 매 실행마다 Logger로 diff만 검증
+ *   (시트 쓰기 없음), 여러 차례 실 Import에서 일치 확인 후 실제 전환은
+ *   별도 승인 필요(`[[feedback_pause_before_core_merge_logic_change]]`).
+ *   신규 테스트 `testAggregateFYRepLeadsOPSFromRecordsIncremental()`/
+ *   `testComputeFYRepLeadsOPSAggregatesDiff()`.
  * v1.8.0 (2026-09-03)
  * - **perfTrackerByFY 반복 오픈 제거(`docs/OpenItems.md` #41, 실측 근거:
  *   `docs/PerformanceBenchmark.md` 2026-09-03)** — `computeFYRepMarketingRowsForFY_()`/
@@ -616,6 +636,11 @@ function computeFYRepMarketingRows_(){
  *   OPS.HEADER 컬럼명을 키로 가짐("Create Date"/"Business Segment"/
  *   "Lead Priority"/"Priority Override"/"Total IC Requests"/"IC Booked Date"/
  *   "IC Completed Date")
+ * seedRows : Array<Object> [optional]  이전 누적 결과(이 함수의 OUTPUT과 동일
+ *   shape) — 넘기면 그 위에 records를 누적, 안 넘기면 빈 집계에서 시작
+ *   (2026-09-17 추가, `docs/OpenItems.md` #42 — 증분화 그림자 모드,
+ *   `computeTargetLeadsOPSAggregatesForRecords_()`의 seedAggregate와 동일
+ *   원칙). 기존 호출부(seedRows 생략)는 동작 100% 동일.
  *
  * OUTPUT
  * Array<Object>  [{ fy, month, segment, newLeads, newP1, sal, icBooked, icComplete }]
@@ -624,9 +649,20 @@ function computeFYRepMarketingRows_(){
  * testAggregateFYRepLeadsOPSFromRecords() 참고
  * ==========================================================
  */
-function aggregateFYRepLeadsOPSFromRecords_(records){
+function aggregateFYRepLeadsOPSFromRecords_(records, seedRows){
 
   const groups = {};
+
+  (seedRows || []).forEach(function(row){
+
+    const key = row.fy + "|" + row.month + "|" + row.segment;
+
+    groups[key] = {
+      newLeads: row.newLeads, newP1: row.newP1, sal: row.sal,
+      icBooked: row.icBooked, icComplete: row.icComplete
+    };
+
+  });
 
   records.forEach(function(record){
 
@@ -750,6 +786,251 @@ function computeFYRepLeadsOPSAggregates_(){
   if(!sheet) return [];
 
   return aggregateFYRepLeadsOPSFromRecords_(sheetToObjects(sheet));
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateFYRepLeadsOPSFromRecords_() seed 체이닝(증분 누적)
+ *
+ * WHY (2026-09-17, docs/OpenItems.md #42)
+ * testAggregateFYRepLeadsOPSFromRecords()는 seedRows 없는 기존 경로만
+ * 검증 — 이 테스트는 레코드를 절반씩 나눠 seed 체이닝으로 계산한 결과가
+ * 한 번에 전체 계산한 결과와 정확히 일치하는지 확인(증분 누적 핵심
+ * 불변식, computeTargetLeadsOPSAggregatesForRecords_()와 동일 패턴).
+ * ==========================================================
+ */
+function testAggregateFYRepLeadsOPSFromRecordsIncremental(){
+
+  const records = [
+    { "Create Date": new Date(2026, 7, 1), "Business Segment": "Search", "Lead Priority": "Priority 1", "Priority Override": "", "Total IC Requests": 1, "IC Booked Date": new Date(2026, 7, 5), "IC Completed Date": "" },
+    { "Create Date": new Date(2026, 7, 10), "Business Segment": "Search", "Lead Priority": "Priority 3", "Priority Override": "", "Total IC Requests": 0, "IC Booked Date": "", "IC Completed Date": "" },
+    { "Create Date": new Date(2025, 8, 3), "Business Segment": "Content", "Lead Priority": "Priority 1", "Priority Override": "", "Total IC Requests": 0, "IC Booked Date": "", "IC Completed Date": new Date(2025, 9, 1) },
+    { "Create Date": "", "Business Segment": "Search", "Lead Priority": "Priority 1", "Priority Override": "", "Total IC Requests": 0, "IC Booked Date": "", "IC Completed Date": "" }
+  ];
+
+  function findRow(rows, fy, month, segment){
+    return rows.find(function(r){ return r.fy === fy && r.month === month && r.segment === segment; });
+  }
+
+  const full = aggregateFYRepLeadsOPSFromRecords_(records);
+
+  const half1 = aggregateFYRepLeadsOPSFromRecords_(records.slice(0, 2));
+  const half1SearchAugBeforeMerge = findRow(half1, 27, "AUG", "Search").newLeads;
+  const incremental = aggregateFYRepLeadsOPSFromRecords_(records.slice(2), half1);
+
+  const fullSearchAug = findRow(full, 27, "AUG", "Search");
+  const incrementalSearchAug = findRow(incremental, 27, "AUG", "Search");
+  const fullContentSep = findRow(full, 26, "SEP", "Content");
+  const incrementalContentSep = findRow(incremental, 26, "SEP", "Content");
+
+  const pass =
+    fullSearchAug.newLeads === 2 && fullSearchAug.newP1 === 1 && fullSearchAug.icBooked === 1 &&
+    incrementalSearchAug.newLeads === fullSearchAug.newLeads &&
+    incrementalSearchAug.newP1 === fullSearchAug.newP1 &&
+    incrementalSearchAug.icBooked === fullSearchAug.icBooked &&
+    incrementalContentSep.icComplete === fullContentSep.icComplete &&
+    findRow(half1, 27, "AUG", "Search").newLeads === half1SearchAugBeforeMerge; // seed 원본 불변
+
+  Logger.log(
+    "testAggregateFYRepLeadsOPSFromRecordsIncremental: " + (pass ? "PASS" : "FAIL") +
+    " full=" + JSON.stringify(full) + " incremental=" + JSON.stringify(incremental)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute FY_REP Leads_OPS Aggregates Incremental (IO 래퍼, 그림자 모드)
+ *
+ * WHY (2026-09-17, docs/OpenItems.md #42)
+ * `computeTargetLeadsOPSAggregatesIncremental_()`(TARGET_001_Engine.js)와
+ * 동일 원칙/패턴 — Leads_OPS 전체 재스캔이 가장 비싼 부분이라, 이미
+ * 처리한 행은 다시 훑지 않고 체크포인트 이후 신규 행만 읽어 누적한다.
+ * `readOPSRecordsFrom_()`(TARGET_001_Engine.js, windowed IO)를 그대로
+ * 재사용 — Leads_OPS 읽기 방식이 리포트마다 다를 이유가 없음.
+ *
+ * OUTPUT: computeFYRepLeadsOPSAggregates_()와 동일 shape
+ * ==========================================================
+ */
+function computeFYRepLeadsOPSAggregatesIncremental_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const checkpointKey = CONFIG.PROPERTIES.FYREP_LEADS_OPS_AGG_LAST_ROW;
+  const cacheKey = CONFIG.PROPERTIES.FYREP_LEADS_OPS_AGG_CACHE;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const currentTotalRows = Math.max(0, lastRow - OPS.ROWS.DATA_START + 1);
+
+  const lastProcessedCount = Number(props.getProperty(checkpointKey)) || 0;
+
+  const window = computeDictionaryRefreshWindow_(lastProcessedCount, currentTotalRows);
+
+  if(window.needsFreshCounts){
+
+    // 최초 실행 또는 행 수 감소 — 캐시를 신뢰할 수 없으므로 전체 재계산
+    const rows = computeFYRepLeadsOPSAggregates_();
+
+    props.setProperty(cacheKey, JSON.stringify(rows));
+    props.setProperty(checkpointKey, String(currentTotalRows));
+
+    return rows;
+
+  }
+
+  const cachedRaw = props.getProperty(cacheKey);
+  const seedRows = cachedRaw ? JSON.parse(cachedRaw) : [];
+
+  if(window.numRows === 0){
+    return seedRows;
+  }
+
+  const newRecords = readOPSRecordsFrom_(window.startIndex + OPS.ROWS.DATA_START);
+
+  const merged = aggregateFYRepLeadsOPSFromRecords_(newRecords, seedRows);
+
+  props.setProperty(cacheKey, JSON.stringify(merged));
+  props.setProperty(checkpointKey, String(currentTotalRows));
+
+  return merged;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute FY_REP Leads_OPS Aggregates Diff (Pure)
+ *
+ * WHY
+ * 전체 재스캔 결과와 증분 경로 결과(둘 다 fy|month|segment 키 배열)를
+ * 배열 순서 무관하게 비교 — computeTargetLeadsOPSAggregatesDiff_()와
+ * 동일 원칙.
+ *
+ * @return {{equal: boolean, differences: string[]}}
+ *
+ * TEST
+ * testComputeFYRepLeadsOPSAggregatesDiff() 참고.
+ * ==========================================================
+ */
+function computeFYRepLeadsOPSAggregatesDiff_(fullRows, incrementalRows){
+
+  const differences = [];
+
+  function toMap(rows){
+    const map = {};
+    (rows || []).forEach(function(row){
+      map[row.fy + "|" + row.month + "|" + row.segment] = row;
+    });
+    return map;
+  }
+
+  const fullMap = toMap(fullRows);
+  const incrementalMap = toMap(incrementalRows);
+
+  const keys = Array.from(new Set(Object.keys(fullMap).concat(Object.keys(incrementalMap))));
+  const fields = ["newLeads", "newP1", "sal", "icBooked", "icComplete"];
+
+  keys.forEach(function(key){
+
+    const a = fullMap[key] || {};
+    const b = incrementalMap[key] || {};
+
+    fields.forEach(function(field){
+
+      const valA = a[field] || 0;
+      const valB = b[field] || 0;
+
+      if(valA !== valB){
+        differences.push(key + "." + field + " : full=" + valA + " / incremental=" + valB);
+      }
+
+    });
+
+  });
+
+  return { equal: differences.length === 0, differences: differences };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeFYRepLeadsOPSAggregatesDiff()
+ * ==========================================================
+ */
+function testComputeFYRepLeadsOPSAggregatesDiff(){
+
+  const a = [
+    { fy: 27, month: "AUG", segment: "Search", newLeads: 2, newP1: 1, sal: 1, icBooked: 1, icComplete: 0 }
+  ];
+
+  // b는 순서/내용 동일 — equal이어야 함
+  const bEqual = [
+    { fy: 27, month: "AUG", segment: "Search", newLeads: 2, newP1: 1, sal: 1, icBooked: 1, icComplete: 0 }
+  ];
+
+  const equalCase = computeFYRepLeadsOPSAggregatesDiff_(a, bEqual);
+  const equalCaseOk = equalCase.equal === true && equalCase.differences.length === 0;
+
+  // c는 newP1 값이 실제로 다름 — 불일치 검출돼야 함
+  const c = [
+    { fy: 27, month: "AUG", segment: "Search", newLeads: 2, newP1: 2, sal: 1, icBooked: 1, icComplete: 0 }
+  ];
+
+  const diffCase = computeFYRepLeadsOPSAggregatesDiff_(a, c);
+  const diffCaseOk = diffCase.equal === false && diffCase.differences.length === 1;
+
+  const pass = equalCaseOk && diffCaseOk;
+
+  Logger.log(
+    "testComputeFYRepLeadsOPSAggregatesDiff: " + (pass ? "PASS" : "FAIL") +
+    " equalCase=" + JSON.stringify(equalCase) + " diffCase=" + JSON.stringify(diffCase)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Verify FY_REP Leads_OPS Aggregates Shadow Diff (그림자 검증 오케스트레이션)
+ *
+ * WHY
+ * computeFYRepFlatRows_()이 매번 실행하는 전체 재스캔 결과(fullRows)와
+ * 증분 경로 결과를 비교해 Logger에만 기록 — 시트에는 아무것도 안 씀.
+ * 호출부에서 독립 try/catch로 감싸 호출해야 한다(이 검증이 실패해도
+ * 실제 계산 경로는 절대 영향받지 않아야 함).
+ * ==========================================================
+ */
+function verifyFYRepLeadsOPSAggregatesShadowDiff_(fullRows){
+
+  const incrementalRows = computeFYRepLeadsOPSAggregatesIncremental_();
+
+  const diff = computeFYRepLeadsOPSAggregatesDiff_(fullRows, incrementalRows);
+
+  if(diff.equal){
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " computeFYRepFlatRows_ 그림자 diff: 증분 집계 결과 일치(전체 재스캔과 100% 동일)."
+    );
+
+  } else {
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " computeFYRepFlatRows_ 그림자 diff: 불일치 " + diff.differences.length + "건 — " +
+      diff.differences.slice(0, 10).join(" | ") +
+      (diff.differences.length > 10 ? " ... (외 " + (diff.differences.length - 10) + "건 생략)" : "")
+    );
+
+  }
 
 }
 
@@ -1551,8 +1832,22 @@ function computeFYRepFlatRows_(){
   const marketingRows = filterFYRepMarketingChannels_(computeFYRepMarketingRows_(), FY_REP_MARKETING_CHANNEL_EXCLUDE);
   const marketingTotals = sumFYRepRowsByFYMonth_(marketingRows, ["spent"]);
 
+  const leadsOPSAggregateRows = computeFYRepLeadsOPSAggregates_();
+
+  // 2026-09-17 추가(docs/OpenItems.md #42) — 증분화 그림자 검증. 실제 계산은
+  // 위 leadsOPSAggregateRows(전체 재스캔)가 그대로 담당, 이 호출은 Logger
+  // 로그만 남기고 결과에는 아무 영향 없음 — 독립 try/catch로 격리.
+  try {
+    verifyFYRepLeadsOPSAggregatesShadowDiff_(leadsOPSAggregateRows);
+  } catch(shadowErr){
+    Logger.log(
+      CONFIG.LOG.PREFIX + " computeFYRepFlatRows_ 증분 집계 그림자 diff 실패(비필수, 무시) — " +
+      (shadowErr && shadowErr.message ? shadowErr.message : shadowErr)
+    );
+  }
+
   const leadsOPSTotals = sumFYRepRowsByFYMonth_(
-    computeFYRepLeadsOPSAggregates_(), ["newP1", "icBooked", "icComplete"]
+    leadsOPSAggregateRows, ["newP1", "icBooked", "icComplete"]
   );
 
   const revenueRows = computeFYRepRevenueRows_();

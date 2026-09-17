@@ -22,9 +22,23 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.33.0
+ * v1.34.0
  *
  * Change Log
+ * v1.34.0 (2026-09-17)
+ * - **버그 수정 — `computeTailEntryGuardDecision_()`가 stale 락을 "같은 타입"
+ *   분기와 묶어 `shouldAcquire:false`로 처리하고 있었음(`docs/OpenItems.md`
+ *   #52 재검증 중 발견, v1.33.0 최초 구현의 결함)**. 헤더 주석은 "stale
+ *   락은 `acquirePipelineLock_()`의 self-heal 판정을 재사용해 새로 획득"이라고
+ *   적혀 있었지만 실제로는 stale이어도 `acquirePipelineLock_()`를 호출하지
+ *   않아 락이 갱신되지 않았음 — 두 개의 수동 tail 실행이 동시에 같은 죽은
+ *   락을 보면 둘 다 "그냥 통과"해버려 #52 원 사고와 동일한 클래스의 경합
+ *   (락 없이 `buildLeadsOPS()` 등이 동시에 도는 것)이 stale-락 케이스에서
+ *   재현될 수 있는 구멍이었음. stale 분기를 별도로 분리해 `shouldAcquire:true`
+ *   (타입 무관, `computePipelineLockState_()`의 self-heal과 동일하게 재획득)로
+ *   수정. `testComputeTailEntryGuardDecision()` 기대값 갱신
+ *   (`differentTypeStale.shouldAcquire` false→true) + `sameTypeStale` 케이스
+ *   신규 추가.
  * v1.33.0 (2026-09-16)
  * - **수동 Editor 재실행 락 가드 추가** — `runLeadsPipelineTail()`/
  *   `runMTAPipelineTail()`/`runICFunnelPipelineTail()`/`runSALPipelineTail()`
@@ -840,7 +854,17 @@ function computeTailEntryGuardDecision_(existingLockRaw, requestedType, nowMs){
   const age = nowMs - parsed.acquiredAt;
   const stale = age > CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS;
 
-  if(stale || parsed.type === requestedType){
+  if(stale){
+    // 죽은 락 — computePipelineLockState_()의 self-heal과 동일하게 "새로
+    // 획득"으로 처리(shouldAcquire:true). stale을 "같은 타입" 분기와
+    // 묶어서 shouldAcquire:false로 처리하면(2026-09-16 최초 구현의 버그,
+    // docs/OpenItems.md #52 재검증 중 발견) 락이 갱신되지 않아 두 번째
+    // 수동 실행이 같은 죽은 락을 보고 또 그냥 통과할 수 있음 — #52와
+    // 동일한 클래스의 경합이 stale 케이스에서 재현되는 구멍이었음.
+    return { ok: true, holderType: parsed.type, shouldAcquire: true };
+  }
+
+  if(parsed.type === requestedType){
     return { ok: true, holderType: parsed.type, shouldAcquire: false };
   }
 
@@ -2992,14 +3016,25 @@ function testComputeTailEntryGuardDecision(){
     differentTypeAlive.holderType === "REVENUE" &&
     differentTypeAlive.shouldAcquire === false;
 
+  // stale 락은 타입 무관하게 shouldAcquire:true여야 함(2026-09-17 버그 수정 —
+  // 원래는 "같은 타입"과 묶여 shouldAcquire:false였음, #52 재검증 중 발견).
+  // 그래야 이 실행이 락을 새 타임스탬프로 갱신해 다음 동시 진입을 정상적으로
+  // 막을 수 있음.
   const differentTypeStale = computeTailEntryGuardDecision_(
     JSON.stringify({ type: "REVENUE", acquiredAt: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }),
     "LEADS", now
   );
-  const differentTypeStaleOk = differentTypeStale.ok === true && differentTypeStale.shouldAcquire === false;
+  const differentTypeStaleOk = differentTypeStale.ok === true && differentTypeStale.shouldAcquire === true;
+
+  const sameTypeStale = computeTailEntryGuardDecision_(
+    JSON.stringify({ type: "LEADS", acquiredAt: now - CONFIG.PIPELINE.LOCK_STALE_THRESHOLD_MS - 1 }),
+    "LEADS", now
+  );
+  const sameTypeStaleOk = sameTypeStale.ok === true && sameTypeStale.shouldAcquire === true;
 
   const pass =
-    noLockOk && unparsableOk && sameTypeAliveOk && differentTypeAliveOk && differentTypeStaleOk;
+    noLockOk && unparsableOk && sameTypeAliveOk && differentTypeAliveOk &&
+    differentTypeStaleOk && sameTypeStaleOk;
 
   Logger.log(
     "testComputeTailEntryGuardDecision: " +
@@ -3008,7 +3043,8 @@ function testComputeTailEntryGuardDecision(){
     ", unparsable=" + JSON.stringify(unparsable) +
     ", sameTypeAlive=" + JSON.stringify(sameTypeAlive) +
     ", differentTypeAlive=" + JSON.stringify(differentTypeAlive) +
-    ", differentTypeStale=" + JSON.stringify(differentTypeStale) + ")"
+    ", differentTypeStale=" + JSON.stringify(differentTypeStale) +
+    ", sameTypeStale=" + JSON.stringify(sameTypeStale) + ")"
   );
 
 }

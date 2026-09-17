@@ -9,9 +9,17 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.70.0
+ * v1.72.0
  *
  * Change Log
+ * v1.72.0 (2026-09-17)
+ * - **`PROPERTIES.FYREP_LEADS_OPS_AGG_LAST_ROW`/`FYREP_LEADS_OPS_AGG_CACHE` 신규** —
+ *   `aggregateFYRepLeadsOPSFromRecords_()` 증분화(`docs/OpenItems.md` #42) 그림자
+ *   모드 체크포인트/캐시. TARGET_LEADS_OPS_AGG_*와 동일 관례.
+ * v1.71.0 (2026-09-17)
+ * - **`PROPERTIES.TARGET_LEADS_OPS_AGG_LAST_ROW`/`TARGET_LEADS_OPS_AGG_CACHE` 신규** —
+ *   `computeTargetLeadsOPSAggregates_()` 증분화(`docs/OpenItems.md` #42) 그림자
+ *   모드 체크포인트/캐시. LEADS_OPS_MASTER_LAST_ROW와 동일 관례.
  * v1.70.0 (2026-09-16)
  * - **`PROPERTIES.LEADS_OPS_MASTER_LAST_ROW` 신규** — `buildLeadsOPS()`
  *   증분화(`docs/OpenItems.md` #50) 그림자 모드 체크포인트. Raw가 아니라
@@ -871,7 +879,20 @@ const CONFIG = {
     // 관례) — "buildLeadsOPS()가 이미 반영한 것으로 간주한 Master 행 수".
     // 현재는 그림자 계산(diff 검증용, 실제 쓰기는 여전히 전체 재스캔 경로가
     // 담당)에만 쓰이고, 실제 쓰기 전환 시점에 의미가 커진다.
-    LEADS_OPS_MASTER_LAST_ROW: "LEADS_OPS_MASTER_LAST_PROCESSED_ROW"
+    LEADS_OPS_MASTER_LAST_ROW: "LEADS_OPS_MASTER_LAST_PROCESSED_ROW",
+
+    // 2026-09-17 추가(docs/OpenItems.md #42) — computeTargetLeadsOPSAggregates_()
+    // 증분화 그림자 모드의 체크포인트/캐시. LAST_ROW는 LEADS_OPS_MASTER_LAST_ROW와
+    // 동일 관례(이미 처리한 Leads_OPS 데이터 행 개수), CACHE는 그 시점까지 누적된
+    // 집계 결과(computeTargetLeadsOPSAggregatesForRecords_() 출력 shape) JSON 문자열.
+    TARGET_LEADS_OPS_AGG_LAST_ROW: "TARGET_LEADS_OPS_AGG_LAST_PROCESSED_ROW",
+    TARGET_LEADS_OPS_AGG_CACHE: "TARGET_LEADS_OPS_AGG_CACHE",
+
+    // 2026-09-17 추가(docs/OpenItems.md #42) — aggregateFYRepLeadsOPSFromRecords_()
+    // 증분화 그림자 모드의 체크포인트/캐시. TARGET_LEADS_OPS_AGG_*와 동일 관례,
+    // CACHE는 fy|month|segment별 집계 행 배열(JSON) 문자열.
+    FYREP_LEADS_OPS_AGG_LAST_ROW: "FYREP_LEADS_OPS_AGG_LAST_PROCESSED_ROW",
+    FYREP_LEADS_OPS_AGG_CACHE: "FYREP_LEADS_OPS_AGG_CACHE"
 
   },
 

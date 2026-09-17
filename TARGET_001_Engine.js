@@ -22,9 +22,34 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.30.0
+ * v1.31.0
  *
  * Change Log
+ * v1.31.0 (2026-09-17)
+ * - **`computeTargetLeadsOPSAggregates_()` 증분화 — 그림자 모드 도입
+ *   (`docs/OpenItems.md` #42)** — `refreshTargetEngine_()`가 매번
+ *   Leads_OPS 36,000+행 전체를 재스캔하는 게 가장 비싼 구간으로 확인됨.
+ *   New P1 카운트는 리드의 Create Date FY/월 버킷에 귀속되고, 사용자 확정
+ *   ("한 번 확정된 과거 주/월 수치는 이후 소스 데이터가 뒤늦게 보정돼도
+ *   조용히 안 바뀐다")에 따라 이미 처리한 행을 다시 훑을 필요가 없음 —
+ *   `#50`(buildLeadsOPS 증분화)의 `LEADS_OPS_MASTER_LAST_ROW` 체크포인트
+ *   + 그림자 diff 패턴을 그대로 재사용. 순수 계산부를 신규
+ *   `computeTargetLeadsOPSAggregatesForRecords_()`(레코드 배열 + optional
+ *   seed 집계 → 병합된 집계, seed 없으면 기존 `computeTargetLeadsOPSAggregates_()`와
+ *   100% 동일)로 분리 — 전체 재스캔과 증분 스캔이 이 함수 하나만 재사용해
+ *   분류 로직 이중 정의 없음. 신규 `readOPSRecordsFrom_()`(windowed IO,
+ *   `sheetToObjects()`의 부분 읽기 버전)/`computeTargetLeadsOPSAggregatesIncremental_()`
+ *   (체크포인트 읽기/갱신 IO 래퍼, `CONFIG.PROPERTIES.TARGET_LEADS_OPS_AGG_LAST_ROW`/
+ *   `TARGET_LEADS_OPS_AGG_CACHE` 신규, `CORE_001_Config.js` v1.71.0)/
+ *   `computeTargetLeadsOPSAggregatesDiff_()`(두 집계 결과 deep-compare, 키 순서
+ *   무관)/`verifyTargetLeadsOPSAggregatesShadowDiff_()`(그림자 검증 오케스트레이션,
+ *   독립 try/catch로 격리) 추가. **`refreshTargetEngine_()`의 실제 계산은
+ *   여전히 기존 전체 재스캔 경로(`computeTargetLeadsOPSAggregates_()`)가
+ *   담당** — 증분 경로는 매 실행마다 같은 결과가 나오는지 Logger로만
+ *   검증(시트 쓰기 없음). 여러 차례 실 Import에서 계속 일치함을 확인한
+ *   뒤에야 실제 전환 논의(`[[feedback_pause_before_core_merge_logic_change]]`
+ *   원칙, 별도 승인 필요). `testComputeTargetLeadsOPSAggregatesForRecords()`/
+ *   `testComputeTargetLeadsOPSAggregatesDiff()` 신규.
  * v1.30.0 (2026-09-02)
  * - `CONFIG.TARGET.EXTERNAL.DEAL_TRACKER.COLUMNS.EMAIL`(V열) 신규 소비 —
  *   `transformDealTrackerRow_()` 반환값에 `email` 필드 추가(additive, cols.EMAIL
@@ -1942,25 +1967,72 @@ function testBuildSpentByGroupFYMonthFromManualInput(){
  */
 function computeTargetLeadsOPSAggregates_(){
 
-  const newP1CountsByGroupFYMonth = {};
-  const newP1CountByGroup = {};
-  const totalP1CountByGroup = {};
-
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OPS.SHEET.OPS);
 
   if(!sheet){
-    return {
-      newP1CountsByGroupFYMonth: newP1CountsByGroupFYMonth,
-      newP1CountByGroup: newP1CountByGroup,
-      totalP1CountByGroup: totalP1CountByGroup
-    };
+    return computeTargetLeadsOPSAggregatesForRecords_(
+      [], CONFIG.TARGET.BENCHMARK.NEWP1_FYS, CONFIG.TARGET.P1_VALUE_FY
+    );
   }
 
   const records = sheetToObjects(sheet);
 
-  const benchmarkFYs = CONFIG.TARGET.BENCHMARK.NEWP1_FYS;
-  const valueFY = CONFIG.TARGET.P1_VALUE_FY;
+  return computeTargetLeadsOPSAggregatesForRecords_(
+    records, CONFIG.TARGET.BENCHMARK.NEWP1_FYS, CONFIG.TARGET.P1_VALUE_FY
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Target Leads_OPS Aggregates For Records (Pure)
+ *
+ * WHY (2026-09-17, docs/OpenItems.md #42 — 증분화 그림자 모드 도입)
+ * computeTargetLeadsOPSAggregates_()의 순수 계산부만 분리 — "레코드 한
+ * 묶음이 집계에 미치는 영향" 로직이 한 곳에만 존재하도록 해서 전체
+ * 재스캔 경로와 증분 경로(computeTargetLeadsOPSAggregatesIncremental_())가
+ * 이 함수 하나만 재사용한다(분류 로직 이중 정의 금지). seedAggregate를
+ * 넘기면 그 위에 누적(기존 seed는 변경하지 않음, 새 객체 반환 — 순수
+ * 함수), 안 넘기면 빈 집계에서 시작 — 즉 "전체 재구축"은 이 함수를
+ * seedAggregate 없이 전체 레코드로 호출하는 특수 케이스일 뿐이다.
+ *
+ * @param {Object[]} records         Leads_OPS 레코드(sheetToObjects() 형태) — 전체 또는 신규분만
+ * @param {number[]} benchmarkFYs    CONFIG.TARGET.BENCHMARK.NEWP1_FYS
+ * @param {number} valueFY           CONFIG.TARGET.P1_VALUE_FY
+ * @param {Object} [seedAggregate]   이전 누적 결과(없으면 빈 집계에서 시작)
+ * @return {{newP1CountsByGroupFYMonth: Object, newP1CountByGroup: Object, totalP1CountByGroup: Object}}
+ *
+ * TEST
+ * testComputeTargetLeadsOPSAggregatesForRecords() 참고 — seed 없이 전체
+ * 레코드로 호출한 결과와, 절반씩 나눠 두 번(seed 체이닝) 호출한 결과가
+ * 동일해야 함(증분 누적의 핵심 불변식).
+ * ==========================================================
+ */
+function computeTargetLeadsOPSAggregatesForRecords_(records, benchmarkFYs, valueFY, seedAggregate){
+
+  const newP1CountsByGroupFYMonth = {};
+  const newP1CountByGroup = {};
+  const totalP1CountByGroup = {};
+
+  if(seedAggregate){
+
+    Object.keys(seedAggregate.newP1CountsByGroupFYMonth || {}).forEach(function(group){
+
+      newP1CountsByGroupFYMonth[group] = {};
+
+      Object.keys(seedAggregate.newP1CountsByGroupFYMonth[group]).forEach(function(fy){
+        newP1CountsByGroupFYMonth[group][fy] =
+          Object.assign({}, seedAggregate.newP1CountsByGroupFYMonth[group][fy]);
+      });
+
+    });
+
+    Object.assign(newP1CountByGroup, seedAggregate.newP1CountByGroup || {});
+    Object.assign(totalP1CountByGroup, seedAggregate.totalP1CountByGroup || {});
+
+  }
 
   records.forEach(function(record){
 
@@ -2000,6 +2072,349 @@ function computeTargetLeadsOPSAggregates_(){
     newP1CountByGroup: newP1CountByGroup,
     totalP1CountByGroup: totalP1CountByGroup
   };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeTargetLeadsOPSAggregatesForRecords()
+ * ==========================================================
+ */
+function testComputeTargetLeadsOPSAggregatesForRecords(){
+
+  const benchmarkFYs = [25, 26];
+  const valueFY = 26;
+
+  const records = [
+    // FY26(2026-03, Jan-Jul→현재 CY), Seminar, effective P1(override 없음) — 전부 카운트
+    { "Business Segment": "Seminar", "Lead Priority": "Priority 1", "Priority Override": "", "Create Date": new Date(2026, 2, 15) },
+    // FY26(2025-09, Aug-Dec→다음 FY), BOFU, override로 P1 승격
+    { "Business Segment": "BOFU", "Lead Priority": "Priority 3", "Priority Override": "Priority 1", "Create Date": new Date(2025, 8, 10) },
+    // FY25(2024-09, Aug-Dec→다음 FY), Seminar — benchmarkFYs엔 포함되지만 valueFY(26)는 아님
+    { "Business Segment": "Seminar", "Lead Priority": "Priority 1", "Priority Override": "", "Create Date": new Date(2024, 8, 5) },
+    // P1 아님 — 전부 제외
+    { "Business Segment": "Seminar", "Lead Priority": "Priority 2", "Priority Override": "", "Create Date": new Date(2026, 2, 20) },
+    // 그룹 없음(Referral) — 제외
+    { "Business Segment": "Referral", "Lead Priority": "Priority 1", "Priority Override": "", "Create Date": new Date(2026, 2, 1) },
+    // Create Date 없음 — totalP1CountByGroup엔 잡히지만 FY/월 버킷엔 안 잡힘
+    { "Business Segment": "Content", "Lead Priority": "Priority 1", "Priority Override": "", "Create Date": null }
+  ];
+
+  // 한 번에 전체 계산
+  const full = computeTargetLeadsOPSAggregatesForRecords_(records, benchmarkFYs, valueFY);
+
+  const fullOk =
+    full.newP1CountsByGroupFYMonth.Seminar[26].MAR === 1 &&
+    full.newP1CountsByGroupFYMonth.BOFU[26].SEP === 1 &&
+    full.newP1CountsByGroupFYMonth.Seminar[25].SEP === 1 &&
+    full.newP1CountByGroup.Seminar === 1 &&   // FY26만
+    full.newP1CountByGroup.BOFU === 1 &&
+    full.totalP1CountByGroup.Seminar === 2 && // FY26 1건 + FY25 1건
+    full.totalP1CountByGroup.BOFU === 1 &&
+    full.totalP1CountByGroup.Content === 1 && // Create Date 없어도 total엔 잡힘
+    full.newP1CountsByGroupFYMonth.Content === undefined; // FY/월 버킷엔 안 잡힘
+
+  // 절반씩 나눠 seed 체이닝으로 계산 — 결과가 전체 계산과 동일해야 함(증분 누적 핵심 불변식)
+  const half1 = computeTargetLeadsOPSAggregatesForRecords_(records.slice(0, 3), benchmarkFYs, valueFY);
+  const half1SeminarTotalBeforeMerge = half1.totalP1CountByGroup.Seminar;
+  const incremental = computeTargetLeadsOPSAggregatesForRecords_(records.slice(3), benchmarkFYs, valueFY, half1);
+
+  const incrementalMatchesFullOk =
+    incremental.newP1CountsByGroupFYMonth.Seminar[26].MAR === full.newP1CountsByGroupFYMonth.Seminar[26].MAR &&
+    incremental.newP1CountsByGroupFYMonth.BOFU[26].SEP === full.newP1CountsByGroupFYMonth.BOFU[26].SEP &&
+    incremental.newP1CountsByGroupFYMonth.Seminar[25].SEP === full.newP1CountsByGroupFYMonth.Seminar[25].SEP &&
+    incremental.totalP1CountByGroup.Seminar === full.totalP1CountByGroup.Seminar &&
+    incremental.totalP1CountByGroup.Content === full.totalP1CountByGroup.Content;
+
+  // seed 원본은 변경되지 않아야 함(순수 함수) — half1 자체의 Seminar 합계(2건: FY26
+  // MAR 1건 + FY25 SEP 1건)가 incremental 계산 이후에도 그대로여야 함
+  const seedUnmutatedOk = half1.totalP1CountByGroup.Seminar === half1SeminarTotalBeforeMerge;
+
+  const pass = fullOk && incrementalMatchesFullOk && seedUnmutatedOk;
+
+  Logger.log(
+    "testComputeTargetLeadsOPSAggregatesForRecords: " + (pass ? "PASS" : "FAIL") +
+    " full=" + JSON.stringify(full) + " incremental=" + JSON.stringify(incremental)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Read OPS Records From (IO wrapper, windowed read)
+ *
+ * WHY
+ * sheetToObjects()(OPS_004_Merge.js)는 항상 시트 전체를 읽는다 —
+ * computeTargetLeadsOPSAggregatesIncremental_()처럼 "이번에 새로 추가된
+ * 행만" 필요한 경우를 위한 windowed 버전. 헤더는 항상 1행 기준
+ * (sheetToObjects와 동일 규칙), startRow(1-indexed 시트 행)부터 마지막
+ * 행까지만 청크 단위로 읽는다(getRangeValuesChunked_(), 대용량 안전장치).
+ *
+ * @param {number} startRow  읽기 시작할 1-indexed 시트 행 번호
+ * @return {Object[]}  레코드 배열(sheetToObjects()와 동일 형태)
+ * ==========================================================
+ */
+function readOPSRecordsFrom_(startRow){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  if(!sheet) return [];
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if(lastRow < startRow || lastCol === 0) return [];
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const totalRows = lastRow - startRow + 1;
+  const values = getRangeValuesChunked_(sheet, startRow, 1, totalRows, lastCol);
+
+  return values.map(function(row){
+
+    const obj = {};
+
+    headers.forEach(function(header, c){
+      obj[String(header).trim()] = row[c];
+    });
+
+    return obj;
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Target Leads_OPS Aggregates Incremental (IO wrapper, 그림자 모드)
+ *
+ * WHY
+ * computeTargetLeadsOPSAggregatesForRecords_() 상단 주석 참고. #50의
+ * LEADS_OPS_MASTER_LAST_ROW 체크포인트 패턴을 그대로 재사용 — 행 수가
+ * 감소했으면(예: 완전 동일 중복 리드 자동삭제) 캐시를 신뢰할 수 없으므로
+ * 전체 재계산 후 캐시/체크포인트를 재구축한다(computeDictionaryRefreshWindow_()
+ * 재사용).
+ *
+ * OUTPUT: computeTargetLeadsOPSAggregates_()와 동일 shape
+ * ==========================================================
+ */
+function computeTargetLeadsOPSAggregatesIncremental_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const checkpointKey = CONFIG.PROPERTIES.TARGET_LEADS_OPS_AGG_LAST_ROW;
+  const cacheKey = CONFIG.PROPERTIES.TARGET_LEADS_OPS_AGG_CACHE;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OPS.SHEET.OPS);
+
+  const emptyAggregate = { newP1CountsByGroupFYMonth: {}, newP1CountByGroup: {}, totalP1CountByGroup: {} };
+
+  if(!sheet) return emptyAggregate;
+
+  const lastRow = sheet.getLastRow();
+  const currentTotalRows = Math.max(0, lastRow - OPS.ROWS.DATA_START + 1);
+
+  const lastProcessedCount = Number(props.getProperty(checkpointKey)) || 0;
+
+  const window = computeDictionaryRefreshWindow_(lastProcessedCount, currentTotalRows);
+
+  const benchmarkFYs = CONFIG.TARGET.BENCHMARK.NEWP1_FYS;
+  const valueFY = CONFIG.TARGET.P1_VALUE_FY;
+
+  if(window.needsFreshCounts){
+
+    // 최초 실행 또는 행 수 감소 — 캐시를 신뢰할 수 없으므로 전체 재계산
+    const aggregate = computeTargetLeadsOPSAggregates_();
+
+    props.setProperty(cacheKey, JSON.stringify(aggregate));
+    props.setProperty(checkpointKey, String(currentTotalRows));
+
+    return aggregate;
+
+  }
+
+  const cachedRaw = props.getProperty(cacheKey);
+  const seedAggregate = cachedRaw ? JSON.parse(cachedRaw) : undefined;
+
+  if(window.numRows === 0){
+    return seedAggregate || emptyAggregate;
+  }
+
+  const newRecords = readOPSRecordsFrom_(window.startIndex + OPS.ROWS.DATA_START);
+
+  const merged = computeTargetLeadsOPSAggregatesForRecords_(
+    newRecords, benchmarkFYs, valueFY, seedAggregate
+  );
+
+  props.setProperty(cacheKey, JSON.stringify(merged));
+  props.setProperty(checkpointKey, String(currentTotalRows));
+
+  return merged;
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Target Leads_OPS Aggregates Diff (Pure)
+ *
+ * WHY
+ * 전체 재스캔 결과와 증분 경로 결과를 비교 — 두 객체의 key 삽입 순서가
+ * 다를 수 있어(JS 객체는 순회 순서가 처리 순서에 좌우됨) 단순
+ * JSON.stringify 비교는 오탐 위험이 있다. key 합집합을 순회하며 값만
+ * 비교하는 방식으로 순서 무관하게 정확히 비교한다.
+ *
+ * @return {{equal: boolean, differences: string[]}}
+ *
+ * TEST
+ * testComputeTargetLeadsOPSAggregatesDiff() 참고.
+ * ==========================================================
+ */
+function computeTargetLeadsOPSAggregatesDiff_(a, b){
+
+  const differences = [];
+
+  function compareGroupScalar(name, mapA, mapB){
+
+    const groups = Array.from(new Set(
+      Object.keys(mapA || {}).concat(Object.keys(mapB || {}))
+    ));
+
+    groups.forEach(function(group){
+
+      const valA = (mapA && mapA[group]) || 0;
+      const valB = (mapB && mapB[group]) || 0;
+
+      if(valA !== valB){
+        differences.push(name + "[" + group + "] : full=" + valA + " / incremental=" + valB);
+      }
+
+    });
+
+  }
+
+  compareGroupScalar("newP1CountByGroup", a.newP1CountByGroup, b.newP1CountByGroup);
+  compareGroupScalar("totalP1CountByGroup", a.totalP1CountByGroup, b.totalP1CountByGroup);
+
+  const groups = Array.from(new Set(
+    Object.keys(a.newP1CountsByGroupFYMonth || {}).concat(Object.keys(b.newP1CountsByGroupFYMonth || {}))
+  ));
+
+  groups.forEach(function(group){
+
+    const fysA = (a.newP1CountsByGroupFYMonth && a.newP1CountsByGroupFYMonth[group]) || {};
+    const fysB = (b.newP1CountsByGroupFYMonth && b.newP1CountsByGroupFYMonth[group]) || {};
+    const fys = Array.from(new Set(Object.keys(fysA).concat(Object.keys(fysB))));
+
+    fys.forEach(function(fy){
+
+      const monthsA = fysA[fy] || {};
+      const monthsB = fysB[fy] || {};
+      const months = Array.from(new Set(Object.keys(monthsA).concat(Object.keys(monthsB))));
+
+      months.forEach(function(month){
+
+        const valA = monthsA[month] || 0;
+        const valB = monthsB[month] || 0;
+
+        if(valA !== valB){
+          differences.push(
+            "newP1CountsByGroupFYMonth[" + group + "][" + fy + "][" + month +
+            "] : full=" + valA + " / incremental=" + valB
+          );
+        }
+
+      });
+
+    });
+
+  });
+
+  return { equal: differences.length === 0, differences: differences };
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeTargetLeadsOPSAggregatesDiff()
+ * ==========================================================
+ */
+function testComputeTargetLeadsOPSAggregatesDiff(){
+
+  const a = {
+    newP1CountsByGroupFYMonth: { Seminar: { 26: { MAR: 3, APR: 1 } } },
+    newP1CountByGroup: { Seminar: 3 },
+    totalP1CountByGroup: { Seminar: 5, BOFU: 2 }
+  };
+
+  // b는 a와 key 삽입 순서만 다르고 값은 동일 — equal이어야 함
+  const bSameOrderDifferent = {
+    totalP1CountByGroup: { BOFU: 2, Seminar: 5 },
+    newP1CountByGroup: { Seminar: 3 },
+    newP1CountsByGroupFYMonth: { Seminar: { 26: { APR: 1, MAR: 3 } } }
+  };
+
+  const equalCase = computeTargetLeadsOPSAggregatesDiff_(a, bSameOrderDifferent);
+  const equalCaseOk = equalCase.equal === true && equalCase.differences.length === 0;
+
+  // c는 값이 실제로 다름 — 불일치 검출돼야 함
+  const c = {
+    newP1CountsByGroupFYMonth: { Seminar: { 26: { MAR: 4, APR: 1 } } },
+    newP1CountByGroup: { Seminar: 3 },
+    totalP1CountByGroup: { Seminar: 5, BOFU: 2 }
+  };
+
+  const diffCase = computeTargetLeadsOPSAggregatesDiff_(a, c);
+  const diffCaseOk = diffCase.equal === false && diffCase.differences.length === 1;
+
+  const pass = equalCaseOk && diffCaseOk;
+
+  Logger.log(
+    "testComputeTargetLeadsOPSAggregatesDiff: " + (pass ? "PASS" : "FAIL") +
+    " equalCase=" + JSON.stringify(equalCase) + " diffCase=" + JSON.stringify(diffCase)
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * Verify Target Leads_OPS Aggregates Shadow Diff (그림자 검증 오케스트레이션)
+ *
+ * WHY
+ * refreshTargetEngine_()이 매번 실행하는 전체 재스캔 결과(fullAggregate)와
+ * 증분 경로 결과를 비교해 Logger에만 기록 — 시트에는 아무것도 안 씀.
+ * 호출부(refreshTargetEngine_())에서 독립 try/catch로 감싸 호출해야
+ * 한다(이 검증이 실패해도 실제 계산 경로는 절대 영향받지 않아야 함).
+ * ==========================================================
+ */
+function verifyTargetLeadsOPSAggregatesShadowDiff_(fullAggregate){
+
+  const incrementalAggregate = computeTargetLeadsOPSAggregatesIncremental_();
+
+  const diff = computeTargetLeadsOPSAggregatesDiff_(fullAggregate, incrementalAggregate);
+
+  if(diff.equal){
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " refreshTargetEngine_ 그림자 diff: 증분 집계 결과 일치(전체 재스캔과 100% 동일)."
+    );
+
+  } else {
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " refreshTargetEngine_ 그림자 diff: 불일치 " + diff.differences.length + "건 — " +
+      diff.differences.slice(0, 10).join(" | ") +
+      (diff.differences.length > 10 ? " ... (외 " + (diff.differences.length - 10) + "건 생략)" : "")
+    );
+
+  }
 
 }
 
@@ -3861,6 +4276,19 @@ function refreshTargetEngine_(){
   const inputs = readTargetEngineInputs_(sheet);
 
   const leadsAgg = computeTargetLeadsOPSAggregates_();
+
+  // 2026-09-17 추가(docs/OpenItems.md #42) — 증분화 그림자 검증. 실제 계산은
+  // 위 leadsAgg(전체 재스캔)가 그대로 담당, 이 호출은 Logger 로그만 남기고
+  // 시트/leadsAgg에는 아무 영향 없음 — 독립 try/catch로 격리.
+  try {
+    verifyTargetLeadsOPSAggregatesShadowDiff_(leadsAgg);
+  } catch(shadowErr){
+    Logger.log(
+      CONFIG.LOG.PREFIX + " refreshTargetEngine_ 증분 집계 그림자 diff 실패(비필수, 무시) — " +
+      (shadowErr && shadowErr.message ? shadowErr.message : shadowErr)
+    );
+  }
+
   const spentByGroupFYMonth = buildSpentByGroupFYMonthFromManualInput_(
     inputs.monthlySegmentSpent, CONFIG.TARGET.P1_VALUE_FY
   );
