@@ -15,9 +15,24 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.21.0
+ * v1.22.0
  *
  * Change Log
+ * v1.22.0 (2026-09-18)
+ * - **`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`에 2건 추가** —
+ *   `TEMPQA_063_EventsMetaSpendMissingDiagnostic.js` 조사(사용자 보고,
+ *   Events_OPS "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy" Spent
+ *   미반영) 결과, 이 프로그램의 실 Meta 지출 캠페인 2건은
+ *   `UTIL_002_UtmProgramDictionary.js` v1.13.0(등록폼 접미사 정규화) 수정
+ *   이후에도 소수 이탈 터치가 California Dream(2/28)/Rise Stanford Roadmap
+ *   (2/13, 1/28) 등 진짜 다른 프로그램과 섞여 distinctProgramCount>1로 남아
+ *   딕셔너리 자동 매칭에서 계속 제외됨(다수결 비중은 각각 89%/85%로 높음).
+ *   사용자 확정 — 이 2건만 EXPO 선례와 동일하게 수동 override로 추가.
+ *   원본 대소문자는 `runLookupExactCaseMetaCampaignNames()`
+ *   (TEMPQA_063)로 Meta_Raw에서 직접 확인:
+ *   "KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-bau_event-online-fbiglg"/
+ *   "KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-test_event-online-fbiglg".
+ *   `testResolveMetaCampaignEventsKey`에 이 2건 실제값 검증 케이스 추가.
  * v1.21.0 (2026-09-05)
  * - **`runAuditEventsSegmentDeadKeys()`/`runDeleteDeadEventsOPSRows()`/
  *   `runDeleteDeadEventsOPSRowsForce()` 신규(`docs/OpenItems.md` #28)** —
@@ -862,7 +877,12 @@ function computeEventsKakaoSpendAggregates_() {
 const META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE = {
   "KR_core_2026-05-30_kr-expo-event_traffic": "Kor-EXPO-Master",
   "KR_core_2026-05-30_crimson-expo-meta_event-offline-fbiglg": "Kor-EXPO-Master",
-  "KR_core_2026-05-30_crimson-expo-meta_event-offline": "Kor-EXPO-Master"
+  "KR_core_2026-05-30_crimson-expo-meta_event-offline": "Kor-EXPO-Master",
+  // 2026-09-18 — TEMPQA_063 조사. 딕셔너리 정규화(UTIL_002 v1.13.0) 이후에도
+  // California Dream/Rise Stanford Roadmap 등 진짜 다른 프로그램과 소수
+  // 섞여(89%/85% 다수) distinctProgramCount>1로 자동 매칭에서 제외되던 2건.
+  "KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-bau_event-online-fbiglg": "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy",
+  "KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-test_event-online-fbiglg": "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy"
 };
 
 
@@ -948,7 +968,13 @@ function testResolveMetaCampaignEventsKey() {
     resolveMetaCampaignEventsKey_("KR_core_2026-01-01_unmatched_lead", dict) === null &&
     resolveMetaCampaignEventsKey_("", dict) === null &&
     resolveMetaCampaignEventsKey_("KR_core_2026-08-01_fb-lg-form_lead", dict) ===
-      "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy";
+      "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy" &&
+    // 2026-09-18 추가 — 실 override 맵(META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE)
+    // 대상 실제 항목 2건, 빈 dict로도(=순수 override 경로만으로) 해석돼야 함
+    resolveMetaCampaignEventsKey_("KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-bau_event-online-fbiglg", {}) ===
+      "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy" &&
+    resolveMetaCampaignEventsKey_("KR_core-ltb_2026-07-29_fbcrv2026-early-stanford-app-lplg-test_event-online-fbiglg", {}) ===
+      "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy";
 
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 

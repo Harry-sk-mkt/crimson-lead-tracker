@@ -53,9 +53,40 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-09-18)
+ * - **버그 수정 — `aggregateUtmProgramCounts_()`가 등록폼 접미사("ㅣRegistered
+ *   for Webinar from FB LG Form"/"...from Website Form")를 안 뗀 원본
+ *   Lead Source Detail/First Touch Detail 값을 그대로 카운트 키로 써서
+ *   `distinctProgramCount`가 부풀려지던 문제.** 사용자 보고(Events_OPS
+ *   신규 WB 프로그램 7건 Spent 미반영, `TEMPQA_063_
+ *   EventsMetaSpendMissingDiagnostic.js`로 조사) — 실제로는 완전히 같은
+ *   프로그램인데 FB LG Form/Website Form 두 변형으로만 나뉘어 있어도
+ *   `resolveUtmProgramDictionaryEntries_()`가 이를 서로 다른 프로그램
+ *   2개로 세어 `distinctProgramCount>1`(모호) 처리 → `readUtmProgramDictionaryMap_()`
+ *   이 `distinctProgramCount !== 1`이면 통째로 제외(1146행)하는 바람에,
+ *   Meta 지출은 실제로 있는데 자동 매칭에서 계속 빠지는 사례 다수 확인됨
+ *   (Events 7건 중 8개 UTM이 이 패턴). 이 프로젝트의 다른 모든 소비처
+ *   (`resolveMetaCampaignEventsKey_()`/`resolveMetaCampaignProgramKey_()`
+ *   등, EVENTS_002_Engine.js)는 이미 딕셔너리 값을 꺼낸 뒤
+ *   `stripLGSuffix_(stripRegistrationFormSuffix_(...))`로 접미사를 떼고
+ *   쓰고 있어, "모호함 판정" 시점에만 이 정규화가 빠져있던 불일치였음.
+ *   **수정**: `aggregateUtmProgramCounts_()`가 카운트 키로 쓰기 전에 동일
+ *   정규화(`stripLGSuffix_(stripRegistrationFormSuffix_(...))`, EVENTS_002_
+ *   Engine.js 재사용 — Apps Script 전역 함수라 파일 무관하게 이미 여러
+ *   곳에서 재사용 중인 패턴)를 적용하도록 변경. `resolveUtmProgramDictionaryEntries_()`/
+ *   `readUtmProgramDictionaryMap_()`/`isUtmProgramDictionaryKeyExcluded_()`는
+ *   변경 없음(카운트 키가 이미 정규화된 채로 들어오므로 그대로 정상 동작).
+ *   **영향 범위**: `readUtmProgramDictionaryMap_()`을 소비하는 Events/BOFU/
+ *   Content Meta 자동매칭 전체(사용자 확정 — 범위 넓은 공통 로직 수정
+ *   선택). **주의**: 기존에 저장된 캐시(hidden JSON 컬럼의 mtaCounts/
+ *   leadsCounts)는 여전히 정규화 전 원본 키를 담고 있어, 증분 갱신만으로는
+ *   해소 안 됨 — `runRefreshUtmProgramDictionary()` 전체 재구축 1회 필요
+ *   (기존에도 있던 "필요하면 언제든 처음부터 다시 채굴" 안전장치, 체크포인트도
+ *   함께 리셋됨). 신규 테스트 `testAggregateUtmProgramCountsNormalizesRegistrationFormSuffix`
+ *   추가(기존 `testAggregateUtmProgramCounts`는 무변경 통과 확인).
  * v1.12.0 (2026-09-04)
  * - **`resolveBusinessSegment_()` — UTM 단위 override 우선 체크 추가**
  *   (`docs/OpenItems.md` #34 후속, 사용자 요청) — 여러 UTM이 하나의
@@ -383,7 +414,12 @@ function aggregateUtmProgramCounts_(pairs, seedCounts){
   (pairs || []).forEach(function(pair){
 
     const utmKey = String(pair.utm || "").trim().toLowerCase();
-    const program = String(pair.program || "").trim();
+    // 등록폼 접미사("ㅣRegistered for Webinar from FB LG Form"/"...from Website
+    // Form")만 다를 뿐 실제로는 같은 프로그램인 경우를 distinctProgramCount
+    // 계산에서 서로 다른 프로그램으로 잘못 세지 않도록, 다른 모든 소비처와
+    // 동일하게 여기서도 정규화(stripLGSuffix_/stripRegistrationFormSuffix_,
+    // EVENTS_002_Engine.js)한 값을 카운트 키로 쓴다 (2026-09-18 버그 수정).
+    const program = stripLGSuffix_(stripRegistrationFormSuffix_(String(pair.program || "").trim()));
 
     if(!utmKey || !program) return;
 
@@ -436,6 +472,38 @@ function testAggregateUtmProgramCounts(){
 
   Logger.log("Result: " + JSON.stringify(result, null, 2));
   Logger.log(pass && incrementalPass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — aggregateUtmProgramCounts_() 등록폼 접미사 정규화 (2026-09-18 버그 수정)
+ * ==========================================================
+ */
+function testAggregateUtmProgramCountsNormalizesRegistrationFormSuffix(){
+
+  const pairs = [
+    { utm: "kr_core_2026-09-08_college-research-lplg_event-online", program: "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for Webinar from FB LG Form" },
+    { utm: "kr_core_2026-09-08_college-research-lplg_event-online", program: "WB-2026-08-KOR-MOFU-Core College Research: HYPS & IvyㅣRegistered for Webinar from Website Form" },
+    { utm: "kr_core_2026-09-08_college-research-lplg_event-online", program: "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy" }, // 접미사 아예 없는 변형도 동일 프로그램
+    { utm: "kr_core_genuinely-mixed", program: "WB-2026-06-KOR-MOFU-Core EA/ED Application Strategy" },
+    { utm: "kr_core_genuinely-mixed", program: "WB-2026-06-KOR-MOFU-Core California Dream: A Comprehensive Guide to the UC System" } // 진짜 다른 프로그램 — 여전히 구분돼야 함
+  ];
+
+  const counts = aggregateUtmProgramCounts_(pairs);
+  const entries = resolveUtmProgramDictionaryEntries_(counts);
+  const collapsed = entries.filter(function(e){ return e.utm === "kr_core_2026-09-08_college-research-lplg_event-online"; })[0];
+  const mixed = entries.filter(function(e){ return e.utm === "kr_core_genuinely-mixed"; })[0];
+
+  const pass =
+    collapsed.distinctProgramCount === 1 && // 접미사만 다른 3건이 하나로 합쳐져야 함
+    collapsed.matchCount === 3 &&
+    collapsed.program === "WB-2026-08-KOR-MOFU-Core College Research: HYPS & Ivy" &&
+    mixed.distinctProgramCount === 2; // 진짜 다른 프로그램끼리는 그대로 모호 유지
+
+  Logger.log("collapsed: " + JSON.stringify(collapsed) + " / mixed: " + JSON.stringify(mixed));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
 

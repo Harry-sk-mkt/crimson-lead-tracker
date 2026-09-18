@@ -1,5 +1,36 @@
 # Changelog — 2026-09-18
 
+## Events_OPS "Spent" 미반영 조사 — UTM_Program_Dictionary 등록폼 접미사 미정규화 버그 발견·수정(`docs/OpenItems.md` #54)
+
+사용자 보고(Events_OPS 신규 WB 웨비나 7건의 "Spent"가 업데이트 안 됨)로 조사 착수. 신규 읽기
+전용 진단 `TEMPQA_063_EventsMetaSpendMissingDiagnostic.js`로 각 프로그램의 UTM_Program_Dictionary
+매칭 경로를 단계별로 추적한 결과, 실제로 유의미한 Meta 지출이 붙은 캠페인은 전부
+`distinctProgramCount>1`(모호)로 판정돼 자동매칭에서 배제되고 있었음. 원인은
+`aggregateUtmProgramCounts_()`(`UTIL_002_UtmProgramDictionary.js`)가 "ㅣRegistered for Webinar
+from FB LG Form"/"...from Website Form" 등록폼 접미사를 안 뗀 원본값으로 모호 여부를 계산하고
+있던 것 — 실제로는 같은 프로그램의 접미사 변형일 뿐인데 서로 다른 프로그램으로 오판되던 버그.
+이 프로젝트의 다른 모든 소비처(`resolveMetaCampaignEventsKey_()` 등)는 이미 조회 후 접미사를
+떼는데, 정작 "모호함 판정" 시점에만 정규화가 빠져있던 불일치.
+
+`aggregateUtmProgramCounts_()`가 카운트 키를 만들 때도 동일 정규화(`stripLGSuffix_
+(stripRegistrationFormSuffix_(...))`)를 적용하도록 수정(`UTIL_002_UtmProgramDictionary.js`
+v1.13.0, 신규 테스트 `testAggregateUtmProgramCountsNormalizesRegistrationFormSuffix()` 통과).
+이 로직은 Events뿐 아니라 BOFU/Content Meta 자동매칭에도 공통이라 함께 영향받음(사용자 확정
+범위). 사용자가 `runRefreshUtmProgramDictionary()` 전체 재구축 실행 후 재진단 — 7건 중 6건
+자동 해소($2,849~$5,091 NZD 정상 매칭). 나머지 1건("EA/ED Application Strategy")은 진짜 다른
+프로그램(California Dream/Rise Stanford Roadmap)과 소수(11~15%) 섞인 케이스라
+`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`(`EVENTS_002_Engine.js` v1.22.0)에 수동 override
+2건 추가로 해결 — 정확한 원본 대소문자는 신규 `runLookupExactCaseMetaCampaignNames()`
+(TEMPQA_063)로 Meta_Raw에서 직접 확인 후 반영. 최종 7/7 전부 매칭 확인.
+
+사용자 요청으로 Events/BOFU/Content 전체 재검토 진행 — `TEMPQA_064_PostFixMetaCoverageRecheck.js`
+(`TEMPQA_051`의 범용 커버리지 진단을 Events까지 확장)로 "확실한 후보인데 매칭 안 됨"(진짜
+버그) 버킷이 세 도메인 전부 정상(Events 0/Content 0/BOFU 1건은 `docs/OpenItems_Legacy.md`
+#30에 이미 기록된 진단 스크립트 자체의 알려진 한계)임을 확인. 그 과정에서 EA/ED와 동일 패턴의
+"모호하지만 실제 Meta 지출 존재" override 후보 23건(Events 4/BOFU 12/Content 7)이 추가로
+드러났으나, 사용자 결정으로 검토는 보류 — `docs/OpenItems.md` #54에 기록만 하고 다음 요청 시
+진행하기로 함.
+
 ## Events_OPS "Time"(I열) 유실 조사 — 근본 원인(PIPELINE_LOCK release 소유권 미확인) 발견·수정(`docs/OpenItems.md` #53)
 
 사용자 보고("Events_OPS I컬럼 시간값 입력해둔게 사라졌어")로 조사 착수. 신규 읽기 전용 진단
