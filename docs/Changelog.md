@@ -1,3 +1,37 @@
+# Changelog — 2026-09-18
+
+## Events_OPS "Time"(I열) 유실 조사 — 근본 원인(PIPELINE_LOCK release 소유권 미확인) 발견·수정(`docs/OpenItems.md` #53)
+
+사용자 보고("Events_OPS I컬럼 시간값 입력해둔게 사라졌어")로 조사 착수. 신규 읽기 전용 진단
+`TEMPQA_062_EventsTimeColumnDiagnostic.js`(`runCheckEventsTimeColumnDiagnostic()`)로 Events_OPS
+361행을 전수 스캔한 결과 Time 값이 11건만 남고 350건 공란, 그 중 247건은 PIC/Speaker/
+Mkt Reg.가 정상인 관리 중인 행이라 유실로 확인. 사용자가 확인해준 두 시각("9/17 11:54 AM엔
+전체 있었음", "3:58 PM엔 이미 사라짐")과 Apps Script Executions 로그를 대조한 결과
+`periodicRefreshRevenue_`(3:55:34 PM 시작, 3:58:33 PM 종료)의 종료 시각이 정확히 일치 —
+`periodicRefreshRevenue_()` → `runRevenuePipelineTail()` → `refreshOPSSheets_()` →
+`buildEventsOPS()` 호출 경로 확인. 최초엔 "사용자가 그 순간 라이브로 입력 중이었다"는
+가설을 세웠으나, 사용자가 "그 시간 기록은 최소 2주 이상 안정적으로 존재하던 데이터"라고
+정정 — 라이브 편집 경합이 아니라 스냅샷 시점에 이미 값이 비어있었던 것으로 재해석.
+
+코드를 다시 짚어보며 **`releasePipelineLockAndProcessQueue_()`(`MASTER_002_PipelineAsync.js`)가
+호출하는 `releasePipelineLock_()`이 "지금 저장된 락이 정말 내 것인지" 확인 없이 무조건
+삭제하고 있던 결함을 발견** — 오래 걸리는 tail(예: `runLeadsPipelineTail` 실측 1543초,
+`LOCK_STALE_THRESHOLD_MS` 30분에 근접)의 락은 front door(import 시점) 기준이라 실제 나이가
+더 길 수 있어 다른 트리거가 죽은 락으로 보고 self-heal하며 덮어쓸 수 있고, 원래 tail이
+끝나며 호출하는 release가 이를 확인 없이 지워버려 아직 실행 중인 다른 tail의 보호막을
+없앨 수 있는 구조 — 사람이 수동 실행을 전혀 안 해도 순수 자동 트리거 타이밍만으로 재현
+가능한 `#52`와 별개의 세 번째 락 결함. `releasePipelineLock_(expectedLockValue)`를
+compare-and-delete로 수정(호출자가 진입 시점에 스냅샷한 락 원본과 다르면 삭제 스킵,
+생략 시 기존과 동일하게 무조건 삭제 — 수동 강제 해제 진입점 하위호환),
+`releasePipelineLockAndProcessQueue_()`도 동일 값을 전달받아 반납 스킵 시 대기열 처리도
+함께 건너뛰도록 수정. `runLeadsPipelineTail`/`runMTAPipelineTail`/`runICFunnelPipelineTail`/
+`runSALPipelineTail`/`runRevenuePipelineTail` 5개 tail 전부 진입 시점 락 값 스냅샷 후
+release에 전달하도록 반영(`MASTER_002_PipelineAsync.js` v1.35.0, clasp push 완료). 신규
+테스트 `testReleasePipelineLockOwnershipCheck()` 사용자 실행 PASS 확인(case1/2/3 전부
+true). 데이터 자체는 사용자가 Google Sheets 버전 기록에서 Time이 남아있던 스냅샷으로
+직접 복구 완료. **실사용 재검증 필요** — 완료로 간주하지 말 것, 상세는 `docs/OpenItems.md`
+#53 참고.
+
 # Changelog — 2026-09-17
 
 ## OPS QA(`docs/OpenItems.md` #25) — 옛 아키텍처 기준 오탐 발견·재설계, 9765건 → 0건

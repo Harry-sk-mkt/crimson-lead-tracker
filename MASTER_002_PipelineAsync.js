@@ -22,9 +22,35 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.34.0
+ * v1.35.0
  *
  * Change Log
+ * v1.35.0 (2026-09-18)
+ * - **버그 수정 — `releasePipelineLock_()`가 소유권 확인 없이 무조건
+ *   `PIPELINE_LOCK`을 삭제하고 있었음(`docs/OpenItems.md` #53 조사 중 발견)**.
+ *   시나리오: 오래 걸리는 tail(예: `runLeadsPipelineTail`, 실측 1543초 —
+ *   `LOCK_STALE_THRESHOLD_MS` 30분에 근접)이 실행되는 동안, 락의 `acquiredAt`이
+ *   front door(예: `importCsv()`) 시점 기준이라 실제 나이가 더 길 수 있어
+ *   다른 트리거(예: `periodicRefreshRevenue_`)가 이를 죽은 락으로 보고
+ *   self-heal하며 자기 타입으로 덮어쓸 수 있음 — 그 뒤 원래 tail이 끝나며
+ *   호출하는 `releasePipelineLockAndProcessQueue_()`가 "지금 저장된 락이
+ *   실제로 내 것인지" 확인 없이 그냥 지워버려, 아직 실행 중인 다른 타입의
+ *   보호막을 없애고 대기열의 세 번째 타입까지 끼어들 수 있는 구조였음(사람이
+ *   아무것도 수동 실행하지 않아도 재현 가능 — Events_OPS "Time" 유실 사고
+ *   조사 중 발견, 정확한 재현은 아니나 코드상 확실한 결함).
+ *   **수정**: `releasePipelineLock_(expectedLockValue)`가 compare-and-delete로
+ *   동작 — 진입 시점에 스냅샷해둔 락 원본 문자열과 현재 저장된 값이 다르면
+ *   삭제를 건너뛰고 `false` 반환(로그만 남김), 같으면 삭제하고 `true` 반환.
+ *   `expectedLockValue`를 생략하면(수동 강제 해제 진입점 전용) 기존과 동일하게
+ *   무조건 삭제 — 하위호환 유지. `releasePipelineLockAndProcessQueue_(expectedLockValue)`도
+ *   동일 파라미터를 받아 그대로 전달하고, 반납 자체가 스킵되면(소유권 이미
+ *   변경됨) 대기열 처리도 건너뜀(내 것이 아닌 락 위에서 대기열을 재배정하면
+ *   또 다른 경합을 만들 수 있어서). 신규 `currentPipelineLockValue_()` —
+ *   각 tail 진입점이 guard 통과 직후(`runRevenuePipelineTail()`은 호출자가
+ *   이미 `acquirePipelineLock_()`한 직후) 이 값을 스냅샷해 자기 release 호출에
+ *   넘기도록 5개 tail 함수(`runLeadsPipelineTail`/`runMTAPipelineTail`/
+ *   `runICFunnelPipelineTail`/`runSALPipelineTail`/`runRevenuePipelineTail`)
+ *   전부 수정. 신규 테스트 `testReleasePipelineLockOwnershipCheck()`.
  * v1.34.0 (2026-09-17)
  * - **버그 수정 — `computeTailEntryGuardDecision_()`가 stale 락을 "같은 타입"
  *   분기와 묶어 `shouldAcquire:false`로 처리하고 있었음(`docs/OpenItems.md`
@@ -761,11 +787,71 @@ function acquirePipelineLock_(type){
 }
 
 
-function releasePipelineLock_(){
+/**
+ * ==========================================================
+ * Release Pipeline Lock (compare-and-delete, 2026-09-18 — `docs/OpenItems.md` #53)
+ *
+ * WHY
+ * `expectedLockValue`(호출자가 자기 tail 진입 시점에 스냅샷해둔
+ * `PIPELINE_LOCK` 원본 문자열)를 넘기면, 지금 저장된 값이 그것과 같을
+ * 때만 삭제한다 — 그 사이 다른 실행이 self-heal 등으로 락을 자기 것으로
+ * 덮어썼다면(`currentPipelineLockValue_()` 문서 참고) 그 락은 이제 내
+ * 소유가 아니므로 건드리지 않는다. `expectedLockValue`를 생략하면(수동
+ * 강제 해제 전용 진입점, "지금 아무것도 안 돌고 있음을 사람이 직접
+ * 확인했다"는 전제) 기존과 동일하게 무조건 삭제.
+ *
+ * OUTPUT
+ * boolean  실제로 삭제했으면 true, 소유권 불일치로 건너뛰었으면 false
+ *
+ * TEST
+ * testReleasePipelineLockOwnershipCheck 참고
+ * ==========================================================
+ */
+function releasePipelineLock_(expectedLockValue){
 
-  PropertiesService
-    .getScriptProperties()
-    .deleteProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+  const props = PropertiesService.getScriptProperties();
+
+  if(expectedLockValue !== undefined){
+
+    const current = props.getProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+    if(current !== expectedLockValue){
+
+      Logger.log(
+        CONFIG.LOG.PREFIX +
+        " releasePipelineLock_ 스킵 — 저장된 PIPELINE_LOCK이 내가 진입 시점에 " +
+        "본 값과 다름(다른 실행이 그 사이 락을 다시 잡은 것으로 추정), 삭제하지 않음."
+      );
+
+      return false;
+
+    }
+
+  }
+
+  props.deleteProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
+
+  return true;
+
+}
+
+
+/**
+ * ==========================================================
+ * Current Pipeline Lock Value (IO 래퍼, 소유권 스냅샷용)
+ *
+ * WHY
+ * `releasePipelineLock_()`의 compare-and-delete에 쓸 "내가 진입한 시점의
+ * 락 원본 값"을 기록하기 위한 스냅샷 헬퍼. `acquirePipelineLock_()`가 이미
+ * type+acquiredAt을 JSON 문자열로 직렬화해 저장하므로, 별도 토큰 없이 이
+ * 문자열 자체를 비교 키로 재사용한다 — 5개 tail 진입점이 guard/acquire
+ * 통과 직후 이 값을 호출해 지역변수에 담아뒀다가 자기 release 호출에
+ * 그대로 넘긴다.
+ * ==========================================================
+ */
+function currentPipelineLockValue_(){
+
+  return PropertiesService.getScriptProperties().getProperty(CONFIG.PROPERTIES.PIPELINE_LOCK);
 
 }
 
@@ -1155,11 +1241,31 @@ function enqueuePendingPipelineType_(type){
  * 락 재획득에 실패하는 경우(이론상 거의 없음 — 방금 반납한 락을 이 실행
  * 흐름 밖에서 다른 무언가가 그 찰나에 다시 잡는 경쟁 상황)엔 안전하게
  * 대기열에 도로 넣어 다음 기회에 재시도되게 한다(유실 방지).
+ *
+ * `expectedLockValue`(2026-09-18 추가, `docs/OpenItems.md` #53): 호출자가
+ * 자기 tail 진입 시점에 스냅샷해둔 `PIPELINE_LOCK` 원본 값 —
+ * `releasePipelineLock_()`로 그대로 전달해 compare-and-delete. 반납 자체가
+ * 소유권 불일치로 스킵되면(이미 다른 실행이 그 락을 갖고 있다는 뜻) 대기열
+ * 처리도 함께 건너뛴다 — 내 것이 아닌 락 위에서 대기열 타입을 재배정하면
+ * 그 다른 실행의 보호막을 또 건드리는 셈이라 오히려 새 경합을 만들 수
+ * 있음. 생략하면(수동 강제 해제 전용) 기존과 동일하게 무조건 반납 후 대기열
+ * 처리.
  * ==========================================================
  */
-function releasePipelineLockAndProcessQueue_(){
+function releasePipelineLockAndProcessQueue_(expectedLockValue){
 
-  releasePipelineLock_();
+  const released = releasePipelineLock_(expectedLockValue);
+
+  if(!released){
+
+    Logger.log(
+      CONFIG.LOG.PREFIX +
+      " releasePipelineLockAndProcessQueue_ — 반납이 스킵돼 대기열 처리도 건너뜀."
+    );
+
+    return;
+
+  }
 
   const props = PropertiesService.getScriptProperties();
   const raw = props.getProperty(CONFIG.PROPERTIES.PIPELINE_PENDING_TYPES);
@@ -2278,6 +2384,9 @@ function runLeadsPipelineTail(){
     return;
   }
 
+  // 2026-09-18(docs/OpenItems.md #53) — release 시점 compare-and-delete용 스냅샷.
+  const lockValueAtEntry = currentPipelineLockValue_();
+
   const state = {
     status: "RUNNING",
     stage: "",
@@ -2349,7 +2458,7 @@ function runLeadsPipelineTail(){
     // 방식 폐기) — Deal Tracker는 Leads/MTA/IC Funnel/SAL Import와 무관하게
     // 바뀌므로 진짜 변경 감지가 아니었음. 독립 2시간 주기 트리거
     // (scheduleNextRevenuePeriodicRefresh_()/periodicRefreshRevenue_())로 대체.
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
   } catch(err){
 
@@ -2364,7 +2473,7 @@ function runLeadsPipelineTail(){
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
 
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
     throw err;
 
@@ -2415,6 +2524,9 @@ function runMTAPipelineTail(){
     );
     return;
   }
+
+  // 2026-09-18(docs/OpenItems.md #53) — release 시점 compare-and-delete용 스냅샷.
+  const lockValueAtEntry = currentPipelineLockValue_();
 
   const state = {
     status: "RUNNING",
@@ -2482,7 +2594,7 @@ function runMTAPipelineTail(){
     // 방식 폐기) — Deal Tracker는 Leads/MTA/IC Funnel/SAL Import와 무관하게
     // 바뀌므로 진짜 변경 감지가 아니었음. 독립 2시간 주기 트리거
     // (scheduleNextRevenuePeriodicRefresh_()/periodicRefreshRevenue_())로 대체.
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
   } catch(err){
 
@@ -2497,7 +2609,7 @@ function runMTAPipelineTail(){
       .getScriptProperties()
       .setProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE, type);
 
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
     throw err;
 
@@ -2557,6 +2669,9 @@ function runICFunnelPipelineTail(){
     return;
   }
 
+  // 2026-09-18(docs/OpenItems.md #53) — release 시점 compare-and-delete용 스냅샷.
+  const lockValueAtEntry = currentPipelineLockValue_();
+
   const state = {
     status: "RUNNING",
     stage: "",
@@ -2614,7 +2729,7 @@ function runICFunnelPipelineTail(){
 
     // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail에 얹혀가지 않음(2026-09-02
     // 방식 폐기) — 독립 2시간 주기 트리거로 대체(위 runLeadsPipelineTail() 주석 참고).
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
   }
 
@@ -2651,6 +2766,9 @@ function runSALPipelineTail(){
     );
     return;
   }
+
+  // 2026-09-18(docs/OpenItems.md #53) — release 시점 compare-and-delete용 스냅샷.
+  const lockValueAtEntry = currentPipelineLockValue_();
 
   const state = {
     status: "RUNNING",
@@ -2709,7 +2827,7 @@ function runSALPipelineTail(){
 
     // 2026-09-03 — Revenue 역싱크는 더 이상 이 tail에 얹혀가지 않음(2026-09-02
     // 방식 폐기) — 독립 2시간 주기 트리거로 대체(위 runLeadsPipelineTail() 주석 참고).
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
   }
 
@@ -2738,6 +2856,13 @@ function runRevenuePipelineTail(){
   deleteTriggersByHandlerName_("runRevenuePipelineTail");
 
   const type = CONFIG.PIPELINE.TYPES.REVENUE;
+
+  // 2026-09-18(docs/OpenItems.md #53) — release 시점 compare-and-delete용 스냅샷.
+  // 이 함수는 guardPipelineTailEntry_()를 안 거침(호출자인 periodicRefreshRevenue_()/
+  // releasePipelineLockAndProcessQueue_()의 대기열 재시도 경로가 이미
+  // acquirePipelineLock_(REVENUE)로 락을 잡아둔 뒤에만 호출) — 진입 시점에
+  // 저장된 값을 그대로 "내 락"으로 스냅샷.
+  const lockValueAtEntry = currentPipelineLockValue_();
 
   const state = {
     status: "RUNNING",
@@ -2796,7 +2921,7 @@ function runRevenuePipelineTail(){
 
     // REVENUE는 다른 타입을 대기열에 편입시키지 않음(무한 루프 방지) —
     // 이 타입만 유일하게 "결과로 뭔가를 큐잉"하지 않는 종단(leaf) 파이프라인.
-    releasePipelineLockAndProcessQueue_();
+    releasePipelineLockAndProcessQueue_(lockValueAtEntry);
 
   }
 
@@ -3046,6 +3171,63 @@ function testComputeTailEntryGuardDecision(){
     ", differentTypeStale=" + JSON.stringify(differentTypeStale) +
     ", sameTypeStale=" + JSON.stringify(sameTypeStale) + ")"
   );
+
+}
+
+
+/**
+ * WHY — `docs/OpenItems.md` #53 조사 중 발견한 "releasePipelineLock_()가
+ * 소유권 확인 없이 무조건 삭제한다" 결함의 수정 검증. `computePipelineLockState_`/
+ * `computeTailEntryGuardDecision_`과 달리 `releasePipelineLock_()`는 순수
+ * 함수가 아니라 PropertiesService를 직접 읽고 쓰므로, 여기서는 실제
+ * PropertiesService에 값을 세팅해 검증(테스트 종료 후 원래 값으로 복원).
+ */
+function testReleasePipelineLockOwnershipCheck(){
+
+  const props = PropertiesService.getScriptProperties();
+  const key = CONFIG.PROPERTIES.PIPELINE_LOCK;
+  const originalValue = props.getProperty(key);
+
+  try{
+
+    // Case 1: 내가 스냅샷한 값과 현재 값이 같으면 삭제하고 true 반환.
+    const mine = JSON.stringify({ type: "LEADS", acquiredAt: 1000 });
+    props.setProperty(key, mine);
+    const releasedMine = releasePipelineLock_(mine);
+    const case1Ok = releasedMine === true && props.getProperty(key) === null;
+
+    // Case 2: 그 사이 다른 실행이 락을 덮어써서 현재 값이 달라졌으면
+    // 삭제하지 않고 false 반환 — 다른 실행의 락을 보호.
+    const stolen = JSON.stringify({ type: "REVENUE", acquiredAt: 2000 });
+    props.setProperty(key, stolen);
+    const releasedStolen = releasePipelineLock_(mine); // 여전히 옛 스냅샷(mine)으로 시도
+    const case2Ok = releasedStolen === false && props.getProperty(key) === stolen;
+
+    // Case 3: expectedLockValue를 생략하면(수동 강제 해제 전용) 기존과 동일하게
+    // 무조건 삭제 — 하위호환.
+    props.setProperty(key, stolen);
+    const releasedForced = releasePipelineLock_();
+    const case3Ok = releasedForced === true && props.getProperty(key) === null;
+
+    const pass = case1Ok && case2Ok && case3Ok;
+
+    Logger.log(
+      "testReleasePipelineLockOwnershipCheck: " +
+      (pass ? "PASS" : "FAIL") +
+      " (case1=" + case1Ok + ", case2=" + case2Ok + ", case3=" + case3Ok + ")"
+    );
+
+  } finally {
+
+    // 실제 락 상태 복원 — 이 테스트가 진행 중인 다른 파이프라인의 락을
+    // 건드린 채로 끝나면 안 됨.
+    if(originalValue === null){
+      props.deleteProperty(key);
+    } else {
+      props.setProperty(key, originalValue);
+    }
+
+  }
 
 }
 
