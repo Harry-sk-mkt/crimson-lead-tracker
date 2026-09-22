@@ -22,9 +22,17 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.35.0
+ * v1.36.0
  *
  * Change Log
+ * v1.36.0 (2026-09-23)
+ * - **버그 수정 — 플랫폼 강제종료 시 self-rescheduling 트리거 체인 영구 중단**.
+ *   2026-09-21 실행이 강제종료된 뒤(README "RUNNING 30분 이상 지속, 자동 감지"
+ *   FAILED) Executions에서 `periodicRefreshRevenue_`(2시간 주기)와
+ *   `periodicRefreshAllReports_`(KST 10시/22시)가 이틀간 한 번도 안 뜸.
+ *   v1.30.0의 `finally` 재예약은 JS 예외만 커버하고, 강제종료는 finally도
+ *   건너뛰므로 체인이 끊김. 두 함수 모두 재예약을 실행 맨 앞으로 옮김.
+ *   `testPeriodicRefreshReschedulesBeforeWork()` 신규.
  * v1.35.0 (2026-09-18)
  * - **버그 수정 — `releasePipelineLock_()`가 소유권 확인 없이 무조건
  *   `PIPELINE_LOCK`을 삭제하고 있었음(`docs/OpenItems.md` #53 조사 중 발견)**.
@@ -2071,6 +2079,10 @@ function scheduleNextAllReportsRefresh_(){
  */
 function periodicRefreshAllReports_(){
 
+  // 2026-09-23 — 재예약을 맨 앞으로(periodicRefreshRevenue_()와 동일 사유).
+  // 끝에 두면 5개 Generate 도중 플랫폼 강제종료 시 체인이 영구히 끊김.
+  scheduleNextAllReportsRefresh_();
+
   [
     { name: "ACQ_REP", fn: generateACQReport_ },
     { name: "NewP1_REP", fn: generateNewP1Report_ },
@@ -2089,8 +2101,6 @@ function periodicRefreshAllReports_(){
     }
 
   });
-
-  scheduleNextAllReportsRefresh_();
 
 }
 
@@ -2178,6 +2188,11 @@ function scheduleNextRevenuePeriodicRefresh_(){
  */
 function periodicRefreshRevenue_(){
 
+  // 2026-09-23 — 재예약을 맨 앞으로. finally는 JS 예외만 커버하고 플랫폼
+  // 강제종료(실행시간 초과/Error code INTERNAL)엔 실행 안 돼 체인이 끊겼음
+  // (2026-09-21 실측). 한 회차는 30분 상한이라 2시간 뒤 예약과 겹칠 일 없음.
+  scheduleNextRevenuePeriodicRefresh_();
+
   try{
 
     if(acquirePipelineLock_(CONFIG.PIPELINE.TYPES.REVENUE)){
@@ -2199,13 +2214,9 @@ function periodicRefreshRevenue_(){
 
     Logger.log(
       CONFIG.LOG.PREFIX +
-      " periodicRefreshRevenue_ 실행 실패(다음 2시간 주기는 계속 예약됨) — " +
+      " periodicRefreshRevenue_ 실행 실패(다음 2시간 주기는 이미 예약됨) — " +
       (err && err.message ? err.message : err)
     );
-
-  } finally {
-
-    scheduleNextRevenuePeriodicRefresh_();
 
   }
 
@@ -3226,6 +3237,60 @@ function testReleasePipelineLockOwnershipCheck(){
     } else {
       props.setProperty(key, originalValue);
     }
+
+  }
+
+}
+
+
+/**
+ * WHY — 2026-09-21 Revenue/전체 리포트 self-rescheduling 체인이 플랫폼
+ * 강제종료로 끊긴 사고의 수정 검증. 강제종료 자체는 재현할 수 없으므로
+ * "재예약이 실제 작업보다 먼저 호출되는지" 호출 순서로 검증 — 먼저 호출되면
+ * 작업 도중 죽어도 다음 회차는 이미 예약돼 있음. 트리거 생성/리포트 실행이
+ * 실제로 일어나지 않도록 관련 전역 함수를 기록용 stub으로 바꿨다가 finally에서
+ * 복원(testReleasePipelineLockOwnershipCheck()와 동일하게 실제 환경에서 실행).
+ */
+function testPeriodicRefreshReschedulesBeforeWork(){
+
+  const g = globalThis;
+  const names = [
+    "scheduleNextRevenuePeriodicRefresh_", "acquirePipelineLock_", "runRevenuePipelineTail",
+    "scheduleNextAllReportsRefresh_", "generateACQReport_", "generateNewP1Report_",
+    "generateTargetReport_", "generateSMReport_", "generateFYReport_"
+  ];
+  const originals = {};
+  names.forEach(function(n){ originals[n] = g[n]; });
+
+  const calls = [];
+  names.forEach(function(n){
+    g[n] = function(){ calls.push(n); return true; };
+  });
+
+  try{
+
+    periodicRefreshRevenue_();
+    const revenueCalls = calls.splice(0);
+    const revenueOk =
+      revenueCalls[0] === "scheduleNextRevenuePeriodicRefresh_" &&
+      revenueCalls.indexOf("runRevenuePipelineTail") > 0;
+
+    periodicRefreshAllReports_();
+    const reportCalls = calls.splice(0);
+    const reportsOk =
+      reportCalls[0] === "scheduleNextAllReportsRefresh_" &&
+      reportCalls.length === 6;
+
+    Logger.log(
+      "testPeriodicRefreshReschedulesBeforeWork: " +
+      (revenueOk && reportsOk ? "PASS" : "FAIL") +
+      " (revenue=" + JSON.stringify(revenueCalls) +
+      ", reports=" + JSON.stringify(reportCalls) + ")"
+    );
+
+  } finally {
+
+    names.forEach(function(n){ g[n] = originals[n]; });
 
   }
 

@@ -1,3 +1,27 @@
+# Changelog — 2026-09-23
+
+## Revenue/전체 리포트 주기 트리거가 플랫폼 강제종료 후 영구히 멈추던 버그 수정
+
+README Pipeline Status에 `FAILED · 2026-09-21 09:46:04 KST · 추정: 플랫폼 강제종료 또는 내부 오류로
+실행 중단(RUNNING 상태가 30분 이상 지속됨, 자동 감지)`이 남아 있어 조사. Executions 로그(09-21 11:35 ~
+09-23 06:23)에 `periodicRefreshRevenue_`(2시간 주기)와 `periodicRefreshAllReports_`(KST 10시/22시)가
+단 한 번도 없었음 — MTA Import, AdSpend/Dictionary 주기 트리거는 정상.
+
+원인: 두 함수 모두 실행이 **끝날 때** 다음 회차를 예약하는 self-rescheduling 1회성 트리거. v1.30.0
+(2026-09-08)에서 Revenue 쪽 재예약을 `finally`로 옮겼지만 `finally`는 JS 예외만 커버하고, 플랫폼
+강제종료(실행시간 초과/`Error code INTERNAL`)는 finally도 건너뛴다. 09-21 오전 강제종료 이후 체인이
+끊겨 Revenue 동기화와 리포트 5종 정기 재계산이 이틀간 중단됨. (정확히 어느 실행이 죽었는지는 로그
+보존 범위 밖이라 미확인.)
+
+수정(`MASTER_002_PipelineAsync.js` v1.36.0): 두 함수 모두 재예약을 실행 맨 앞으로 이동. 한 회차는
+30분 상한이라 다음 예약(2시간 뒤/다음 고정 시각)과 겹치지 않음. 신규 테스트
+`testPeriodicRefreshReschedulesBeforeWork()`(전역 함수 stub으로 호출 순서 검증) PASS. 사용자가
+`runInstallRevenuePeriodicRefreshTrigger()`(다음: 09-23 08:56 KST), `runInstallAllReportsPeriodicRefreshTrigger()`
+(다음: 09-23 10:00 KST) 재실행해 체인 복구 확인.
+
+**관찰(미조치)**: 09-23 01:16 `periodicRefreshAdSpendCache_`가 1565.8초(평소 60~290초) — 30분 상한에
+근접. 이 트리거는 매번 재설치되는 방식이 아니라 강제종료돼도 멈추진 않지만, 느려진 원인은 별도 확인 필요.
+
 # Changelog — 2026-09-18
 
 ## Events_OPS "Spent" 미반영 조사 — UTM_Program_Dictionary 등록폼 접미사 미정규화 버그 발견·수정(`docs/OpenItems.md` #54)
