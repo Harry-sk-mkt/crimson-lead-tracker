@@ -22,6 +22,19 @@ README Pipeline Status에 `FAILED · 2026-09-21 09:46:04 KST · 추정: 플랫�
 **관찰(미조치)**: 09-23 01:16 `periodicRefreshAdSpendCache_`가 1565.8초(평소 60~290초) — 30분 상한에
 근접. 이 트리거는 매번 재설치되는 방식이 아니라 강제종료돼도 멈추진 않지만, 느려진 원인은 별도 확인 필요.
 
+## Ad Spend 캐시 갱신 지연 진단 — 주별 캐시 구간별 시간 로그 추가
+
+`periodicRefreshAdSpendCache_`가 09-23 01:16에 1566초(30분 상한 근접) 소요. 두 실행(09-22 05:16 542초,
+09-23 01:16 1566초)의 로그 시각을 구간별로 맞춰 본 결과: Kakao Moments 22~39초, Naver 월별 약 24회
+조회 36~71초로 **Naver/Kakao API는 원인 아님**. 느린 곳은 (1) 주별 캐시(`refreshAdSpendWeeklyCache_()`)
+전체 7분 42초/14분 1초(두 번 모두 최장), (2) 월별 캐시 앞부분(Meta_Raw 읽기 + Naver 캠페인 목록) 22초 vs
+10분 14초(같은 작업인데 편차가 큼). 두 곳 다 외부 Meta_Raw 전체 읽기를 포함(월별/주별이 각자 따로 읽음).
+주별은 메인 워크북 쓰기 + `flush()`(환율 조회 포함 2회)도 있음.
+
+주별 캐시 안에서 어느 구간인지 끝 로그 한 줄로는 구분이 안 돼 `AD_004_SpendCache.js` v1.7.0에서
+구간별 경과 초 로그(`[AdSpendWeekly timing]`)를 추가. 진단 전용, 계산/출력 무변경, 로그만 추가라
+테스트 없음(사용자 승인). **다음 할 일**: 다음 4시간 주기 실행 로그로 원인 구간 확정 → 수정 → 로그 제거.
+
 # Changelog — 2026-09-18
 
 ## Events_OPS "Spent" 미반영 조사 — UTM_Program_Dictionary 등록폼 접미사 미정규화 버그 발견·수정(`docs/OpenItems.md` #54)
