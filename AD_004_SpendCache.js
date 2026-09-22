@@ -37,9 +37,15 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.6.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-09-23)
+ * - `refreshAdSpendWeeklyCache_()`에 구간별 경과 시간 로그(`[AdSpendWeekly
+ *   timing]`) 추가 — 진단 전용, 계산/출력 무변경. `periodicRefreshAdSpendCache_`
+ *   가 최대 1566초(30분 상한 근접)까지 걸렸고 그중 주별 캐시가 8~14분을
+ *   차지해 원인 구간을 특정하기 위함. 원인 확정 후 제거 예정. 로그만 추가라
+ *   검증할 동작이 없어 테스트 없음(사용자 승인).
  * v1.6.0 (2026-09-04)
  * - **`Ad_Spend_Cache` 외부 스프레드시트 이관**(`docs/OpenItems.md` #49) —
  *   `openAdSpendCacheExternalSpreadsheet_()` 신규(`MASTER_010_SALSync.js`의
@@ -469,6 +475,16 @@ const AD_SPEND_WEEKLY_CACHE_HEADERS = ["WeekStart", "Segment", "Spent"];
  */
 function refreshAdSpendWeeklyCache_(){
 
+  // 2026-09-23 진단용 — 이 함수가 7~14분씩 걸리는데(Executions 실측) 어느
+  // 구간인지 끝 로그 한 줄로는 구분이 안 돼 구간별 경과 초를 찍는다. 원인
+  // 확정 후 제거.
+  let lapMs = Date.now();
+  const lap = function(label){
+    const now = Date.now();
+    Logger.log("[AdSpendWeekly timing] " + label + ": " + ((now - lapMs) / 1000).toFixed(1) + "s");
+    lapMs = now;
+  };
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const engineSheet = ss.getSheetByName(CONFIG.TARGET.ENGINE_SHEET);
 
@@ -488,12 +504,17 @@ function refreshAdSpendWeeklyCache_(){
   }
 
   const cutoverMonday = getMondayOfWeek_(cutoverDate);
+  lap("Target_Engine 읽기");
 
   const metaSummaryNZD = computeMetaSpendWeeklySummary_();
+  lap("Meta_Raw 읽기+주별 분배");
   const naverSummaryKRW = computeNaverSearchAdSpendHistoryWeeklySummary_(cutoverMonday);
+  lap("Naver 주별 조회");
   const kakaoChannelSummaryKRW = computeKakaoChannelSpendWeeklySummary_();
+  lap("Kakao 채널 주별");
 
   const rate = fetchKrwToNzdRate_();
+  lap("환율(메인 워크북 flush)");
   const naverSummaryNZD = convertSpendSummaryCurrency_(naverSummaryKRW, rate);
   const kakaoChannelSummaryNZD = convertSpendSummaryCurrency_(kakaoChannelSummaryKRW, rate);
 
@@ -533,6 +554,7 @@ function refreshAdSpendWeeklyCache_(){
   sheet.hideSheet();
 
   SpreadsheetApp.flush();
+  lap("캐시 시트 쓰기+flush");
 
   Logger.log(
     "Ad_Spend_Cache_Weekly 갱신 완료: " + rows.length + "행 (Cutover=" + cutoverKey +
