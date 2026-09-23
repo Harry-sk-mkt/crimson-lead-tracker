@@ -1,5 +1,12 @@
 # Changelog — 2026-09-23
 
+## CLAUDE.md 세션 규칙 정리 — 공통 규칙은 루트로 승격
+
+세션 시작 Git 동기화 확인, 세션 종료 기록·커밋·push, 종료 요약 형식, Apps Script 공통 규칙(함수 실행 요청 시
+파일명+함수명, Test/Run 함수 `_` 접미사 금지, `safe-clasp-push.sh` 경유 + 실행 요청 전 push 확인)을 루트
+`crimson/CLAUDE.md`로 옮기고, 이 문서의 해당 6개 항목은 "루트 참고 + 이 저장소 고유 사항(스크립트, Changelog
+위치, 사고 이력 요약)"으로 축약. 규칙 내용 자체는 변경 없음. 코드 변경 없음.
+
 ## Revenue/전체 리포트 주기 트리거가 플랫폼 강제종료 후 영구히 멈추던 버그 수정
 
 README Pipeline Status에 `FAILED · 2026-09-21 09:46:04 KST · 추정: 플랫폼 강제종료 또는 내부 오류로
