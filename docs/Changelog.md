@@ -1,3 +1,51 @@
+# Changelog — 2026-09-24
+
+## Ad Spend 캐시 지연 — Meta 구간 read/aggregate 분리 진단 추가 (`AD_004_SpendCache.js` v1.8.0)
+
+전날(09-23) 로그 분석으로 `refreshAdSpendWeeklyCache_()`의 "Meta_Raw 읽기+주별 분배" lap이 356.4초로
+전체(374초)의 대부분을 차지한다는 것까진 확인했으나(`decisions/2026-09-24.md`), 읽기(I/O)/분배 연산 중
+실제 병목이 무엇인지 몰라 근본 수정 설계(캠페인 단위 체크포인트 vs 최근 N개월 재집계+과거 고정 캐시)를
+확정할 수 없었음.
+
+코드 조사 중 발견: `mergePreciseMetaRecordsForCampaignWeek_()`가 같은 캠페인의 분할 export 배치를 같은
+집계 호출 안에서 병합하는데(2026-09-09 과다집계 버그 회귀 테스트로 이미 보호돼 있음), ICFunnel/딕셔너리와
+동일한 "마지막 체크포인트 이후 신규 행만 읽기" 방식을 그대로 쓰면 형제 행이 체크포인트 경계에 걸릴 때 그
+버그가 재발할 위험이 있음 — 사용자 확인 후 "최근 N개월만 전체 재집계, 그 이전은 고정 캐시" 방향으로 확정.
+다만 이 설계도 read가 아니라 aggregate만 줄이는 것이라, 실제 병목이 read라면 효과가 제한적 — 확정 전에
+먼저 분리 측정하기로 함.
+
+`refreshAdSpendWeeklyCache_()`의 단일 lap을 "Meta_Raw 읽기"/"주별 분배 연산"으로 분리, `refreshAdSpendCache_()`
+(월별, 기존엔 lap 로그 전혀 없었음 — ~10분21초는 다른 로그 사이 간격으로 추정한 값)에도 동일한 lap
+인프라 신규 추가(읽기/월별 분배/Naver/Kakao/환율/쓰기 6구간). 계산/출력 완전 무변경, 진단 로그만 추가라
+테스트 없음. `safe-clasp-push.sh`로 push 완료.
+
+**다음 액션**: ~~사용자가 두 함수 실행해 lap 로그 확인~~ → 완료, 아래 항목으로 이어짐.
+
+## Ad Spend 캐시 지연 — "Meta_Raw 크기가 원인" 가설 폐기, 외부 API 간헐 지연으로 재판정 (`AD_004_SpendCache.js` v1.9.0)
+
+사용자가 `runRefreshAdSpendWeeklyCache()`/`runRefreshAdSpendCache()`/`runSyncKakaoMomentsReportToKakaoSMSRaw()`
+셋 다 개별 실행한 실측 결과 — 전부 baseline 정상:
+- Meta_Raw 읽기 3.3~5.3초, 주/월별 분배 연산 0.0~6.5초 (이전 356.4초/~10분21초와 비교 불가)
+- Naver 조회 7.3~28초, Kakao 채널 0.4~0.5초, Kakao Moments sync 13초, 환율/쓰기 각 1초 미만
+
+Executions 로그(`periodicRefreshAdSpendCache_`, 4시간 주기)를 09-23~09-24 구간 필터 없이 전체 대조한 결과:
+- 6회 중 4회 정상(70~230초), 2회만 극단적으로 느림(09-23 17:16 792.7초, 09-24 05:16 1093.2초)
+- 이 2회 시각에 다른 트리거(Import 파이프라인/Revenue sync/딕셔너리 갱신 등)와의 겹침 없음(사용자 확인 — 필터 없는 전체 목록이었음)
+- 개별 실행 실측치를 다 더해도(Kakao Moments 13s + 월별 43s + 주별 31s ≈ 87s) baseline 정상 구간과 일치
+
+**결론**: Meta_Raw 전체 히스토리 재읽기가 구조적 병목이라는 애초 가설이 틀렸음. 코드/데이터량과 무관한
+외부 API(Kakao Moments/Naver Search/Sheets `openById()`) 쪽 간헐적 지연(6회 중 2회, 재현 불가)이 유력
+원인 — 이 경우 "최근 N개월만 재집계+과거 고정 캐시" 설계(앞선 09-24 항목)는 **폐기**. 캐싱/윈도우 구조로는
+이 문제를 못 고침.
+
+`periodicRefreshAdSpendCache_()`에 3단계(Kakao Moments sync/월별/주별) 구간 로그(`[PeriodicAdSpend
+timing]`) 추가 — 개별 수동 실행으로는 재현이 안 되니, 다음 자연 발생 스파이크 때 정확히 어느 단계인지
+잡기 위함. 계산/출력 무변경, 테스트 없음.
+
+**다음 액션**: 다음 4시간 주기 실행 중 792~1093초급 스파이크가 다시 뜨면 `[PeriodicAdSpend timing]` 로그
+확인 → 어느 외부 API 구간인지 확정 → 그 API 호출에 한해 타임아웃/재시도 등 조치 검토(캐싱 접근 아님).
+지금까지 추가한 진단 lap 로그들(v1.7.0~v1.9.0)은 이 원인이 확정되면 정리(제거) 예정.
+
 # Changelog — 2026-09-23
 
 ## CLAUDE.md 세션 규칙 정리 — 공통 규칙은 루트로 승격

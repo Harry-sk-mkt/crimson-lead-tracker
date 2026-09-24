@@ -37,9 +37,36 @@
  * AD (2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.7.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-09-24)
+ * - **결론: Meta_Raw 크기는 병목이 아니었음.** v1.8.0 lap 로그로 실측한 결과
+ *   Meta_Raw 읽기(3.3~5.3초)/분배 연산(0.0~6.5초)/Kakao Moments sync(13초)
+ *   전부 baseline 정상 범위 — 09-24 05:16(1093.2초)/09-23 17:16(792.7초)
+ *   같은 극단적 지연을 재현 못함. Executions 로그 확인 결과 그 시각에 다른
+ *   트리거 겹침도 없었음(필터 없는 전체 목록으로 확인). 즉 "최근 N개월만
+ *   재집계, 과거는 고정 캐시" 방향(2026-09-24 앞선 결정)은 **폐기** — 원인이
+ *   Meta_Raw 크기가 아니므로 그 설계로는 792~1093초 스파이크를 못 고침.
+ *   유력 원인은 Kakao Moments/Naver/Sheets openById() 등 외부 API 쪽의
+ *   간헐적 지연(재현 안 됨, 6번 중 2번꼴)으로 추정되나 미확정.
+ * - `periodicRefreshAdSpendCache_()`에 3단계(Kakao Moments sync/월별/주별)
+ *   구간 로그(`[PeriodicAdSpend timing]`) 추가 — 수동 개별 실행으로는
+ *   재현이 안 되니, 다음에 시간 트리거로 자연 발생할 때 어느 단계에서
+ *   튀는지 잡기 위함. 계산/출력 무변경, 테스트 없음(진단 전용).
+ * v1.8.0 (2026-09-24)
+ * - Meta 구간 read/aggregate 분리 진단 — `refreshAdSpendWeeklyCache_()`의
+ *   "Meta_Raw 읽기+주별 분배" 단일 lap을 "Meta_Raw 읽기"/"주별 분배 연산"
+ *   둘로 쪼갬. `refreshAdSpendCache_()`(월별)에는 lap 로그가 아예 없어(기존
+ *   ~10분21초는 다른 로그 사이 간격으로 추정한 값) 동일한 lap 인프라를 신규
+ *   추가(읽기/월별 분배/Naver/Kakao/환율/쓰기 6구간). 목적: 증분 캐싱 설계
+ *   전, Meta_Raw I/O와 분배 연산 중 실제 병목이 무엇인지 확정(캠페인 분할
+ *   배치 병합 로직(`mergePreciseMetaRecordsForCampaignWeek_()`) 때문에 단순
+ *   체크포인트 증분은 과다집계 위험이 있어 "최근 N개월 재집계+과거 고정
+ *   캐시" 방향으로 사용자 확정, 2026-09-24 decisions log — 다만 그 설계가
+ *   실제로 병목을 해소하는지는 read/aggregate 분리 실측 후 결정). 계산/출력
+ *   완전 무변경(같은 readMetaRawRows_()/aggregateMetaSpendBy*_() 호출을
+ *   inline으로 풀어 lap만 삽입) — 검증할 새 동작이 없어 테스트 없음.
  * v1.7.0 (2026-09-23)
  * - `refreshAdSpendWeeklyCache_()`에 구간별 경과 시간 로그(`[AdSpendWeekly
  *   timing]`) 추가 — 진단 전용, 계산/출력 무변경. `periodicRefreshAdSpendCache_`
@@ -368,22 +395,41 @@ function openAdSpendCacheExternalSpreadsheet_(){
  * 저장한다. Meta_Raw/NaverSA 캠페인 데이터가 갱신되거나, 최소 ACQ_REP
  * Generate 전에 사용자가 이 함수를 직접 Run 해야 한다(자동 실행 체인에는
  * 아직 안 걸림, Meta 때와 동일 방침).
+ *
+ * **2026-09-24 진단용 lap 추가** — refreshAdSpendWeeklyCache_()의 [AdSpendWeekly
+ * timing] 로그와 동일한 목적. 이 함수(월별)는 그동안 구간별 로그가 전혀 없어
+ * "Meta 처리 ~10분21초"가 다른 로그 사이 간격으로 추정한 값이었음(decisions/
+ * 2026-09-24.md) — 실측으로 확정하고, Meta_Raw 읽기(I/O)와 월별 분배 연산 중
+ * 어느 쪽이 병목인지 분리 확인하기 위함. 계산/출력 무변경. 원인 확정 후 제거.
  * ==========================================================
  */
 function refreshAdSpendCache_(){
 
-  const metaSummaryNZD = computeMetaSpendSummary_();
+  let lapMs = Date.now();
+  const lap = function(label){
+    const now = Date.now();
+    Logger.log("[AdSpendCache timing] " + label + ": " + ((now - lapMs) / 1000).toFixed(1) + "s");
+    lapMs = now;
+  };
+
+  const metaRawRecords = readMetaRawRows_();
+  lap("Meta_Raw 읽기");
+  const metaSummaryNZD = aggregateMetaSpendByFYMonthSegment_(metaRawRecords);
+  lap("월별 분배 연산");
 
   const naverBackfill = AD.NAVER_SEARCH.API.BACKFILL_START;
   const naverSummaryKRW = computeNaverSearchAdSpendHistorySummary_(
     naverBackfill.YEAR, naverBackfill.MONTH
   );
+  lap("Naver 조회");
 
   const kakaoChannelSummaryKRW = computeKakaoChannelSpendSummary_();
+  lap("Kakao 채널");
 
   const rate = fetchKrwToNzdRate_();
   const naverSummaryNZD = convertSpendSummaryCurrency_(naverSummaryKRW, rate);
   const kakaoChannelSummaryNZD = convertSpendSummaryCurrency_(kakaoChannelSummaryKRW, rate);
+  lap("환율 변환");
 
   const combined = mergeSpendSummaries_([metaSummaryNZD, naverSummaryNZD, kakaoChannelSummaryNZD]);
 
@@ -418,6 +464,7 @@ function refreshAdSpendCache_(){
   sheet.hideSheet();
 
   SpreadsheetApp.flush();
+  lap("캐시 시트 쓰기+flush");
 
   Logger.log(
     "Ad_Spend_Cache 갱신 완료: " + rows.length + "행 (환율 KRW→NZD=" + rate + ")"
@@ -475,8 +522,12 @@ const AD_SPEND_WEEKLY_CACHE_HEADERS = ["WeekStart", "Segment", "Spent"];
  */
 function refreshAdSpendWeeklyCache_(){
 
-  // 2026-09-23 진단용 — 이 함수가 7~14분씩 걸리는데(Executions 실측) 어느
-  // 구간인지 끝 로그 한 줄로는 구분이 안 돼 구간별 경과 초를 찍는다. 원인
+  // 2026-09-23 진단용, 2026-09-24 Meta 구간 read/aggregate 분리 — 이 함수가
+  // 7~14분씩 걸리는데(Executions 실측) 어느 구간인지 끝 로그 한 줄로는 구분이
+  // 안 돼 구간별 경과 초를 찍는다. "Meta_Raw 읽기+주별 분배"가 356.4초로
+  // 대부분을 차지한다는 것까진 확인됐으나 읽기(I/O)/분배 연산 중 무엇이
+  // 실제 병목인지 몰라 windowed-cache 설계(최근 N개월만 재계산 vs 캐페인
+  // 단위 체크포인트) 방향을 못 정한 상태 — 이번 분리로 확인 후 결정. 원인
   // 확정 후 제거.
   let lapMs = Date.now();
   const lap = function(label){
@@ -506,8 +557,10 @@ function refreshAdSpendWeeklyCache_(){
   const cutoverMonday = getMondayOfWeek_(cutoverDate);
   lap("Target_Engine 읽기");
 
-  const metaSummaryNZD = computeMetaSpendWeeklySummary_();
-  lap("Meta_Raw 읽기+주별 분배");
+  const metaRawRecords = readMetaRawRows_();
+  lap("Meta_Raw 읽기");
+  const metaSummaryNZD = aggregateMetaSpendByWeekSegment_(metaRawRecords);
+  lap("주별 분배 연산");
   const naverSummaryKRW = computeNaverSearchAdSpendHistoryWeeklySummary_(cutoverMonday);
   lap("Naver 주별 조회");
   const kakaoChannelSummaryKRW = computeKakaoChannelSpendWeeklySummary_();
@@ -681,6 +734,18 @@ function readAdSpendCacheMap_(){
  */
 function periodicRefreshAdSpendCache_(){
 
+  // 2026-09-24 진단용 — 이 함수가 6번 중 2번꼴로 792~1093초까지 튀는데(다른
+  // 트리거 겹침도, refreshAdSpendCache_/refreshAdSpendWeeklyCache_ 단독
+  // 실행도 baseline 70~90초로 정상이라 원인 미확정), 실제 주기 트리거로
+  // 자연 발생할 때 3단계 중 어디서 튀는지 잡기 위한 구간 로그. 원인 확정 후
+  // 제거.
+  let lapMs = Date.now();
+  const lap = function(label){
+    const now = Date.now();
+    Logger.log("[PeriodicAdSpend timing] " + label + ": " + ((now - lapMs) / 1000).toFixed(1) + "s");
+    lapMs = now;
+  };
+
   try {
     syncKakaoMomentsReportToKakaoSMSRaw_();
   } catch(err){
@@ -689,6 +754,7 @@ function periodicRefreshAdSpendCache_(){
       (err && err.message ? err.message : err)
     );
   }
+  lap("Kakao Moments sync");
 
   try {
     refreshAdSpendCache_();
@@ -698,6 +764,7 @@ function periodicRefreshAdSpendCache_(){
       (err && err.message ? err.message : err)
     );
   }
+  lap("refreshAdSpendCache_ (월별)");
 
   // 2026-08-19 신규 — Target_REP 전용 주 단위 캐시도 같은 주기로 갱신. 실패가
   // 위 월 단위 캐시 갱신에 영향을 주면 안 되므로 별도 try/catch로 격리
@@ -710,6 +777,7 @@ function periodicRefreshAdSpendCache_(){
       (err && err.message ? err.message : err)
     );
   }
+  lap("refreshAdSpendWeeklyCache_ (주별)");
 
 }
 
