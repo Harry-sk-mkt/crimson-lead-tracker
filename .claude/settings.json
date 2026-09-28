@@ -1,10 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git fetch *)",
-      "mcp__claude_ai_Notion__notion-query-data-sources",
+      "Bash(git *)",
+      "Bash(node *)",
+      "Bash(npx clasp *)",
+      "Bash(clasp push *)",
+      "Bash(clasp status *)",
+      "Bash(clasp run *)",
+      "Bash(clasp --help)",
+      "Bash(clasp --version)",
+      "Bash(clasp deployments *)",
+      "Bash(clasp open *)",
+      "Bash(bash scripts/*)",
+      "Bash(gh repo *)",
+      "PowerShell(gh repo *)",
+      "PowerShell(git clone *)",
+      "Skill(update-config)",
+      "WebSearch",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:developers.kakao.com)",
+      "WebFetch(domain:openai.com)",
+      "mcp__claude_ai_Notion__notion-search",
       "mcp__claude_ai_Notion__notion-fetch",
-      "Bash(clasp --version)"
+      "mcp__claude_ai_Notion__notion-query-data-sources"
     ]
   },
   "hooks": {
