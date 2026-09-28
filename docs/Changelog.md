@@ -1,3 +1,17 @@
+# Changelog — 2026-09-28
+
+## S&M_REP All SAL 갭 조사 착수 (09-21~27 주 3 vs Salesforce 29) — `TEMPQA_065_SALWeekGapDiagnostic.js` v1.0.0
+
+SAL Import(`runSALPipelineTail` 7:06 AM) 후 S&M_REP 09-21~27 주 All SAL이 3, Salesforce SAL 리포트 기준 29.
+S&M All SAL은 ACQ SAL과 같은 `computeOPSAggregates_()` 스캔(Sales Accepted Date 이벤트 기준 + SAL Segment)에서
+나오므로 정의 차이는 아님 — 코드로 확인. 로그상 이번 배치 10건 중 7건 `Not found in Leads_OPS`지만 10건만으로 26건 갭 설명 불가.
+SAL_Raw → Leads_OPS 경로의 어느 단계에서 새는지(Raw 이 주 Lead ID / 최신 레코드 날짜 / OPS 행 존재 / OPS 날짜) +
+#52(Sales Accepted Date 대량 유실) 재발 여부를 한 번에 보는 읽기 전용 진단 `runDiagnoseSALWeekGap()` 추가, clasp push 완료.
+결과 대기.
+
+부수 관찰(미조치): 같은 실행의 Target/FY_REP 그림자 diff가 처음으로 실 Import에서 불일치(20건/68건) —
+#42 쓰기 경로 전환 금지 근거. 리포트 출력값엔 영향 없음(full 경로가 씀).
+
 # Changelog — 2026-09-24
 
 ## Ad Spend 캐시 지연 — Meta 구간 read/aggregate 분리 진단 추가 (`AD_004_SpendCache.js` v1.8.0)
