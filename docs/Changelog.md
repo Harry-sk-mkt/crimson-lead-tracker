@@ -7,10 +7,60 @@ S&M All SAL은 ACQ SAL과 같은 `computeOPSAggregates_()` 스캔(Sales Accepted
 나오므로 정의 차이는 아님 — 코드로 확인. 로그상 이번 배치 10건 중 7건 `Not found in Leads_OPS`지만 10건만으로 26건 갭 설명 불가.
 SAL_Raw → Leads_OPS 경로의 어느 단계에서 새는지(Raw 이 주 Lead ID / 최신 레코드 날짜 / OPS 행 존재 / OPS 날짜) +
 #52(Sales Accepted Date 대량 유실) 재발 여부를 한 번에 보는 읽기 전용 진단 `runDiagnoseSALWeekGap()` 추가, clasp push 완료.
-결과 대기.
+**결과(재실행 13초)**: #52 재발 없음(OPS Sales Accepted Date 8,183). SAL_Raw 자체에 이 주 SAL이 10건뿐 →
+29 대비 19건은 **SAL export(외부 원본) 단계 누락**, 코드 밖. 10건 중 3건 정상, 1건 OPS에 리드 없음,
+6건은 **지금은 OPS에 있는데 Sales Accepted Date 공백** — sync(7:06) 당시엔 OPS에 없던 리드(`Not found`
+7건과 일치)라 못 쓰고, `SAL_LAST_ROW` 체크포인트는 그대로 전진해 **다시는 재시도 안 되는 구조적 결함**
+(IC Funnel `ICFUNNEL_LAST_ROW`도 같은 패턴).
+
+**수정(사용자 선택: 신규 OPS 행 보충)**: `runLeadsPipelineTail()`의 `buildLeadsOPS` 직후
+`backfillFunnelForBlankOPSRows_` 단계 추가(`MASTER_002` v1.37.0) — OPS "Sales Accepted Date"/"IC Booked·Completed
+Date"가 빈 칸인데 SAL_Raw/ICFunnel_Raw 최신 레코드엔 값이 있는 리드만 골라 정상 sync와 같은 컬럼을 씀
+(`backfillSALForBlankOPSRows_()` `MASTER_010` v1.4.0, `backfillICFunnelForBlankOPSRows_()` `MASTER_009` v1.11.0,
+공용 순수 함수 `selectLeadIdsWithBlankOPSValue_()` `MASTER_003` v1.13.0 + `testSelectLeadIdsWithBlankOPSValue()`).
+체크포인트/기존 sync 무변경, 각 보충은 독립 try/catch. 새 OPS 행뿐 아니라 기존 6건도 같은 조건으로 잡힘.
+쓰기 전 확인용 `runPreviewFunnelBackfill()`(dry run). clasp push 완료. 테스트 PASS, 미리보기: SAL 11건(09-21 주 6건 + 과거 같은 결함 5건), IC 4건 —
+소량이라 `runLeadsPipelineTail()` 수동 실행으로 반영 → 완주(약 8분), SAL 11건/IC 4건 보충 확인,
+backfill 단계 25초. 그림자 diff(Target 20건/FY_REP 74건) 불일치 지속 — #42 기존 관찰과 동일, 출력 무영향.
+**검증**: 진단 재실행 — D 0건, 정상 반영 9/10, OPS 이 주 SAL 9, OPS 전체 8,183→8,194(+11 정확히 일치).
+
+**⚠️ 아래 "SAL export 범위(상태 필터)" 판단은 틀림 — 정정**: 사용자 확인 — SAL 29건이 맞고 상태가 바뀐 건
+세일즈팀 연락 때문, 누락은 시스템 오류. 날짜별로 다시 보니 누락 19건 = 정확히 SAL 날짜 **9/21~23** 전부,
+SAL_Raw에 있는 10건 = 9/24~26 전부(상태와의 상관은 날짜의 부산물). 즉 9/21~23 구간이 SAL_Raw에 통째로 없음.
+읽기 전용 진단 `TEMPQA_066_SALRawMissingDaysTrace.js`(`runTraceSALRawMissingDays()`: 19건 Raw 존재 여부 +
+마지막 80행 날짜 흐름으로 Import 배치 경계 확인) 추가, clasp push 완료.
+**결과**: 19건 모두 SAL_Raw에 어떤 날짜로도 없음. 마지막 배치들의 SAL 날짜가 서로 겹치지 않는 짧은 구간만
+담고 있음 — 9/5~8 → (날짜 빈 25행) → 9/11~13 → 9/15~16 → 9/24~26. **9/17~23 일주일이 통째로 비어있음**
+(09-14 주 S&M SAL도 과소집계 가능). 코드상 SAL Import는 완전 동일 중복만 skip하므로, 각 Import CSV가
+"최근 며칠"만 담고 있었을 가능성이 유력 — 오늘 07시대 `importCsv` 실행 로그의 `Parsed Records`/`Raw dedup`
+건수로 확정 필요(사용자 확인 대기). 복구: 9/1 이후 전체 범위 SAL export 재Import(기존 행은 중복 skip).
+**확정**: 09-28 07:05 SAL Import 로그 — CSV Rows 11(헤더+10), Parsed 10, Valid 10, dedup skip 0, 10건 append
+(rows 8243-8252). 업로드된 파일 자체가 10건(9/24~26)뿐 — Import 코드 손실 없음. 9/17~23은 그 구간을 담은
+SAL 파일이 한 번도 Import되지 않은 것. 복구는 넓은 범위 재export·재Import.
+
+**재발 방지 — SAL Import 날짜 공백 경고**(사용자 요청, `IMPORT_001_Import.js` v3.12.0 / `CORE_001_Config.js`
+v1.73.0): append 전 SAL_Raw 마지막 SAL 날짜 → 새 파일 첫 SAL 날짜 간격이 `CONFIG.SAL.GAP_WARNING_DAYS`(3일,
+금→월 주말은 정상)를 넘으면 Import 결과창 맨 위에 🚨 경고 + 재export 안내. Import는 그대로 진행, 체크 실패도
+Import를 막지 않음(try/catch). `computeSALImportGap_()` 순수 함수 + `testComputeSALImportGap()`(이번 사고 9/16→9/24
+8일 재현/주말/겹침/빈 입력) — 로컬 node 실행으로 기대값 확인, clasp push 완료.
+
+~~**나머지 20건(29 vs 9) 원인 — SAL export 범위**~~: 사용자가 받은 Salesforce SAL 리포트(09-21~27, 29건)를 Lead
+Status별로 보면 New (Not Contacted) 10 / Attempting Contact 6 / Disqualified 6 / IC Booked 3 / Qualified 3 /
+Contacted 1. SAL_Raw에 들어온 이 주 10건이 정확히 New (Not Contacted) 10건과 일치 → 오늘 아침 Import한 SAL
+CSV는 **현재 Lead Status = New (Not Contacted)인 리드만** 담고 있었음(리포트 필터로 추정, 코드 문제 아님).
+SAL은 "그 상태로 전환된 시각"이 기준이라 이후 상태가 넘어간 리드도 포함돼야 함. 조치: 이 29건 CSV를 SAL
+Import로 재업로드(기존 10건은 완전 동일 중복으로 skip), Salesforce SAL export 리포트의 Lead Status 필터 확인.
+남은 갭: SAL_Raw 자체 19건 누락(Salesforce export 범위 확인 필요), C 1건(`00QRC00001PqNXt`, OPS 미존재).
 
 부수 관찰(미조치): 같은 실행의 Target/FY_REP 그림자 diff가 처음으로 실 Import에서 불일치(20건/68건) —
 #42 쓰기 경로 전환 금지 근거. 리포트 출력값엔 영향 없음(full 경로가 씀).
+
+## `runDiagnoseSALWeekGap()` ~10분 후 Execution cancelled → UTM override 읽기 캐시 누락 수정 (`UTIL_004_DictionaryQA.js` v2.2.0)
+
+로그: SAL_Raw 8,251행 읽기 직후 멈춤. 원인: `resolveBusinessSegment_()`가 행마다 `readUtmSegmentOverrideMap_()`를
+부르는데 이 경로만 메모이제이션이 없어(딕셔너리 2개는 이미 캐시) 리드 ~8천 개 × 시트 읽기. Leads/MTA Transformer도
+같은 경로라 Import 신규 행 수에 비례해 느려지던 잠재 성능 버그. `readKeyValueSheetAsMap_()`에 시트명 단위 캐시 +
+`writeOverrideMap_()`에서 무효화. 출력값 무변경. 테스트 `testReadKeyValueSheetAsMapCache()` 추가, clasp push 완료 → PASS(keys 477, 1,000회 호출 0ms).
 
 # Changelog — 2026-09-24
 

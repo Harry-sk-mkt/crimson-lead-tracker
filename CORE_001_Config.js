@@ -9,9 +9,13 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.72.0
+ * v1.73.0
  *
  * Change Log
+ * v1.73.0 (2026-09-28)
+ * - `SAL.GAP_WARNING_DAYS` 신규 — SAL Import 시 SAL_Raw 마지막 SAL 날짜와
+ *   새 파일 첫 SAL 날짜 사이가 이 일수보다 벌어지면 경고(9/17~23 SAL이
+ *   통째로 Import 안 된 채 아무도 몰랐던 사고로 도입, IMPORT_001_Import.js).
  * v1.72.0 (2026-09-17)
  * - **`PROPERTIES.FYREP_LEADS_OPS_AGG_LAST_ROW`/`FYREP_LEADS_OPS_AGG_CACHE` 신규** —
  *   `aggregateFYRepLeadsOPSFromRecords_()` 증분화(`docs/OpenItems.md` #42) 그림자
@@ -721,7 +725,11 @@ const CONFIG = {
       // 필드가 없어 "" 전달(그래도 대부분 분류 가능, computeSALByLeadId_ 참고).
       LAST_MKT_UTM_CAMPAIGN: "Last MKT UTM Campaign",
       LAST_TOUCH_DETAIL: "Last Touch Detail"
-    }
+    },
+
+    // 2026-09-28 — SAL Import 날짜 공백 경고 기준(달력 일수). 금→월 주말(3일)은
+    // 정상으로 보고, 그보다 벌어지면 Import 결과창에 경고(computeSALImportGap_()).
+    GAP_WARNING_DAYS: 3
 
   },
 

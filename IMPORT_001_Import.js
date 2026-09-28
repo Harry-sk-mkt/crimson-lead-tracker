@@ -11,9 +11,15 @@
  * - Master 빌드
  *
  * Version
- * v3.11.0
+ * v3.12.0
  *
  * Change Log
+ * v3.12.0 (2026-09-28)
+ * - **SAL Import 날짜 공백 경고** — `computeSALImportGap_()`(순수)/
+ *   `formatSALImportGapWarning_()`/`readSALRawDates_()` 신규. SAL_Raw 마지막
+ *   SAL 날짜와 새 파일 첫 SAL 날짜 사이가 `CONFIG.SAL.GAP_WARNING_DAYS`보다
+ *   벌어지면 결과창 맨 위에 경고(Import 자체는 그대로 진행). 9/17~23 SAL이
+ *   통째로 Import 안 된 걸 아무도 몰랐던 사고로 도입. `testComputeSALImportGap()`.
  * v3.11.0 (2026-09-02)
  * - **SAL Import Type 신규**(`docs/OpenItems.md` #38, `MASTER_010_SALSync.js`) —
  *   IC Funnel과 동일한 패턴: `importCsv()`의 `case "SAL"`이 `writeSALRaw()`
@@ -310,6 +316,120 @@ function testFormatRawDedupSummary(){
 
 
 /**
+ * ==========================================================
+ * Compute SAL Import Gap (순수 함수, 2026-09-28)
+ *
+ * WHY
+ * 9/17~23 SAL이 담긴 파일이 한 번도 Import되지 않았는데(매 export가 최근
+ * 며칠만 담음) 시스템이 아무 신호도 안 줘 S&M_REP SAL이 조용히 과소집계됨.
+ * SAL_Raw 마지막 SAL 날짜 → 이번 파일 첫 SAL 날짜 사이가 maxGapDays(달력
+ * 일수)보다 벌어지면 그 사이 SAL이 빠졌을 가능성이 높다고 본다. 파일이
+ * 기존 구간과 겹치면(첫 날짜 ≤ 마지막 날짜) 공백 없음.
+ *
+ * INPUT
+ * existingDates : (Date|null)[]  SAL_Raw 기존 SAL 날짜(빈 값 null 허용)
+ * newDates : (Date|null)[]  이번 파일 SAL 날짜
+ * maxGapDays : number
+ *
+ * OUTPUT
+ * null | { lastExisting: Date, firstNew: Date, gapDays: number }
+ *
+ * TEST
+ * testComputeSALImportGap()
+ * ==========================================================
+ */
+function computeSALImportGap_(existingDates, newDates, maxGapDays){
+
+  function valid(d){ return d instanceof Date && !isNaN(d.getTime()); }
+  function dayStart(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
+  const existing = existingDates.filter(valid);
+  const incoming = newDates.filter(valid);
+
+  if(existing.length === 0 || incoming.length === 0) return null;
+
+  const lastExisting = new Date(Math.max.apply(null, existing));
+  const firstNew = new Date(Math.min.apply(null, incoming));
+
+  const gapDays = Math.round((dayStart(firstNew) - dayStart(lastExisting)) / 86400000);
+
+  return gapDays > maxGapDays
+    ? { lastExisting: lastExisting, firstNew: firstNew, gapDays: gapDays }
+    : null;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — computeSALImportGap_()
+ * ==========================================================
+ */
+function testComputeSALImportGap(){
+
+  const d = function(day){ return new Date(2026, 8, day, 15, 0); };
+
+  // 이번 사고 재현: 9/16 → 9/24 (8일) → 경고
+  const gap = computeSALImportGap_([d(15), d(16), null], [d(25), d(24), d(26)], 3);
+  // 금(9/25) → 월(9/28) 주말 3일 → 정상
+  const weekend = computeSALImportGap_([d(25)], [d(28)], 3);
+  // 겹치는 넓은 범위 재Import → 정상
+  const overlap = computeSALImportGap_([d(16)], [d(1), d(24)], 3);
+  // 기존 Raw 비어있음 / 새 날짜 없음 → 판단 불가(null)
+  const empty = computeSALImportGap_([], [d(24)], 3);
+  const noNew = computeSALImportGap_([d(16)], [null], 3);
+
+  const pass =
+    gap !== null && gap.gapDays === 8 &&
+    gap.lastExisting.getDate() === 16 && gap.firstNew.getDate() === 24 &&
+    weekend === null && overlap === null && empty === null && noNew === null;
+
+  Logger.log("testComputeSALImportGap: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(gap));
+
+}
+
+
+/**
+ * SAL 공백 경고 문구 (gap이 null이면 빈 문자열).
+ */
+function formatSALImportGapWarning_(gap){
+
+  if(!gap) return "";
+
+  const fmt = function(dt){ return Utilities.formatDate(dt, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd"); };
+
+  return (
+    "🚨 SAL 날짜 공백 감지: SAL_Raw 마지막 SAL " + fmt(gap.lastExisting) +
+    " → 이번 파일 첫 SAL " + fmt(gap.firstNew) + " (" + gap.gapDays + "일)\n" +
+    "그 사이 SAL이 누락됐을 수 있습니다. Salesforce SAL 리포트를 " + fmt(gap.lastExisting) +
+    " 이전부터 기간으로 다시 export해서 한 번 더 Import하세요(이미 있는 행은 자동 skip).\n\n"
+  );
+
+}
+
+
+/**
+ * SAL_Raw 기존 SAL 날짜 컬럼만 읽기 (IO 래퍼).
+ */
+function readSALRawDates_(){
+
+  const sheet = openSALExternalSpreadsheet_().getSheetByName(CONFIG.SAL.SHEET);
+
+  if(!sheet || sheet.getLastRow() < 2) return [];
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const col = headers.indexOf(CONFIG.SAL.COLUMNS.SALES_ACCEPTED_DATE);
+
+  if(col === -1) return [];
+
+  return sheet.getRange(2, col + 1, sheet.getLastRow() - 1, 1).getValues().map(function(row){
+    return parseDate(row[0], "DMY");
+  });
+
+}
+
+
+/**
  * Execute Import Pipeline
  *
  * @param {string} importType  "LEADS" | "MTA" | "IC_FUNNEL" | "SAL"
@@ -438,6 +558,7 @@ function importCsv(
 
     let appendResult = null;
     let rawWriteResult = null;
+    let preWriteWarning = "";
 
     switch (importType) {
 
@@ -457,6 +578,18 @@ function importCsv(
         break;
 
       case "SAL":
+        // append 전에 계산 — 기존 SAL_Raw의 마지막 날짜와 비교해야 하므로.
+        // 경고는 부가 기능이라 실패해도 Import는 막지 않음.
+        try{
+          preWriteWarning = formatSALImportGapWarning_(
+            computeSALImportGap_(readSALRawDates_(), rawRecords.map(function(r){
+              return parseDate(r[CONFIG.SAL.COLUMNS.SALES_ACCEPTED_DATE], "DMY");
+            }), CONFIG.SAL.GAP_WARNING_DAYS)
+          );
+          if(preWriteWarning) Logger.log(preWriteWarning);
+        } catch(err){
+          Logger.log("SAL 날짜 공백 체크 실패(Import는 계속): " + err);
+        }
         rawWriteResult = writeSALRaw(rawRecords);
         appendResult = scheduleSALPipelineTail_();
         break;
@@ -478,6 +611,7 @@ function importCsv(
     Logger.log("=================================");
 
     return (
+      preWriteWarning +
       formatValidationSummary_(summary) +
       "\n\n" +
       formatRawDedupSummary_(rawWriteResult) +

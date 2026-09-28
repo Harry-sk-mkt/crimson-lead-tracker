@@ -56,9 +56,13 @@
  *   `MASTER_011_RevenueSync.js`/Leads_Master의 전담 필드)
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-09-28)
+ * - `selectLeadIdsWithBlankOPSValue_()` 신규(순수 함수) — SAL/IC Funnel
+ *   빈 칸 보충(`backfillSALForBlankOPSRows_()`/`backfillICFunnelForBlankOPSRows_()`)
+ *   공용 대상 선정. 기존 함수 무변경.
  * v1.12.0 (2026-09-15)
  * - **`refreshTargetActuals_()` 호출 제거** — `syncMTAFunnelToOPS_()` 안에서
  *   이 부분 갱신을 하고 나면, 같은 `runMTAPipelineTail()` 실행 안에서 곧이어
@@ -632,6 +636,94 @@ function testComputeDirectUpdateRowWindow(){
     "\n  case2=" + JSON.stringify(case2) +
     "\n  case3=" + JSON.stringify(case3)
   );
+
+}
+
+
+/**
+ * ==========================================================
+ * Select Lead IDs With Blank OPS Value (순수 함수, 2026-09-28)
+ *
+ * WHY
+ * SAL/IC Funnel Sync는 체크포인트(SAL_LAST_ROW/ICFUNNEL_LAST_ROW) 이후
+ * 배치만 읽는데, 그 시점에 Leads_OPS에 아직 없던 리드("Not found in
+ * Leads_OPS")도 체크포인트는 그대로 전진해 **다시는 재시도되지 않음**
+ * (2026-09-28 S&M_REP SAL 갭 조사에서 6건 확인). Leads Import로 OPS 행이
+ * 생긴 뒤 "OPS 칸은 비어있는데 Raw 최신 레코드엔 값이 있는" 리드만 골라
+ * 정상 sync를 다시 적용하기 위한 대상 선정.
+ *
+ * INPUT
+ * opsLeadIdValues : Array[]  (Leads_OPS Lead ID 컬럼, getValues() 모양)
+ * blankCheckColumns : { values: Array[], funnelKey: string }[]
+ *   (같은 행 순서의 OPS 컬럼 값 + funnelByLeadId에서 대응되는 키)
+ * funnelByLeadId : Object  { [leadId]: { [funnelKey]: value } }
+ *
+ * OUTPUT
+ * string[]  하나 이상의 컬럼이 OPS에선 빈 칸, funnel엔 값이 있는 Lead ID
+ *   (빈 값 판정은 computeMTASyncColumnUpdates_()와 동일: undefined/null/""/0)
+ *
+ * TEST
+ * testSelectLeadIdsWithBlankOPSValue()
+ * ==========================================================
+ */
+function selectLeadIdsWithBlankOPSValue_(opsLeadIdValues, blankCheckColumns, funnelByLeadId){
+
+  function isEmpty(v){
+    return v === undefined || v === null || v === "" || v === 0;
+  }
+
+  const result = [];
+
+  opsLeadIdValues.forEach(function(row, i){
+
+    const leadId = String(row[0] || "").trim();
+    const funnel = leadId ? funnelByLeadId[leadId] : null;
+
+    if(!funnel) return;
+
+    const needsFill = blankCheckColumns.some(function(col){
+      return isEmpty(col.values[i][0]) && !isEmpty(funnel[col.funnelKey]);
+    });
+
+    if(needsFill) result.push(leadId);
+
+  });
+
+  return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — selectLeadIdsWithBlankOPSValue_()
+ * ==========================================================
+ */
+function testSelectLeadIdsWithBlankOPSValue(){
+
+  const d = new Date(2026, 8, 24);
+
+  const opsLeadIds = [["L1"], ["L2"], ["L3"], ["L4"], [""]];
+  const opsSal = [[""], [d], [""], [""], [""]];
+  const opsIc = [[""], [""], [d], [""], [""]];
+
+  const funnel = {
+    L1: { sal: d, ic: null },   // SAL 빈 칸 + Raw 값 → 대상
+    L2: { sal: d, ic: null },   // SAL 이미 있음, IC Raw 없음 → 제외
+    L3: { sal: null, ic: d },   // IC 이미 있음, SAL Raw 없음 → 제외
+    L4: { sal: null, ic: d }    // IC 빈 칸 + Raw 값 → 대상
+    // L5(Raw에 없음)/빈 Lead ID → 제외
+  };
+
+  const result = selectLeadIdsWithBlankOPSValue_(
+    opsLeadIds,
+    [{ values: opsSal, funnelKey: "sal" }, { values: opsIc, funnelKey: "ic" }],
+    funnel
+  );
+
+  const pass = JSON.stringify(result) === JSON.stringify(["L1", "L4"]);
+
+  Logger.log("testSelectLeadIdsWithBlankOPSValue: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(result));
 
 }
 

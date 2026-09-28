@@ -46,9 +46,13 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.10.0
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-09-28)
+ * - **`backfillICFunnelForBlankOPSRows_()` 신규** — SAL과 동일한 "sync 시점
+ *   OPS 미존재 리드 영구 누락" 결함 보완. `runLeadsPipelineTail()`의
+ *   `buildLeadsOPS` 직후 호출. 기존 `syncICFunnelToOPS_()` 무변경.
  * v1.10.0 (2026-09-15)
  * - **`refreshTargetActuals_()` 호출 제거** — `syncICFunnelToOPS_()` 안에서
  *   이 부분 갱신을 하고 나면, 같은 `runICFunnelPipelineTail()` 실행 안에서
@@ -590,6 +594,109 @@ function syncICFunnelToOPS_(){
   refreshBOFUEngine_();
   refreshSearchEngine_();
   refreshContentEngine_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Backfill IC Funnel For Blank OPS Rows (2026-09-28)
+ *
+ * WHY
+ * `backfillSALForBlankOPSRows_()`(MASTER_010_SALSync.js)와 동일 — sync
+ * 시점에 Leads_OPS에 없던 리드가 ICFUNNEL_LAST_ROW 전진으로 영구 누락되는
+ * 구조 결함 보완. "IC Booked Date"/"IC Completed Date" 중 하나라도 OPS는
+ * 빈 칸, ICFunnel_Raw 최신 레코드엔 값이 있는 리드에만 정상 sync와 같은
+ * 컬럼(Lead Priority 다운그레이드 가드 포함)을 쓴다. 체크포인트 무변경.
+ *
+ * INPUT
+ * dryRun : boolean  true면 대상 선정·로그만 하고 쓰지 않음
+ *
+ * OUTPUT
+ * number  채운(dryRun이면 채울) 리드 수
+ * ==========================================================
+ */
+function backfillICFunnelForBlankOPSRows_(dryRun){
+
+  const raw = readRawSheetFrom_(CONFIG.IC_FUNNEL.SHEET, 0, openICFunnelRawExternalSpreadsheet_());
+  const funnelByLeadId = computeICFunnelByLeadId_(pickLatestICFunnelRecords_(raw));
+
+  const opsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPS.SHEET.OPS);
+  const headerMap = getHeaderMap(opsSheet);
+  const numOpsRows = opsSheet.getLastRow() - OPS.ROWS.DATA_START + 1;
+
+  if(numOpsRows <= 0) return 0;
+
+  function readFullColumn(name){
+    return opsSheet.getRange(OPS.ROWS.DATA_START, headerMap[name] + 1, numOpsRows, 1).getValues();
+  }
+
+  const opsLeadIdValues = readFullColumn("Lead ID");
+
+  const targetLeadIds = selectLeadIdsWithBlankOPSValue_(
+    opsLeadIdValues,
+    [
+      { values: readFullColumn("IC Booked Date"), funnelKey: "icBookedDate" },
+      { values: readFullColumn("IC Completed Date"), funnelKey: "icCompletedDate" }
+    ],
+    funnelByLeadId
+  );
+
+  if(targetLeadIds.length === 0){
+    Logger.log("IC Funnel Backfill : 빈 칸 보충 대상 없음.");
+    return 0;
+  }
+
+  if(dryRun){
+    Logger.log("IC Funnel Backfill (dry run) : " + targetLeadIds.length + "건 대상 — " + targetLeadIds.join(", "));
+    return targetLeadIds.length;
+  }
+
+  const leadIdToRow = {};
+
+  opsLeadIdValues.forEach(function(row, i){
+    const leadId = String(row[0] || "").trim();
+    if(leadId) leadIdToRow[leadId] = OPS.ROWS.DATA_START + i;
+  });
+
+  const window = computeDirectUpdateRowWindow_(targetLeadIds, leadIdToRow);
+
+  const syncColumns = [
+    { opsFieldName: "IC Booked Date", funnelKey: "icBookedDate" },
+    { opsFieldName: "IC Completed Date", funnelKey: "icCompletedDate" },
+    { opsFieldName: "Lead Priority", funnelKey: "leadPriority" }
+  ]
+    .map(function(col){ col.colIndex = headerMap[col.opsFieldName]; return col; })
+    .filter(function(col){ return col.colIndex !== undefined; });
+
+  const existingColumnValues = {};
+
+  syncColumns.forEach(function(col){
+    existingColumnValues[col.opsFieldName] = opsSheet
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
+      .getValues();
+  });
+
+  const guardedFunnelByLeadId = existingColumnValues["Lead Priority"]
+    ? applyPriorityDowngradeGuard_(
+        targetLeadIds, funnelByLeadId, leadIdToRow, window.startRow, existingColumnValues["Lead Priority"]
+      )
+    : funnelByLeadId;
+
+  const syncResult = computeMTASyncColumnUpdates_(
+    targetLeadIds, guardedFunnelByLeadId, leadIdToRow, syncColumns, window.startRow, existingColumnValues
+  );
+
+  syncColumns.forEach(function(col){
+    if(!syncResult.columnChanged[col.opsFieldName]) return;
+    opsSheet
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
+      .setValues(syncResult.columnValues[col.opsFieldName]);
+  });
+
+  Logger.log("IC Funnel Backfill : " + syncResult.updated + "건 보충 — " + targetLeadIds.join(", "));
+
+  return syncResult.updated;
 
 }
 

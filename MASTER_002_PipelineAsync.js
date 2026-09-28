@@ -22,9 +22,14 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.36.0
+ * v1.37.0
  *
  * Change Log
+ * v1.37.0 (2026-09-28)
+ * - **`runLeadsPipelineTail()`에 `backfillFunnelForBlankOPSRows_` 단계 추가**
+ *   (`buildLeadsOPS` 직후) — SAL/IC Funnel sync 시점에 OPS에 없던 리드가
+ *   체크포인트 전진으로 영구 누락되던 결함 보완(S&M_REP 09-21 주 SAL 6건).
+ *   수동 미리보기 `runPreviewFunnelBackfill()` 신규.
  * v1.36.0 (2026-09-23)
  * - **버그 수정 — 플랫폼 강제종료 시 self-rescheduling 트리거 체인 영구 중단**.
  *   2026-09-21 실행이 강제종료된 뒤(README "RUNNING 30분 이상 지속, 자동 감지"
@@ -2378,6 +2383,40 @@ function refreshNaverSearchCampaignStats_(){
  * `guardPipelineTailEntry_()` 참고(2026-09-16 추가, #52 조사).
  * ==========================================================
  */
+/**
+ * ==========================================================
+ * Backfill Funnel For Blank OPS Rows (2026-09-28)
+ *
+ * WHY
+ * SAL/IC Funnel sync는 체크포인트 이후 배치만 보므로 그 시점에 Leads_OPS에
+ * 없던 리드는 영구 누락됨 — Leads tail에서 OPS 행이 생긴 직후 빈 칸을
+ * Raw 최신값으로 보충(`backfillSALForBlankOPSRows_()`/
+ * `backfillICFunnelForBlankOPSRows_()`). 각각 독립 try/catch — 외부 Raw
+ * 스프레드시트 오류가 Leads 파이프라인 전체를 FAILED로 만들지 않게.
+ * ==========================================================
+ */
+function backfillFunnelForBlankOPSRows_(dryRun){
+
+  [backfillSALForBlankOPSRows_, backfillICFunnelForBlankOPSRows_].forEach(function(fn){
+    try{
+      fn(dryRun);
+    } catch(err){
+      Logger.log(CONFIG.LOG.PREFIX + " " + fn.name + " 실패(파이프라인은 계속): " + err);
+    }
+  });
+
+}
+
+
+/**
+ * 수동 미리보기 — 쓰지 않고 보충 대상 건수/Lead ID만 로그.
+ * 실제 반영은 `runLeadsPipelineTail()` 수동 Run(보충 + 리포트 전체 재계산).
+ */
+function runPreviewFunnelBackfill(){
+  backfillFunnelForBlankOPSRows_(true);
+}
+
+
 function runLeadsPipelineTail(){
 
   deleteTriggersByHandlerName_("runLeadsPipelineTail");
@@ -2423,6 +2462,12 @@ function runLeadsPipelineTail(){
     advancePipelineStage_(type, state, "buildLeadsOPS", function(){
       buildLeadsOPS(true);
     }, ["leadsOps"]);
+
+    // 2026-09-28 — SAL/IC Funnel sync 시점에 OPS에 없던 리드 보충. 아래
+    // refreshACQSummary_() 등 전체 재계산 전에 돌아야 반영됨.
+    advancePipelineStage_(type, state, "backfillFunnelForBlankOPSRows_", function(){
+      backfillFunnelForBlankOPSRows_(false);
+    });
 
     advancePipelineStage_(
       type, state, "checkP1SchoolMismatch_", checkP1SchoolMismatch_

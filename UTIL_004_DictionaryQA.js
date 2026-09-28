@@ -77,9 +77,17 @@
  *   값이 반영 전에 그대로 날아간다**
  *
  * Version
- * v2.1.0
+ * v2.2.0
  *
  * Change Log
+ * v2.2.0 (2026-09-28)
+ * - **`readKeyValueSheetAsMap_()` 메모이제이션 추가**(시트명 단위, 실행 1회당
+ *   1번만 읽음) + `writeOverrideMap_()`에서 해당 시트 캐시 무효화. 원인:
+ *   `resolveBusinessSegment_()`가 행마다 `readUtmSegmentOverrideMap_()`를
+ *   호출하는데 이 경로만 캐시가 없어(딕셔너리 2개는 이미 캐시) 행 수만큼
+ *   시트를 다시 읽었음 — `runDiagnoseSALWeekGap()`(SAL_Raw 8,251행)이
+ *   ~10분 후 "Execution cancelled"로 발견. Leads/MTA Transformer도 같은
+ *   경로라 Import 신규 행 수에 비례해 느려지던 상태. 출력값 무변경.
  * v2.1.0 (2026-09-04)
  * - **`ensureOverrideSheetExists_()` — Program_Segment_Override/
  *   UTM_Segment_Override 숨김 처리**(사용자 요청 — "Program_Segment_Override는
@@ -848,6 +856,8 @@ function writeOverrideMap_(sheetName, keyColumnLabel, map){
 
   SpreadsheetApp.flush();
 
+  delete _keyValueSheetMapCache[sheetName]; // 다음 읽기가 새 값 반영
+
 }
 
 
@@ -884,14 +894,24 @@ function readUtmSegmentOverrideMap_(){
  * WHY
  * Program_Segment_Override/UTM_Segment_Override가 같은 2컬럼(키/Business
  * Segment) 모양이라 읽기 로직 공용화.
+ *
+ * **메모이제이션**(2026-09-28): `resolveBusinessSegment_()`가 리드/터치
+ * 행마다 UTM override를 조회하므로, readProgramSegmentDictionaryMap_()과
+ * 동일하게 실행 1회당 시트명별 1번만 읽는다. 같은 실행 안의 쓰기는
+ * `writeOverrideMap_()`이 무효화. 반환 map을 변경하지 말 것(공유 객체).
  * ==========================================================
  */
+const _keyValueSheetMapCache = {};
+
 function readKeyValueSheetAsMap_(sheetName){
+
+  if(_keyValueSheetMapCache[sheetName]) return _keyValueSheetMapCache[sheetName];
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(sheetName);
 
   const map = {};
+  _keyValueSheetMapCache[sheetName] = map;
 
   if(!sheet) return map;
 
@@ -913,6 +933,45 @@ function readKeyValueSheetAsMap_(sheetName){
   });
 
   return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — readKeyValueSheetAsMap_() 메모이제이션 (읽기 전용)
+ *
+ * 기대값: 두 번째 호출은 같은 객체(시트 재읽기 없음), 캐시 무효화 후엔
+ * 새 객체지만 내용 동일, 1,000회 호출이 1초 미만.
+ * ==========================================================
+ */
+function testReadKeyValueSheetAsMapCache(){
+
+  const sheetName = CONFIG.MARKETO_QA.UTM_OVERRIDE_SHEET;
+
+  delete _keyValueSheetMapCache[sheetName];
+
+  const first = readKeyValueSheetAsMap_(sheetName);
+  const second = readKeyValueSheetAsMap_(sheetName);
+
+  delete _keyValueSheetMapCache[sheetName];
+
+  const reread = readKeyValueSheetAsMap_(sheetName);
+
+  const start = Date.now();
+  for(let i = 0; i < 1000; i++) readUtmSegmentOverrideMap_();
+  const elapsedMs = Date.now() - start;
+
+  const pass =
+    first === second &&
+    reread !== first &&
+    JSON.stringify(reread) === JSON.stringify(first) &&
+    elapsedMs < 1000;
+
+  Logger.log(
+    "testReadKeyValueSheetAsMapCache: " + (pass ? "PASS" : "FAIL") +
+    " (keys " + Object.keys(first).length + ", 1000 calls " + elapsedMs + "ms)"
+  );
 
 }
 

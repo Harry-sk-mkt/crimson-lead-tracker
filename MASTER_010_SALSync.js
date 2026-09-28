@@ -41,9 +41,14 @@
  *   오래 안 닫히는 문제 방지)
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-09-28)
+ * - **`backfillSALForBlankOPSRows_()` 신규** — sync 시점에 Leads_OPS에 없던
+ *   리드가 체크포인트 전진으로 영구 누락되던 구조 결함 보완(S&M_REP 09-21 주
+ *   SAL 6건 누락으로 발견). `runLeadsPipelineTail()`의 `buildLeadsOPS` 직후
+ *   호출. 기존 `syncSALToOPS_()` 무변경.
  * v1.3.0 (2026-09-04)
  * - **Batch Direct Update 전환(성능 개선,
  *   docs/exec-plans/active/2026-09-03-performance-optimization.md #3)** —
@@ -628,6 +633,103 @@ function testComputeSALDeltaLeads(){
     result[0].newDate.getTime() === new Date(2026, 7, 15).getTime();
 
   Logger.log("testComputeSALDeltaLeads: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(result));
+
+}
+
+
+/**
+ * ==========================================================
+ * Backfill SAL For Blank OPS Rows (2026-09-28)
+ *
+ * WHY
+ * `syncSALToOPS_()`는 체크포인트 이후 배치만 보므로, sync 시점에
+ * Leads_OPS에 아직 없던 리드는 영구히 누락됨(`selectLeadIdsWithBlankOPSValue_()`
+ * 참고). `runLeadsPipelineTail()`의 `buildLeadsOPS` 직후 호출돼, OPS
+ * "Sales Accepted Date"가 빈 칸인데 SAL_Raw 최신 레코드엔 날짜가 있는
+ * 리드에만 정상 sync와 같은 값(Sales Accepted Date/SAL Segment)을 쓴다.
+ * 체크포인트는 건드리지 않음. ACQ_Summary 델타 갱신도 안 함 — Leads tail이
+ * 곧이어 `refreshACQSummary_()` 전체 재계산을 돌리므로.
+ *
+ * INPUT
+ * dryRun : boolean  true면 대상 선정·로그만 하고 쓰지 않음
+ *
+ * OUTPUT
+ * number  채운(dryRun이면 채울) 리드 수
+ * ==========================================================
+ */
+function backfillSALForBlankOPSRows_(dryRun){
+
+  const raw = readRawSheetFrom_(CONFIG.SAL.SHEET, 0, openSALExternalSpreadsheet_());
+  const salByLeadId = computeSALByLeadId_(pickLatestSALRecords_(raw));
+
+  const opsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPS.SHEET.OPS);
+  const headerMap = getHeaderMap(opsSheet);
+  const numOpsRows = opsSheet.getLastRow() - OPS.ROWS.DATA_START + 1;
+
+  if(numOpsRows <= 0) return 0;
+
+  const opsLeadIdValues = opsSheet
+    .getRange(OPS.ROWS.DATA_START, headerMap["Lead ID"] + 1, numOpsRows, 1)
+    .getValues();
+
+  const opsSalValues = opsSheet
+    .getRange(OPS.ROWS.DATA_START, headerMap["Sales Accepted Date"] + 1, numOpsRows, 1)
+    .getValues();
+
+  const targetLeadIds = selectLeadIdsWithBlankOPSValue_(
+    opsLeadIdValues,
+    [{ values: opsSalValues, funnelKey: "salesAcceptedDate" }],
+    salByLeadId
+  );
+
+  if(targetLeadIds.length === 0){
+    Logger.log("SAL Backfill : 빈 칸 보충 대상 없음.");
+    return 0;
+  }
+
+  if(dryRun){
+    Logger.log("SAL Backfill (dry run) : " + targetLeadIds.length + "건 대상 — " + targetLeadIds.join(", "));
+    return targetLeadIds.length;
+  }
+
+  const leadIdToRow = {};
+
+  opsLeadIdValues.forEach(function(row, i){
+    const leadId = String(row[0] || "").trim();
+    if(leadId) leadIdToRow[leadId] = OPS.ROWS.DATA_START + i;
+  });
+
+  const window = computeDirectUpdateRowWindow_(targetLeadIds, leadIdToRow);
+
+  const syncColumns = [
+    { opsFieldName: "Sales Accepted Date", funnelKey: "salesAcceptedDate" },
+    { opsFieldName: "SAL Segment", funnelKey: "salSegment" }
+  ]
+    .map(function(col){ col.colIndex = headerMap[col.opsFieldName]; return col; })
+    .filter(function(col){ return col.colIndex !== undefined; });
+
+  const existingColumnValues = {};
+
+  syncColumns.forEach(function(col){
+    existingColumnValues[col.opsFieldName] = opsSheet
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
+      .getValues();
+  });
+
+  const syncResult = computeMTASyncColumnUpdates_(
+    targetLeadIds, salByLeadId, leadIdToRow, syncColumns, window.startRow, existingColumnValues
+  );
+
+  syncColumns.forEach(function(col){
+    if(!syncResult.columnChanged[col.opsFieldName]) return;
+    opsSheet
+      .getRange(window.startRow, col.colIndex + 1, window.numRows, 1)
+      .setValues(syncResult.columnValues[col.opsFieldName]);
+  });
+
+  Logger.log("SAL Backfill : " + syncResult.updated + "건 보충 — " + targetLeadIds.join(", "));
+
+  return syncResult.updated;
 
 }
 
