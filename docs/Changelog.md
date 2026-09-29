@@ -14,7 +14,7 @@ Level·School Name 일부 숫자, Won Amount 숫자.
 기존 행에 Date가 있는 컬럼을 비교 제외(LEADS=Created Month, Transformer도 Raw 값을 안 쓰고 Create Date에서 재계산하므로 정보 손실
 없음) + `ignoredColumns` 반환·로그. MTA/IC/SAL Raw dedup에도 동일 적용. 신규 `testFindNewRawRecordsNormalizesSheetCoercion()` +
 기존 테스트 2개 로컬 node PASS, clasp push 완료. 검증: 다음 겹치는 범위 Import 로그의 skip 건수.
-부수 관찰(미조치): Phone "010…" 번호가 Raw/Master에 앞자리 0 없이 숫자로 저장됨.
+부수 관찰: Phone "010…" 번호가 Raw/Master에 앞자리 0 없이 숫자로 저장됨 — 사용자 확인: 전화번호 쓰는 곳 없음, 조치 불필요.
 
 ## SAL 09-21~27 주 갭 재진단 — 재Import 후 29/29 Raw 반영, 남은 갭 2건(OPS 미존재)
 
