@@ -1,5 +1,34 @@
 # Changelog — 2026-09-29
 
+## Events_OPS "Event Date" 유실 보고 (사용자, 세션 종료 후) — #53(Time 유실)과 같은 GROUP_1_MANUAL 컬럼
+
+조사 착수 전 사실 확인 대기: 유실 범위(전체/일부 행), 마지막 정상 확인 시각, Time 등 다른 Manual 컬럼 동반 유실 여부,
+Google Sheets 버전 기록상 유실 시점. 참고: Event Date는 공란이면 `applyAutoDerivedFieldsIfBlank_()`(`EVENTS_004_Merge.js`)가
+다음 `buildEventsOPS()`에서 Engine 최빈 UTM 날짜/키 파싱값으로 자동 재채움 — 공란이 유지되고 있다면 마지막 build 이후 유실이거나
+자동 재채움 대상이 아닌 행. 오늘 Leads tail 여러 회(08:51/09:13 Import + 대기열 체인) 실행 — `refreshOPSSheets_`에서 `buildEventsOPS()` 호출.
+→ 버전 기록(사용자): **11:03 AM 정상 → 1:21 PM 유실**. 이 구간 코드 push 없음(오늘 첫 push는 14:05경 TEMPQA_067).
+해당 구간 Executions 목록 대조 대기.
+→ Executions(사용자): 구간 내 실행은 `periodicRefreshRevenue_` 12:59:38(234s, ~13:03:32 종료) / `periodicRefreshDictionaries_`
+13:04:25(21s) / `periodicRefreshAdSpendCache_` 13:16:20(283s, ~13:21:03 종료) — **서로 겹침 없음**. 코드상 Events_OPS를 쓰는 건
+Revenue tail의 `refreshOPSSheets_` → `buildEventsOPS()`뿐(AdSpend/Dictionaries는 캐시·딕셔너리 시트만). #53 Time 유실(9/17 15:55)도
+`periodicRefreshRevenue_` 실행과 일치 — 공통점. 단 Revenue는 2시간마다 돌고 오전 build들은 Event Date를 보존했으므로 항상 지우는
+결정적 버그는 아님. 또한 공란 Event Date는 같은 build의 `applyAutoDerivedFieldsIfBlank_()`가 WB/EV 키면 다시 채우므로, "비어 있음"의
+정확한 모양(전 행/일부, 월초 날짜로 바뀜 여부)이 메커니즘 판별에 필요. 확인 대기: 12:59 Revenue 실행 로그 BUILD SUMMARY, 11:03~1:21
+사이 버전 기록 세부 편집자(다른 사람 편집 여부), 현재 Event Date 상태.
+→ 12:59 Revenue 로그: Events_OPS build 1:00:44~1:00:52 **정상**(Engine 361 / Existing 367 / Updated 367 / New 0 — 행 소실·키
+불일치 없음). 버전 1:03에서 **일부 행만 공란**, 다른 사람 편집 없음. 코드상 build는 기존 Event Date를 키 기준 그대로 복사하고 공란이면
+Engine/키 파싱으로 재채움 → build 후 공란이 남으려면 **읽는 시점(1:00:44)에 이미 그 셀이 비어 있었고 + 재채움 근거도 없는 행**이어야 함.
+11:03~1:00 사이 실행은 onOpen(12:32/12:34, 메뉴 생성만)뿐 → 스크립트 외 편집(본인 편집 포함) 가능성. 셀 단위 "수정 기록 보기"로 확인 대기.
+→ 셀 수정 기록: 14:59 버전 복원(사용자) 1건만 남고 그 이전 기록 없음 — `writeEventsOPS_()`가 매 build마다 `sheet.clear()` 후 재작성해
+셀 단위 수정 기록이 build마다 초기화되는 구조라 추적 불가. **원인 미확정.** 복원 시각 14:59가 Revenue 주기 실행(14:59 예약)과 겹쳐
+복원이 build 쓰기에 덮였는지 재확인 필요. 재발 대비안(제안, 미착수): build 로그에 Manual 컬럼별 읽기/쓰기 채움 건수를 남겨 다음 유실 때
+어느 실행 전후로 줄었는지 바로 판별.
+→ 사용자 확인: 복원값 유지(14:59 경합 없음). 복원은 **파일 전체를 11:03 버전으로** 한 것 → 그런데도 Time(I열) 일부 공란 = **Time 유실은
+11:03 이전**(시점 미상, 9/18 복구 이후). 사용자가 버전 기록 역추적으로 찾기로 함.
+**재발 대비 구현(`EVENTS_003_Build.js` v1.2.0)**: build마다 Manual(GROUP_1~3) 컬럼별 채움 건수를 `[Events_OPS Manual 채움 읽기→쓰기]`
+로그로 기록, 쓰기가 줄면 ⚠️. 순수 함수 `countFilledColumns_()` + `testCountFilledColumns()` 로컬 node PASS, 로그 실패는 build에 영향
+없게 try/catch. 계산/출력 무변경. clasp push 완료. 판별법: 한 build 안에서 읽기>쓰기 → build가 지움 / 이전 build 쓰기 > 이번 읽기 → build 사이 외부 편집.
+
 ## LEADS Raw dedup 미동작 조사 착수 — `TEMPQA_067_LeadsRawDedupDiagnostic.js` v1.0.0
 
 09:13 Import 532건 skip 0(20분 전 넣은 9/1~4 68건 포함). `findNewRawRecords_()`(`IMPORT_008`)는 시트 `getValues()` 값과
