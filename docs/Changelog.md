@@ -26,7 +26,19 @@ Engine/키 파싱으로 재채움 → build 후 공란이 남으려면 **읽는 
 → 사용자 확인: 복원값 유지(14:59 경합 없음). 복원은 **파일 전체를 11:03 버전으로** 한 것 → 그런데도 Time(I열) 일부 공란 = **Time 유실은
 11:03 이전**(시점 미상, 9/18 복구 이후). 사용자가 버전 기록 역추적으로 찾기로 함.
 **재발 대비 구현(`EVENTS_003_Build.js` v1.2.0)**: build마다 Manual(GROUP_1~3) 컬럼별 채움 건수를 `[Events_OPS Manual 채움 읽기→쓰기]`
-로그로 기록, 쓰기가 줄면 ⚠️. 순수 함수 `countFilledColumns_()` + `testCountFilledColumns()` 로컬 node PASS, 로그 실패는 build에 영향
+로그로 기록, 쓰기가 줄면 ⚠️.
+→ 버전 기록 역추적(사용자): **09-17 1:55 PM Time 정상(2025년 이벤트까지) → 3:58 PM Event Date·Time 둘 다 유실 → 6:00 PM Event Date만
+재등장, Time 없음.** 6:00 PM 재등장 Event Date는 수동값 복원이 아니라 `applyAutoDerivedFieldsIfBlank_()` 자동 재채움(Engine 최빈 UTM
+날짜/키의 월초)일 가능성 — 원래 수동 입력값과 다를 수 있음. #53 9/18 복구가 일부만 됐거나 다른 스냅샷 기준이었던 것으로 보임.
+복구 주의: build가 Event Date 순 정렬 + 이후 신규 행 추가(361→367)라 **행 위치 복사 불가, 키(Marketo Campaign name) 기준 복원 필요**.
+→ 복구 스크립트 `TEMPQA_068_EventsManualRestoreFromSnapshot.js` v1.0.0(스냅샷 = 09-17 1:55 PM 버전 사본, 키 = build와 같은 정규화 Lead Source
+Detail). 미리보기: 키 361/361 매칭, Time 채울 행 53, Event Date 현재≠9-17 9건. **`runRestoreEventsTimeFromSnapshot()` 실행 → Time 53건
+복원 완료(15:22, 공란 셀만 개별 setValue).** Event Date 9건 중 3건은 같은 날(시각/타임존 표기 차), 6건은 날짜 자체가 다름(현재값이 9/17 유실 후
+자동 재채움값으로 보임 — 2025-07-01 월초, 2025-11-06 두 이벤트 중복 등) → 6건 9/17 값 복원 여부 사용자 확인 대기.
+→ 같은 날 3건(EA/ED Strategy 10-14, Competitions 9-5, SC Bank 8-23)은 현재값 유지(사용자 확인). 사용자 일정표 대조 결과 스크립트 타임존(미 동부)
+때문에 9/17 KST 자정 값이 "전날 10~11시"로 보였던 것 — 4건은 9/17 값 = 일정표 날짜. `runSetEventsDatesFromSchedule()`(v1.1.0,
+`EVENTS_SCHEDULE_DATES` 키 기준 셀 단위) 실행 → **Wharton 12-3 / STEM 11-12 / Stanford·Harvard 9-10 / EC for Each Year 8-23 설정 완료(15:30)**.
+남은 2건 사용자 확인: Bad Grades 1/3/26, Showcases(Live zoom) 3/11/26 → 맵에 추가, 재실행 **6건 설정 완료(15:35)**. Events_OPS 복구 종료. 순수 함수 `countFilledColumns_()` + `testCountFilledColumns()` 로컬 node PASS, 로그 실패는 build에 영향
 없게 try/catch. 계산/출력 무변경. clasp push 완료. 판별법: 한 build 안에서 읽기>쓰기 → build가 지움 / 이전 build 쓰기 > 이번 읽기 → build 사이 외부 편집.
 
 ## LEADS Raw dedup 미동작 조사 착수 — `TEMPQA_067_LeadsRawDedupDiagnostic.js` v1.0.0
