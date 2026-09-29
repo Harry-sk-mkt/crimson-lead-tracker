@@ -34,9 +34,18 @@
  * 00 Import
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-09-29)
+ * - **dedup 미동작 수정(TEMPQA_067 진단)**: 기존 행은 시트 `getValues()` 값,
+ *   신규는 CSV 문자열이라 Sheets가 자동 변환한 컬럼(Phone "010…"→숫자,
+ *   Graduation Year→숫자, Created Month→Date)이 있으면 같은 행도 절대 일치하지
+ *   않았음(09-29 532건 중 skip 0). `buildRowSignature_()`가 숫자처럼 생긴 값을
+ *   양쪽 모두 `Number()` 기준으로 정규화하고, `findNewRawRecords_()`가 기존 행에
+ *   Date 객체가 있는 컬럼(텍스트 고정 안 된 날짜 — LEADS는 Created Month, Create
+ *   Date에서 파생된 값이라 정보 손실 없음)을 비교에서 제외. 제외 컬럼은 결과
+ *   `ignoredColumns`로 반환해 로그에 남김.
  * v1.2.0 (2026-09-04)
  * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #2)**:
  *   `filterOutExactDuplicateRawRecords_()`에 5번째 optional 파라미터
@@ -172,6 +181,9 @@ function filterOutExactDuplicateRawRecords_(
     "건 신규." +
     (dateFieldName
       ? " (비교 대상 " + window.numRows + "건 / 전체 " + totalDataRows + "건)"
+      : "") +
+    (result.ignoredColumns.length > 0
+      ? " (비교 제외 날짜 컬럼: " + result.ignoredColumns.join(", ") + ")"
       : "")
 
   );
@@ -391,12 +403,24 @@ function findNewRawRecords_(
   records
 ){
 
+  // 텍스트 고정 안 된 날짜 컬럼은 Sheets가 Date로 바꿔 저장해 CSV 문자열과
+  // 비교 불가 — 기존 행 어디든 Date가 있으면 그 컬럼은 양쪽 모두 비교 제외.
+  const ignored = {};
+
+  existingRows.forEach(function(row){
+    row.forEach(function(value, index){
+      if(value instanceof Date){
+        ignored[index] = true;
+      }
+    });
+  });
+
   const existingSignatures = {};
 
   existingRows.forEach(function(row){
 
     existingSignatures[
-      buildRowSignature_(headers, row)
+      buildRowSignature_(headers, row, ignored)
     ] = true;
 
   });
@@ -416,7 +440,7 @@ function findNewRawRecords_(
       });
 
     const signature =
-      buildRowSignature_(headers, row);
+      buildRowSignature_(headers, row, ignored);
 
     if(existingSignatures[signature]){
 
@@ -431,7 +455,11 @@ function findNewRawRecords_(
 
   });
 
-  return { kept: kept, skipped: skipped };
+  return {
+    kept: kept,
+    skipped: skipped,
+    ignoredColumns: headers.filter(function(_, index){ return ignored[index]; })
+  };
 
 }
 
@@ -449,16 +477,29 @@ function findNewRawRecords_(
  */
 function buildRowSignature_(
   headers,
-  row
+  row,
+  ignored
 ){
 
   return headers.map(function(_, index){
 
+    if(ignored && ignored[index]){
+      return "";
+    }
+
     const value = row[index];
 
-    return value === null || value === undefined
-      ? ""
-      : String(value).trim();
+    if(value === null || value === undefined){
+      return "";
+    }
+
+    const text = String(value).trim();
+
+    // Sheets가 숫자로 저장한 값(Phone "010…"→1038…, "2028"→2028)과 CSV 원문을
+    // 같게 보기 위해 숫자처럼 생긴 값은 양쪽 모두 Number 기준으로 정규화.
+    return /^[+-]?[\d,]*\.?\d+$/.test(text)
+      ? String(Number(text.replace(/,/g, "")))
+      : text;
 
   }).join("");
 
@@ -505,6 +546,49 @@ function testFindNewRawRecords(){
     "\n  kept=" + JSON.stringify(result.kept) +
     "\n  skipped=" + JSON.stringify(result.skipped)
 
+  );
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — findNewRawRecords_() Sheets 자동 변환 정규화 (v1.3.0)
+ * ==========================================================
+ *
+ * 09-29 실측 재현: 기존 행은 Phone/Graduation Year가 숫자, Created Month가 Date로
+ * 저장돼 있고 신규 CSV는 문자열 — 같은 리드면 skip, 실제 값이 다르면 kept.
+ */
+function testFindNewRawRecordsNormalizesSheetCoercion(){
+
+  const headers = ["Lead ID", "Phone", "Created Month", "High School Graduation Year", "Stage"];
+
+  const existingRows = [
+    ["L1", 1038802702, new Date(2026, 0, 9), 2028, "MQL"],
+    ["L2", "+12132103104", new Date(2026, 0, 9), 2027, "MQL"]
+  ];
+
+  const records = [
+    { "Lead ID": "L1", "Phone": "01038802702", "Created Month": "9/2026", "High School Graduation Year": "2028", "Stage": "MQL" }, // 변환만 다름 → skip
+    { "Lead ID": "L2", "Phone": "+12132103104", "Created Month": "9/2026", "High School Graduation Year": "2027", "Stage": "MQL" }, // 문자열 그대로 → skip
+    { "Lead ID": "L1", "Phone": "01038802702", "Created Month": "9/2026", "High School Graduation Year": "2028", "Stage": "SAL" }, // 실제 값 변경 → kept
+    { "Lead ID": "L3", "Phone": "1,234", "Created Month": "9/2026", "High School Graduation Year": "2029", "Stage": "MQL" }  // 신규 → kept
+  ];
+
+  const result = findNewRawRecords_(headers, existingRows, records);
+
+  const ok =
+    result.skipped.length === 2 &&
+    result.kept.length === 2 &&
+    result.kept[0]["Stage"] === "SAL" &&
+    result.kept[1]["Lead ID"] === "L3" &&
+    JSON.stringify(result.ignoredColumns) === JSON.stringify(["Created Month"]);
+
+  Logger.log(
+    "testFindNewRawRecordsNormalizesSheetCoercion: " +
+    (ok ? "PASS" : "FAIL") +
+    "\n  kept=" + JSON.stringify(result.kept) +
+    "\n  ignoredColumns=" + JSON.stringify(result.ignoredColumns)
   );
 
 }

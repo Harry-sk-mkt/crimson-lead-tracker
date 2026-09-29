@@ -1,3 +1,79 @@
+# Changelog — 2026-09-29
+
+## LEADS Raw dedup 미동작 조사 착수 — `TEMPQA_067_LeadsRawDedupDiagnostic.js` v1.0.0
+
+09:13 Import 532건 skip 0(20분 전 넣은 9/1~4 68건 포함). `findNewRawRecords_()`(`IMPORT_008`)는 시트 `getValues()` 값과
+CSV 문자열을 `String().trim()`으로 비교하는데, `appendSheetRecords`는 `RAW_DATE_COLUMNS.LEADS` 4개만 `@`(텍스트)로
+고정 → Phone/Created Month/Graduation Year/Amount 등이 Sheets 자동 변환(숫자/Date)되면 영원히 불일치한다는 가설.
+읽기 전용 `runDiagnoseLeadsRawDedup()` 추가(컬럼별 값 타입 분포 + 두 배치 공통 Lead ID 쌍의 컬럼별 차이), clasp push 완료.
+**결과(사용자 실행)**: 공통 Lead ID 68쌍 **저장값 전 컬럼 동일** → 가설 확정. 자동 변환 컬럼: Created Month(600/600 Date —
+전 행 불일치의 직접 원인), Phone(69 숫자, "010…" 앞자리 0 소실), High School Graduation Year(전부 숫자), School Year/Grade
+Level·School Name 일부 숫자, Won Amount 숫자.
+**수정(`IMPORT_008_RawDeduplicator.js` v1.3.0)**: 쓰기 형식은 그대로 두고(하위 호환 — Transformer가 Amount를 `Number()`로 읽는 등
+기존 타입 의존), 비교만 정규화 — `buildRowSignature_()`가 숫자처럼 생긴 값은 양쪽 모두 `Number()` 기준, `findNewRawRecords_()`는
+기존 행에 Date가 있는 컬럼을 비교 제외(LEADS=Created Month, Transformer도 Raw 값을 안 쓰고 Create Date에서 재계산하므로 정보 손실
+없음) + `ignoredColumns` 반환·로그. MTA/IC/SAL Raw dedup에도 동일 적용. 신규 `testFindNewRawRecordsNormalizesSheetCoercion()` +
+기존 테스트 2개 로컬 node PASS, clasp push 완료. 검증: 다음 겹치는 범위 Import 로그의 skip 건수.
+부수 관찰(미조치): Phone "010…" 번호가 Raw/Master에 앞자리 0 없이 숫자로 저장됨.
+
+## SAL 09-21~27 주 갭 재진단 — 재Import 후 29/29 Raw 반영, 남은 갭 2건(OPS 미존재)
+
+`runDiagnoseSALWeekGap()` 재실행(사용자, 08:33): SAL_Raw 이 주 29행/고유 29 — 9/21~23 누락분 재Import로
+Raw는 Salesforce와 일치. #52 재발 없음(OPS Sales Accepted Date 8,212). B 0 / D 0, 정상 반영 27,
+**C 2건(Leads_OPS에 Lead ID 없음)**: `00QRC00001PqNXt`(09-28부터 알려진 건), `00QRC00001NUcgP`(재Import분 신규).
+S&M_REP All SAL 기대값 27. 코드 변경 없음.
+~~**다음 액션**: 2건이 Leads_Raw/Salesforce New Leads export에 있는지 확인~~ → 사용자 확인: 2건 모두 Leads_Raw에 없음
+→ 코드 손실 아님, **New Leads Import 단계 누락**(SAL 9/17~23 누락과 같은 "해당 구간 파일 미Import" 패턴 가능성).
+`00QRC00001NUcgP`: Salesforce Lead Age 25일 8시간(09-29 조회) → **생성 약 9/3~4**, First Touch = 8월 KOR 웨비나 녹화본,
+현재 Record Type SAL(9/21 SAL). 9/4~9/21 사이 MQL이었으므로 그 기간 New Leads export에 잡혔어야 함 → 9/3~4 구간
+New Leads 파일 미Import 가능성 유력(사용자가 Leads_Raw 해당 날짜 확인 대기). `PqNXt`는 미확인.
+→ 사용자 확인: NUcgP는 Salesforce New Leads 리포트에 **있음**. 두 번째 가설: Import Validator(`IMPORT_004`)가
+`CONFIG.REQUIRED_FIELDS.LEADS`(Lead ID/Email/Create Date/Company / Account) 중 빈 값이 있는 행을 Invalid로 버리고
+Logger에만 남김 — Email 또는 Company / Account 공백이면 조용히 누락. 리포트에서 두 필드 값 확인 대기.
+→ 사용자 확인: 두 리드 모두 Email/Company / Account **있음** → Validator 가설 기각. 남은 가설: 해당 리드가 들어간
+New Leads 파일이 Import된 적 없음(SAL과 같은 구간 누락). 확인 겸 복구: 9/1 이후 New Leads 재export·재Import
+(완전 동일 중복 skip) → 두 리드 append 여부로 판정.
+→ 사용자 운영 방식 확인: 월(전주 목~일)/목(그 주 월~수) 주 2회 하루 단위 export — 날짜 경계 구멍 없음.
+→ 사용자가 Create Date 9/1~4 New Leads 재Import(08:51, `report1790639489685.csv`): 68건 전부 append, dedup skip 0.
+CSV 확인 결과 NUcgP 포함 — **Create Date 4/9/2026(9/4 금)**, First Lead Source/Category 공백, Stage Sales Accepted.
+9/7(월) 목~일 Import 범위 안이었는데 누락 — 당시 export에 없었던 이유는 미확정. 나머지 67건은 기존 리드가 값
+변경(Stage/IC 날짜 등)으로 "완전 동일"이 아니라 재append된 것 — `runLeadsPipelineTail()` 첫 단계
+`runAutoDeleteExactDuplicateLeadRows()`가 Lead ID 기준으로 가장 진행된 행만 남김. PqNXt는 이 파일에 없음(9/1~4 밖).
+→ New Leads 리포트 필터(사용자 확인, 고정): All leads / Create Date 범위 / **Country = South Korea** / First MKT UTM
+Campaign contains ""(사실상 무필터). 유력 원인: **export 당시 Country가 South Korea가 아니었다가(공백 등) 이후 세일즈
+연락 등으로 채워진 리드** — 두 건 모두 SAL 이후 세일즈 접촉, PqNXt는 GBL Webflow 폼(국가 미지정 가능). 이러면
+Create Date 창이 지난 뒤 Country가 바뀐 리드는 영구 누락되는 구조적 구멍. Salesforce Country 필드 이력으로 확정 필요.
+→ Marketo 로그(사용자): NUcgP 생성 시점(9/4)에 Operating Market 공백→South Korea가 SFDC에서 sync — 생성 때부터
+국가 정보 있음 → **국가 필터 가설 약화(사실상 기각)**. 남은 가설: 9/7 Import 당시 Email/Company / Account 공백으로
+Validator에서 Invalid 처리(현재 값만 보고 기각했던 것 재검토). 9/7 LEADS Import 실행 로그의 `Invalid Records` 확인 대기.
+→ 9/7 실행 로그 보존기간 지나 확인 불가 — **NUcgP 누락 원인 미확정으로 종결**(복구는 완료). 남은 조치: PqNXt Create Date 확인 후 해당일 재Import.
+→ PqNXt(18자리 `00QRC00001PqNXt2AN`)는 New Leads 리포트(Country=South Korea) 9월 전체 기간에 없음 → 9월 이전 생성
+또는 Country≠South Korea. 후자면 SAL 리포트와 New Leads 리포트의 범위(국가 필터) 불일치가 원인. 리드 레코드 Create Date/Country 확인 대기.
+→ 레코드 확인(사용자): Country **South Korea**, Lead Age 7일 20시간(09-29 조회) → **생성 약 9/21(월)**, First Lead Source
+Organic Search, First Touch = WB-2026-09-USA 웨비나. 국가/기간 가설 모두 기각. 9/24(목) 월~수 Import 범위였음 —
+NUcgP와 같은 "당시 export에 없었던" 미확정 패턴. 리포트 검색은 18자리로 해서 못 찾았을 가능성(리포트는 15자리 표시).
+조치: Create Date 9/20~22 재export·재Import.
+→ 9/24 00:55 LEADS Import 로그(사용자): Parsed 64 / Valid 64(Invalid 없음) / 64 append → **Import 코드 손실 아님**.
+오늘 export(`report1790640231470.csv`, 9월 전체 556건)의 9/21~23 = 32+19+17 = **68건 vs 9/24 당시 64건** →
+export 이후 리포트에 새로 나타난 리드 4건(PqNXt 포함). 즉 **export 시점엔 리포트 조건 밖이던 리드가 나중에 들어오는
+구조적 누락** — 원인 필드는 미확정(리포트 필터상 Country가 유력하나 NUcgP는 Marketo 로그와 불일치). PqNXt는 오늘
+export에서 Create Date 21/9/2026, Email/Company 정상.
+→ 가설(사용자 "순서" 질문에서): 두 리드 모두 export 이후 SAL 전환 — SAL 시 Owner 변경으로 리포트 실행자 공개범위(sharing)에
+들어온 것일 수 있음. Lead History Owner 변경 확인 대기.
+→ 9/1~27 New Leads Import(09:13, 사용자): 532건 전부 append, **dedup skip 0 (비교 대상 752건)** — 20분 전 넣은 9/1~4
+68건조차 완전 동일로 안 잡힘 → **LEADS Raw dedup이 실질적으로 동작 안 하는 것으로 의심**(값 포맷 차이 추정, 미조사).
+출력 영향은 Master 중복 정리(Lead ID 기준)로 흡수되나 Leads_Raw가 중복으로 커짐. 파이프라인은 lock 충돌로 대기열 자동 재시도.
+→ 진단 재실행(09:14, 9/1~4 체인 완료 후·9/1~27 대기열 체인 전): **NUcgP 복구 확인** — C 1건(PqNXt), 정상 반영 28.
+PqNXt는 대기열 체인 완료 후 재확인.
+→ 진단 재실행(09:21): OPS Sales Accepted Date **1,852**(직전 8,213), C 3건(오래된 리드 4tzer/ETYhN/LCv3G), D 1건(PqNXt, OPS 값 공백).
+`writeOPS()`(`OPS_005_Write.js`)가 `sheet.clear()` 후 청크 쓰기라, 대기열 체인의 `buildLeadsOPS` 쓰기 도중 읽은 것으로 추정
+(PqNXt OPS 행은 생겼고 SAL 보충 단계는 아직 전). #52 재발 여부는 체인 DONE 후 재진단으로 판정 — DONE 후에도 1,852면 #52 재발.
+→ **✅ 해결(14:02 재진단)**: OPS Sales Accepted Date 8,214(#52 재발 아님 — 09:21은 쓰기 도중 읽은 일시 상태 확정),
+A 29 / C 0 / D 0 / **정상 반영 29 = Salesforce 29**. S&M_REP 09-21~27 All SAL 29 기대.
+남은 미결: LEADS Raw dedup 미동작 의심(조사 여부 사용자 결정), New Leads export 이후 리포트에 늦게 나타나는 리드의 원인(Owner/sharing 가설, 미확정).
+**조치 제안**: 9월 전체 파일 Import로 일괄 복구(동일 행 skip, 변경 행은 Master 중복 정리가 처리), 재발 방지는 주기적 넓은 범위 재Import.
+**다음 액션**: 2건의 Salesforce Created Date 확인 → 최근이면 그 구간 New Leads 재export·재Import(중복 skip), 오래된 리드면 수집 범위 밖으로 판단.
+
 # Changelog — 2026-09-28
 
 ## S&M_REP All SAL 갭 조사 착수 (09-21~27 주 3 vs Salesforce 29) — `TEMPQA_065_SALWeekGapDiagnostic.js` v1.0.0
