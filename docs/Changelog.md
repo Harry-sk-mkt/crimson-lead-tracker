@@ -1,3 +1,12 @@
+# Changelog — 2026-09-30
+
+## Events_OPS Manual 채움 로그 확인 (09-29 유실 후속)
+
+- 09-30 07:00 Revenue tail build: `[Events_OPS Manual 채움 읽기→쓰기]` 14개 컬럼 전부 감소 없음(⚠️ 0) — Event Date 366→366(367행 중 1행 공란), Time 77→77(09-29 복원 53건 유지).
+- 같은 실행의 Target/FY_REP 그림자 diff(20건/74건)는 #42 기존 관찰과 동일, 출력 무영향. FY range 캐시 로그의 "오늘 2026-09-29"는 스크립트 타임존 `America/New_York` 기준이라 정상.
+- 다음 액션: 출발(10/3) 전 build 로그 한 번 더 확인. `IMPORT_008` v1.3.0 dedup 검증은 10/1 Import 로그의 dedup skip 건수로 확인.
+
+
 # Changelog — 2026-09-29
 
 ## Events_OPS "Event Date" 유실 보고 (사용자, 세션 종료 후) — #53(Time 유실)과 같은 GROUP_1_MANUAL 컬럼
