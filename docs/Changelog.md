@@ -1,3 +1,13 @@
+# Changelog — 2026-10-02
+
+## Events_OPS Event Date 유실(9/17·9/29) 근본 원인 수정 + 사전시트 기준 일괄 교정 스크립트
+
+- **배경**: analytics 도메인에서 10/6 발표용 이벤트 데이터 정리 중, 사용자가 공유한 트랙커 빌드 전 "0. Event Data"(Events 탭) 시트와 Events_OPS를 Marketo Campaign name 기준으로 대조한 결과 122/128건 매칭, 그중 Event Date가 사전시트와 다른 행 다수 발견(1건은 1년 가까이 차이). 사용자 확인: 사전시트가 정답이고, Events_OPS 쪽은 `applyAutoDerivedFieldsIfBlank_()`(`EVENTS_004_Merge.js`)의 Event Date 자동 재채움이 9/17·9/29 유실(`docs/Changelog.md` 2026-09-29, 원인 미확정으로 남아있던 항목) 때 수동 입력값을 Engine 추정값(SF first-touch 최빈 UTM 날짜)으로 조용히 덮어쓴 것으로 확인.
+- **코드 수정 (`EVENTS_004_Merge.js` v1.15.0)**: `applyAutoDerivedFieldsIfBlank_()`에 `isNewRow` 파라미터 추가 — Event Date 자동 재채움을 Engine이 이번에 처음 발견한 신규 행에만 적용, 기존(관리 중) 행은 비어 있어도 더 이상 자동으로 채우지 않음(빈 채로 둬서 눈에 보이게 — 조용한 오추정 방지). EventType 자동 채움은 범위 유지. `testApplyAutoDerivedFieldsIfBlank_`에 기존 행 보존 케이스(Case 4) 추가. clasp push 완료.
+- **데이터 교정 스크립트 신규 (`TEMPQA_069_EventsDateMatchPreTracker.js` v1.0.0)**: 사전시트("0. Event Data", ID `1sa0KBeaRbHonBBS74H7VbXCU1dptKOVjp6AmXLq382c`, Events 탭)를 `openById()`로 읽어 Marketo Campaign name 키(기존 키 정제 함수 재사용)로 매칭, Events_OPS Event Date가 다른 행만 해당 셀 개별 setValue로 교정. `runPreviewEventsDateMatchPreTracker()`로 미리보기 후 `runMatchEventsDateToPreTracker()`로 실행(PIPELINE_LOCK 체크 포함). **사용자 실행 대기 중 — 미리보기 결과 확인 후 실행 여부 결정.**
+- **실행 결과 (사용자, 11:07 AM)**: `runMatchEventsDateToPreTracker()` 실행 — 사전시트 키 130 / Events_OPS 행 371 / 키 매칭 124 / 이미 일치 3건 / 교정 121건. "이미 일치"가 적었던 건 10:22 CSV 스냅샷과 10:59 push 사이에 수정 전 코드로 Revenue tail이 한 번 더 돌면서 Event Date가 추가로 틀어졌던 것으로 추정(확인 전). 실행 후 재검증(analytics 쪽 CSV 재다운로드 + 대조): 사전시트 132건 중 **123건 날짜까지 정확히 일치**(수정 전 101건에서 상승), 6건은 애초에 Events_OPS에 없는 비정식 이벤트(Medigate 등, 정상), 3건은 1일 차이(스크립트 타임존 America/New_York vs KST 자정 — 기존에도 관찰된 패턴, 데이터 이상 아님). **완료.**
+
+
 # Changelog — 2026-09-30
 
 ## Events_OPS Manual 채움 로그 확인 (09-29 유실 후속)

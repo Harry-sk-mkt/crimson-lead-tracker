@@ -9,9 +9,22 @@
  * mergeOPS() 패턴을 그대로 따름 (키 기준 Manual 컬럼 보존 + 전체 재작성).
  *
  * Version
- * v1.14.1
+ * v1.15.0
  *
  * Change Log
+ * v1.15.0 (2026-10-02)
+ * - **버그 수정 — `applyAutoDerivedFieldsIfBlank_()`의 Event Date 자동
+ *   재채움이 기존(관리 중) 행에도 적용되고 있어, 9/17·9/29 Event Date 유실
+ *   사고에서 수동 입력값이 사라진 걸 Engine 추정값(SF first-touch 최빈
+ *   UTM 날짜)으로 조용히 덮어써 유실을 가려버린 원인이었음(사용자 확인,
+ *   `docs/Changelog.md` 2026-09-29 "원인 미확정" 항목 참고). 신규
+ *   `isNewRow` 파라미터 추가 — Event Date 자동 재채움은 이제 Engine이
+ *   처음 발견한 신규 행(`mergeEventsOPS_()`에서 `existing`이 없는 경우)에만
+ *   적용하고, 기존 행은 Event Date가 비어 있어도 더 이상 자동으로 채우지
+ *   않는다(빈 채로 남아 눈에 보이게 하는 쪽을 선택 — 조용한 오추정보다
+ *   나음). EventType 자동 채움은 유실 사고와 무관해 범위 유지(기존 행도
+ *   계속 채움). `testApplyAutoDerivedFieldsIfBlank_`에 기존 행(`isNewRow`
+ *   false) 보존 케이스 추가.
  * v1.14.1 (2026-08-21)
  * - **버그 수정 — v1.14.0 적용 후에도 짝(충돌)이 없는 단독 dirty 행은
  *   "Marketo Campaign name" 표시 컬럼이 안 정제되고 남아있던 문제(사용자가
@@ -188,7 +201,7 @@ function mergeEventsOPS_(existingOps, engineMap) {
 
     }
 
-    applyAutoDerivedFieldsIfBlank_(row, key, engineRow);
+    applyAutoDerivedFieldsIfBlank_(row, key, engineRow, !existing);
     applyGroup4Computed_(row, engineRow);
     applyDerivedDateColumns_(row);
 
@@ -351,16 +364,24 @@ function applyNewRowDefaults_(row, key) {
  * 이름 기반 parsed.eventDate(월 1일로만 표시)보다 정확함. Engine에
  * 값이 없을 때만 parsed.eventDate로 fallback.
  *
+ * **2026-10-02 변경**: 이 자동 재채움은 이제 `isNewRow`(Engine이 이번에
+ * 처음 발견한 행)일 때만 Event Date에 적용된다. 기존 행은 Event Date가
+ * 비어 있어도 채우지 않음 — 9/17·9/29 유실 사고에서 수동 입력값이 사라진
+ * 걸 이 자동 재채움(SF first-touch 추정값)이 조용히 대신 채워버려 눈에
+ * 안 보이게 가린 것이 문제였음(사용자 확인). 빈 채로 두면 적어도 눈에
+ * 보여서 알아챌 수 있음.
+ *
  * INPUT
  * row : Object  (in-place 수정)
  * key : string  (Lead Source Detail = Marketo Program 이름)
  * engineRow : Object|undefined  (readEventsEngineMap_() 결과의 해당 key 행)
+ * isNewRow : boolean  (mergeEventsOPS_()에서 existing이 없던 행인지)
  *
  * TEST
  * testApplyAutoDerivedFieldsIfBlank_ 참고
  * ==========================================================
  */
-function applyAutoDerivedFieldsIfBlank_(row, key, engineRow) {
+function applyAutoDerivedFieldsIfBlank_(row, key, engineRow, isNewRow) {
 
   const parsed = parseProgramTypeAndDate_(key);
 
@@ -370,7 +391,7 @@ function applyAutoDerivedFieldsIfBlank_(row, key, engineRow) {
 
   const hasEventDate = row["Event Date"] instanceof Date && !isNaN(row["Event Date"].getTime());
 
-  if (!hasEventDate) {
+  if (!hasEventDate && isNewRow) {
 
     const engineDate = engineRow && engineRow["Event Date"];
     const hasEngineDate = engineDate instanceof Date && !isNaN(engineDate.getTime());
@@ -395,19 +416,26 @@ function testApplyAutoDerivedFieldsIfBlank_() {
 
   const key = "WB-2025-07-KOR-MOFU-Core EC for Each Year of High School";
 
-  // Case 1: 비어있고 engineRow 없음 → parsed.eventDate(월 1일)로 fallback
+  // Case 1: 신규 행, 비어있고 engineRow 없음 → parsed.eventDate(월 1일)로 fallback
   const row1 = { "EventType": "", "Event Date": "" };
-  applyAutoDerivedFieldsIfBlank_(row1, key);
+  applyAutoDerivedFieldsIfBlank_(row1, key, undefined, true);
 
   // Case 2: 이미 값이 있으면 덮어쓰지 않음 (Ops 수동 입력 보존)
   const manualDate = new Date(2025, 6, 15);
   const row2 = { "EventType": "Webinar (수정됨)", "Event Date": manualDate };
-  applyAutoDerivedFieldsIfBlank_(row2, key);
+  applyAutoDerivedFieldsIfBlank_(row2, key, undefined, true);
 
-  // Case 3: 비어있고 engineRow에 정확한 날짜 있음 → 그걸 우선 사용
+  // Case 3: 신규 행, 비어있고 engineRow에 정확한 날짜 있음 → 그걸 우선 사용
   const row3 = { "EventType": "", "Event Date": "" };
   const engineRow3 = { "Event Date": new Date(2025, 6, 22) };
-  applyAutoDerivedFieldsIfBlank_(row3, key, engineRow3);
+  applyAutoDerivedFieldsIfBlank_(row3, key, engineRow3, true);
+
+  // Case 4 (2026-10-02 추가): 기존(관리 중) 행, Event Date가 비어 있고
+  // engineRow엔 값이 있어도 — isNewRow=false면 채우지 않고 빈 채로 둔다
+  // (9/17·9/29 유실 사고에서 이 경로가 수동 입력 유실을 가려버렸던 버그 재현 방지).
+  const row4 = { "EventType": "", "Event Date": "" };
+  const engineRow4 = { "Event Date": new Date(2025, 6, 22) };
+  applyAutoDerivedFieldsIfBlank_(row4, key, engineRow4, false);
 
   const pass =
     row1["EventType"] === "Webinar" &&
@@ -417,11 +445,13 @@ function testApplyAutoDerivedFieldsIfBlank_() {
     row1["Event Date"].getDate() === 1 &&
     row2["EventType"] === "Webinar (수정됨)" &&
     row2["Event Date"] === manualDate &&
-    row3["Event Date"].getDate() === 22;
+    row3["Event Date"].getDate() === 22 &&
+    row4["Event Date"] === "";
 
   Logger.log("Row1: " + JSON.stringify(row1));
   Logger.log("Row2 preserved: " + (row2["EventType"] === "Webinar (수정됨)"));
   Logger.log("Row3 (engine date preferred): " + JSON.stringify(row3));
+  Logger.log("Row4 (existing row, left blank): " + JSON.stringify(row4));
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
 
 }
