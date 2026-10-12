@@ -1,3 +1,51 @@
+# Changelog — 2026-10-12
+
+## Events_OPS 이벤트 시간 유실 재발 (사용자 보고, 이전 버전으로 복원함)
+
+- **보고**: 이벤트 시간이 또 전부 사라져서 사용자가 이전 버전으로 복원함. 조사 착수, 유실 시점·범위는 확인 대기.
+- **기존 조치**: #53 락 소유권 수정(09-17), Event Date `isNewRow` 수정(10-02), Manual 채움 건수 로그(09-29). Time 유실의 근본 원인은 지금까지 미확정.
+- **가설 (미검증)**: `writeEventsOPS_()`(`EVENTS_005_Write.js`)가 `sheet.clear()`를 한 뒤 다시 쓰기 때문에, 그 사이에 실행이 죽으면(10-11 11:08 `periodicRefreshRevenue_` Failed 1140s, 09:16 AdSpend Timed Out) 시트가 빈 채로 남음. 그러면 다음 build는 기존 행이 없다고 보고 Manual 컬럼을 빈 값으로 씀. 이 경우 모든 행이 신규 행(`isNewRow`)이 되므로 Event Date는 Engine 추정값으로 다시 채워지고 Time만 비어 있게 됨. 09-17 버전 기록(6:00 PM에 Event Date만 다시 나타나고 Time은 없음)과 모양이 같음.
+- **확인 대기**: 버전 기록상 정상→유실 시점, 그 사이 Executions의 `[Events_OPS Manual 채움 읽기→쓰기]` 로그, 10-11 Failed 실행의 오류 메시지. 복원 시각과 15:09 Revenue 실행이 겹쳤는지(겹쳤다면 복원값이 덮어써졌을 수 있음).
+- **버전 기록 (사용자)**: 10-07 5:17 PM / 7:10 PM / 11:15 PM, 10-08 10:18 AM 정상 → **10-08 5:18 PM 유실**. 이 구간 Executions(사용자가 붙여넣은 목록)는 전부 Completed라 Failed/Timed Out이 없음 → 위의 "실행 중단" 가설은 이번 건에 맞지 않음. 구간 내 Events_OPS를 쓰는 실행: Revenue 11:08:20(206s), Revenue 1:08:05(260s), MTA tail 1:19:52(490s), Revenue 3:08:37(737s), Revenue 5:08:08(650s, ~5:18:58 종료 — 유실 확인 버전 5:18 PM과 겹침). 사용자 편집 트리거는 10:17~10:18, 1:10, 1:20. 9-17(Revenue 종료 시각 일치), 9-29(Revenue 12:59)에 이어 이번에도 Revenue tail이 후보. 다음 단계: 위 5개 실행의 `[Events_OPS Manual 채움 읽기→쓰기]` 로그에서 Time 감소를 확인.
+- **채움 로그 (사용자)**: 10-08 11:09 / 1:09 PM Time 71→71, 3:10 PM / 5:10 PM Time 72→72(행 373→374, MTA tail에서 신규 1행). 다른 Manual 컬럼도 전부 감소 없음 → **5:10 PM build 시점까지 build가 Time을 지운 흔적 없음**. "Revenue tail이 지운다" 가설은 이번 건에서 지지되지 않음. 남은 가능성: (1) 5:10~5:18 사이 build 외 편집, (2) 값은 남아 있는데 행이 엉뚱한 이벤트로 옮겨졌거나 표시가 바뀜(`countFilledColumns_`는 빈칸 여부만 셈), (3) 5:18 버전에서 사라진 게 Time이 아닌 다른 컬럼. 확인 대기: 5:18 PM 버전의 실제 모습, 오늘 복원 전 마지막 build 로그의 Time 건수.
+- **5:18 PM 버전 (사용자)**: Event Date 4건만 남음, Time 전부 빈칸. 하지만 5:10 build 로그는 Event Date 300 / Time 72를 썼다고 기록함 → 5:10~5:18 사이에 바뀐 것. 코드상 Events_OPS에 값을 쓰는 곳은 `writeEventsOPS_()`(build)와 수동 TEMPQA뿐이고, 이 구간에 build는 없음(5:16 AdSpend는 Events_OPS를 쓰지 않음). 10-03 이후 코드 커밋도 없음. Event Date가 4건만 남은 모양은 "build가 빈 시트를 읽음"으로도 설명 안 됨(그 경우 신규 행 자동 채움으로 대부분 채워짐). 원인 미상. 다음 단계: 10-08 7:08 PM Revenue 로그의 읽기 건수(72면 시트는 멀쩡했고 버전 기록 표시 문제, 0이면 5:10~7:08 사이 실제 유실), 5:18 버전의 다른 Manual 컬럼 상태와 편집자.
+- **7:09 PM 로그 (사용자)**: Event Date 4→4, Time 0→0, 나머지 Manual 컬럼은 5:10과 동일. 5:18 버전도 PIC·Speaker·Mkt Reg.는 남아 있고 편집자는 Harry Yun. → **실제 유실 확정(5:10:25~5:18), build는 원인 아님**(5:10 build는 72를 썼고, 다음 build 7:09는 이미 0을 읽음). 이 구간에는 사용자 UI 편집 시 발생하는 onEdit 트리거(`onFYReportEdit_`/`handleReportGenerateEdit`)가 한 번도 없음. 코드 검색 결과 이 프로젝트에서 Events_OPS에 쓰는 곳은 build와 수동 TEMPQA뿐이고, `getActiveSheet()` 같은 대상 불명 쓰기도 없음. analytics Python 코드에도 시트 쓰기 없음. **지워진 건 날짜/시간 타입 컬럼 2개뿐** → 외부 쓰기(다른 스크립트·연동·API)가 Date 값을 빈칸으로 바꿨거나, onEdit를 발생시키지 않는 시트 조작일 가능성. 확인 대기: 남은 Event Date 4건이 텍스트 값인지, 이 파일에 연결된 다른 도구·스크립트·부가기능, 10-08 5시대 시트 조작 여부.
+- **사용자 확인**: 남은 Event Date 4건은 오른쪽 정렬(실제 날짜 값) → "Date 타입만 지워짐" 가설 약화. 연동 도구 없음, 10-08 5시대 작업 없음. 5:16 AdSpend 실행(5:08 Revenue 실행과 겹침)도 코드상 FX/Spend 캐시·Kakao Raw 시트만 씀. **원인 미확정.** 대응안 사용자 결정 대기: Manual 컬럼 백업 시트 + 감소 감지 알림.
+- **대응 구현 (사용자 승인)**: 원인과 무관하게 유실을 막고 되살리는 장치. `EVENTS_007_ManualBackup.js` v1.0.0 신규, `EVENTS_003_Build.js` v1.3.0, `EVENTS_001_Config.js` v1.12.0.
+  - **백업**: build가 쓰기를 마칠 때마다 Manual 컬럼(GROUP_1~3)을 키(Lead Source Detail) 기준으로 숨김 시트 `Events_Manual_Backup`에 저장. 백업 실패는 build에 영향 없음.
+  - **가드**: build 전, 백업엔 값이 있는데 지금 시트에선 빈칸인 셀이 어느 컬럼이든 `EVENTS.MANUAL_GUARD.MAX_LOST_CELLS`(5) 이상이면 쓰기 없이 build 중단, 로그와 메일(`MailApp`, 실행 계정 주소)로 알림. 복원하거나 확정할 때까지 build마다 반복 알림.
+  - **복원**: `runPreviewRestoreEventsManualFromBackup()` → `runRestoreEventsManualFromBackup()`(빈칸만, 컬럼 단위 쓰기, PIPELINE_LOCK 체크). 일부러 지운 경우 `runAcceptEventsManualAsBackup()`로 현재 상태를 새 백업으로 확정.
+  - `testFindLostManualCells()` 로컬 node PASS. clasp push 완료. `MailApp`은 새 권한이라 편집기에서 한 번 실행해 승인 필요(미승인 시 트리거 실패 가능). 실사용 검증 전 — 첫 build 후 백업 시트 생성 확인 필요.
+  - 사용자 실행(15:38): `testFindLostManualCells()` PASS(편집기). 미리보기는 "백업 없음" — 아직 build 전이라 정상. 다음 build를 기다리지 않도록 `runAcceptEventsManualAsBackup()`로 현재(복원된) 상태를 첫 백업으로 만드는 것을 제안.
+
+## SAL·IC Funnel Import (사용자, 여행으로 밀린 분)
+
+- 마지막 기록상 SAL Import는 09-28~29. 사용자가 SAL 9/24~10/11 범위 export → Import: 75건 append, 완전 중복 15건 skip(겹친 구간이 이미 있었음). IC Funnel도 Import, 완전 중복 5건 skip. Revenue 체인 실행 중이라 두 tail은 대기열로 넘어가 자동 실행 예정. 확인 대기: tail 완료 후 S&M_REP SAL 숫자.
+
+## 10-07 버전 복원 후 Master 누락 가능성 진단
+
+- 사용자 확인: 복원은 오후(10:05 MTA Import 이후). Leads_Raw/MTA_Raw는 외부 파일(`CONFIG.RAW_EXTERNAL`)이라 복원 영향 없음, Leads_Master/MTA_Master는 10-07로 되돌아감. 증분 체크포인트(`LEADS_LAST_PROCESSED_ROW`/`MTA_LAST_PROCESSED_ROW`, PropertiesService)는 그대로 → 10-08 MTA·10-09 Leads·10-12 오전 MTA Import분이 Master에서 빠진 채 "처리됨"으로 남았을 가능성.
+- 읽기 전용 진단 `TEMPQA_071_MasterRawGapAfterRestore.js` v1.0.0(`runDiagnoseMasterRawGapAfterRestore()`) 추가, clasp push 완료. Raw 마지막 6,000행의 Lead ID 중 Master에 없는 행 수와 Raw 행·날짜 범위를 로그로 남김. 사용자 실행 대기.
+- **결과(17:21)**: 누락 확인. LEADS — Raw 39,407 / Master 37,369 / 체크포인트 39,407, Master에 없는 Raw 61행(Lead ID 61, Raw 행 39276~39336, Create Date 10-07). MTA — Raw 89,828 / Master 87,275 / 체크포인트 89,828, Master에 Lead ID 자체가 없는 Raw 143행(Lead 122, Raw 행 89385~89821, 10-07~10-12). Raw 날짜는 일-월 텍스트(7/10/2026 = 10-07). MTA는 Lead ID 단위 비교라 이미 Master에 다른 터치가 있는 리드의 누락 터치는 안 잡힘 → 실제 누락은 더 많을 수 있음.
+- **복구안(사용자 실행 대기)**: 체크포인트를 되돌리는 대신 원칙("Master is Rebuildable")대로 `rebuildLeadsMaster()` → `rebuildMTAMaster()` 전체 재구축(각각 체크포인트도 Raw 끝으로 재설정, 7-25 실측 5분 26초/7분 58초) 후 `runLeadsPipelineTail()`·`runMTAPipelineTail()`로 OPS·리포트 재생성. 실행 전 대기열(SAL/IC tail) 종료 확인.
+
+## ACQ/NewP1/Target/S&M 리포트 비정상 (사용자 보고, 15:4x)
+
+- 15:26 `runLeadsPipelineTail`(15:21 사용자 Lead import, 891s, Completed) 로그: 리포트 생성은 전부 정상 완료지만 값의 근거가 비어 있음. Target 그림자 diff `newP1CountByGroup[Webinar] full=1 / incremental=714`(10-08엔 714/718로 일치), FY_REP `26|SEP|Content.newLeads full=4 / incremental=366`, NewP1 Report Rows 98→64. 그림자 모드는 full이 실제 출력 경로라 리포트가 거의 0으로 나옴.
+- 같은 실행에서 `SAL Backfill 8221건`, `IC Funnel Backfill 3264건` — Leads_OPS의 SAL/IC 날짜 칸이 대량으로 비어 있었다는 뜻(평소엔 소량).
+- **가설(미검증)**: Leads_OPS의 날짜 컬럼(Create Date 등)이 비어 있음. Events_OPS(Event Date·Time)에 이어 날짜 값만 지워지는 같은 현상일 가능성. 오늘 사용자가 한 파일 전체 버전 복원과의 관계도 확인 필요(복원은 모든 시트를 되돌리지만 PropertiesService 증분 상태는 안 되돌림).
+- ACQ 체크박스가 체크된 채인 이유: 15:39~15:40 클릭이 tail 실행 중이라 `handleReportGenerateEdit`가 즉시 반환(#46 가드) — 정상 동작.
+- 확인 대기: Leads_OPS Create Date 상태, 오늘 복원한 시각과 대상 버전.
+- 사용자 확인: Leads_OPS Create Date 9,180칸 빈칸. 오늘 복원은 **10-07 버전**(파일 전체) — 10-08~10-12 사이 시트 변경(10-08 MTA, 10-09 Leads, 10-12 오전 MTA import 등)은 메인 파일에서 되돌아감.
+- Create Date는 `OPS.SF_COLUMNS`(build마다 Leads_Master 값으로 덮어씀) → 빈칸 출처를 가리려고 읽기 전용 진단 `TEMPQA_070_LeadsCreateDateBlankDiagnostic.js` v1.0.0(`runDiagnoseLeadsCreateDateBlanks()`) 추가, clasp push 완료. OPS/Master 타입 분포, 빈칸 행의 Created FY·행 위치·Master 값을 로그로 남김. 사용자 실행 대기.
+- **진단 결과(15:57)**: Leads_OPS Create Date **37,227/37,316 빈칸**(Date 89건만, 시트 행 9183~10394 사이), Leads_Master는 37,369건 전부 Date. 빈칸 행 전부 Master엔 Date 있음. 빈칸은 전 FY에 걸침. 15:26 build는 Create Date 내림차순 정렬(`compareByCreateDateBlankLastOPS_`) 결과 행 2부터 10-11 리드가 놓여 있음 → **build는 메모리에 날짜를 갖고 정렬·쓰기했는데, 시트에는 날짜가 거의 다 빈칸으로 남음.** Events_OPS(10-08 Event Date·Time)와 같은 "쓴 날짜 값이 나중에 사라짐" 패턴. 쓰기 경로(`writeOPS` → `setRangeValuesChunked_` = 일반 setValues, `applyOPSStyle`은 서식만)에선 지우는 코드 못 찾음. 원인 미상.
+- 다음 단계(사용자 실행): `buildLeadsOPS()` 단독 실행 직후 진단 재실행 → 바로 빈칸이면 쓰기 단계, 날짜가 있으면 그 뒤 단계나 외부 요인으로 좁힘. 날짜가 정상으로 남으면 그대로 복구도 됨(Create Date는 Master에서 다시 채워짐).
+- **결과(16:00~16:06)**: `buildLeadsOPS()` 단독 실행(293s, QA 9건 Matching Accuracy) 직후 진단 → Leads_OPS Create Date **37,316/37,316 Date, 빈칸 없음.** 쓰기 단계는 정상 → 15:26 tail에선 writeOPS(15:29:38) 이후~15:57 사이에 지워짐. 후보: 같은 tail의 이후 단계(SAL/IC 백필 컬럼 쓰기, Engine refresh, OPS 4종 build, 리포트 생성) 또는 그 사이 사용자 조작(15:39~15:40 체크박스). 다음: `runLeadsPipelineTail()` 수동 실행 → 끝나고 진단 재실행. 그때 빈칸이면 tail 안에서 재현된 것.
+- **수동 `runLeadsPipelineTail()`(16:07) 실패**: buildLeadsOPS·백필(빈칸 0건)·Engine refresh는 정상. Events_OPS build에서 새 백업 쓰기가 `Service Spreadsheets timed out while accessing document`로 실패(try/catch로 무시됨), 이어서 `writePipelineStatusToReadme_`(MASTER_002 1587행)에서 같은 타임아웃이 잡히지 않고 터져 tail 중단 → BOFU/Search/Content_OPS build와 리포트 생성 안 됨. **새 단서**: 스프레드시트 서비스 타임아웃. 쓰기 도중 타임아웃이 나면 일부 쓰기가 반영 안 될 수 있음 — 날짜 유실과의 관계는 미확인. 10-08 5:08 Revenue(650s), 15:09 Revenue(Unknown 612s)처럼 느리거나 비정상 종료된 실행과 시기가 겹침.
+- **락 미반납 버그 수정 (`MASTER_002_PipelineAsync.js` v1.38.0)**: tail catch 블록의 `writePipelineStatusToReadme_()`가 같은 타임아웃으로 다시 터져 `releasePipelineLockAndProcessQueue_()` 전에 빠져나감 → PIPELINE_LOCK이 30분 stale 임계까지 남음. 공용 함수 한 곳에서 해결: 본문을 `writePipelineStatusToReadmeCore_()`로 옮기고 원래 이름은 실패를 로그만 남기는 래퍼로(호출처 25곳 무변경). `testWritePipelineStatusToReadmeSwallowsErrors()` 로컬 node PASS, clasp push 완료. 이번 실패로 남은 락은 `runForceReleasePipelineLock()`으로 해제 필요.
+- **복구 완료 (16:22~16:34)**: 사용자가 락 강제 해제 → 진단(Create Date 37,316/37,316 Date) → `runLeadsPipelineTail()` 수동 실행, 끝까지 완료. NewP1 Report Rows 64→98 정상, Target 그림자 diff newP1 계열 불일치 사라짐(남은 4건은 totalP1 소폭 차이로 10-08과 같은 기존 패턴), FY_REP 불일치 36건(10월 incremental 지연, 기존 패턴). Events_OPS build에서 백업 실패 로그 없음 → `Events_Manual_Backup` 첫 백업 생성됨(사용자 시트 확인, 숨김 처리). Create Date가 15:26 tail 이후 사라진 원인은 여전히 미확정 — 재발 시 tail 직후·몇 시간 뒤 `runDiagnoseLeadsCreateDateBlanks()`로 시점을 좁힘.
+
+
 # Changelog — 2026-10-02
 
 ## Events_OPS Event Date 유실(9/17·9/29) 근본 원인 수정 + 사전시트 기준 일괄 교정 스크립트

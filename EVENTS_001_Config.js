@@ -12,9 +12,12 @@
  * OPS.SHEET.OPS(Leads_OPS)를 그대로 참조 — 여기서 재정의하지 않는다.
  *
  * Version
- * v1.11.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-10-12)
+ * - `SHEET.MANUAL_BACKUP`, `MANUAL_GUARD` 신규 — Manual 컬럼 백업·유실 감지
+ *   (`EVENTS_007_ManualBackup.js`). 10-08 Event Date·Time 유실(원인 미확정) 대응.
  * v1.11.0 (2026-08-19)
  * - **CVR/Clicks/Results를 Manual → Meta 자동 집계로 전환(사용자 요청)**.
  *   `GROUP_3_MANUAL`이 이제 빈 배열(기존 3개 컬럼이 전부 이동) —
@@ -136,7 +139,26 @@ const EVENTS = {
 
     ENGINE: "Events_Engine",
 
-    OPS: "Events_OPS"
+    OPS: "Events_OPS",
+
+    // Manual 컬럼 백업(숨김) — EVENTS_007_ManualBackup.js
+    MANUAL_BACKUP: "Events_Manual_Backup"
+
+  },
+
+  /*
+  ==========================================================
+  MANUAL GUARD (EVENTS_007_ManualBackup.js)
+
+  build 직전, 지난 build가 백업한 값이 있는데 지금 시트에선 빈칸인 셀이
+  어느 Manual 컬럼에서든 이 개수 이상이면 build를 멈추고 알림.
+  사람이 몇 칸 지우는 건 통과, 열 단위 유실(10-08: Time 72칸)은 차단.
+  ==========================================================
+  */
+
+  MANUAL_GUARD: {
+
+    MAX_LOST_CELLS: 5
 
   },
 

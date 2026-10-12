@@ -22,9 +22,17 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.37.0
+ * v1.38.0
  *
  * Change Log
+ * v1.38.0 (2026-10-12)
+ * - **`writePipelineStatusToReadme_()`가 더 이상 예외를 던지지 않음** — 본문을
+ *   `writePipelineStatusToReadmeCore_()`로 옮기고 원래 이름은 try/catch 래퍼로.
+ *   10-12 16:07 Leads tail이 스프레드시트 타임아웃으로 실패했을 때 catch 블록의
+ *   이 호출이 같은 타임아웃으로 다시 터져 `releasePipelineLockAndProcessQueue_()`
+ *   전에 빠져나감 → PIPELINE_LOCK이 stale 임계(30분)까지 안 풀림. README 표시는
+ *   부가 기능이라 실패해도 파이프라인 흐름(락 반납 포함)을 막으면 안 됨. 호출처
+ *   25곳은 그대로(공용 함수 한 곳에서 해결).
  * v1.37.0 (2026-09-28)
  * - **`runLeadsPipelineTail()`에 `backfillFunnelForBlankOPSRows_` 단계 추가**
  *   (`buildLeadsOPS` 직후) — SAL/IC Funnel sync 시점에 OPS에 없던 리드가
@@ -1581,6 +1589,44 @@ function writePipelineStatusState_(type, state){
  * ==========================================================
  */
 function writePipelineStatusToReadme_(){
+
+  try {
+    writePipelineStatusToReadmeCore_();
+  } catch(err){
+    Logger.log(
+      CONFIG.LOG.PREFIX + " README Pipeline Status 쓰기 실패(무시, 파이프라인 계속) — " +
+      (err && err.message ? err.message : err)
+    );
+  }
+
+}
+
+
+/**
+ * TEST — writePipelineStatusToReadme_()가 본문 실패를 삼키는지(락 반납 경로 보호).
+ */
+function testWritePipelineStatusToReadmeSwallowsErrors(){
+
+  const original = writePipelineStatusToReadmeCore_;
+  let pass = false;
+
+  try {
+    writePipelineStatusToReadmeCore_ = function(){ throw new Error("simulated timeout"); };
+    writePipelineStatusToReadme_();
+    pass = true;
+  } catch(err){
+    pass = false;
+  } finally {
+    writePipelineStatusToReadmeCore_ = original;
+  }
+
+  Logger.log("testWritePipelineStatusToReadmeSwallowsErrors: " + (pass ? "PASS" : "FAIL"));
+  return pass;
+
+}
+
+
+function writePipelineStatusToReadmeCore_(){
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 

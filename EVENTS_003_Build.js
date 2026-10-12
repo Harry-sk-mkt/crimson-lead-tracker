@@ -12,9 +12,14 @@
  * 실행도 계속 가능.
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-10-12)
+ * - Manual 컬럼 가드·백업 연결(`EVENTS_007_ManualBackup.js`) — build 전
+ *   `guardEventsManualLoss_()`가 유실을 감지하면 쓰기 없이 종료(알림 메일),
+ *   쓰기 후 `backupEventsManualFromBuildRows_()`로 백업 갱신. 10-08 build 밖
+ *   유실(원인 미확정)이 다음 build에서 그대로 굳던 문제 대응.
  * v1.2.0 (2026-09-29)
  * - Manual 컬럼 채움 건수 로그 추가(`logEventsManualFillCounts_()`) — Event Date
  *   (09-29)/Time(#53, 09-17·09-29) 유실이 반복되는데, `writeEventsOPS_()`가 매
@@ -46,6 +51,11 @@ function buildEventsOPS() {
 
     const existing = readEventsOPS_();
 
+    if (!guardEventsManualLoss_(existing)) {
+      Logger.log("Events_OPS Build 중단 — Manual 컬럼 유실 감지(위 로그 참고).");
+      return;
+    }
+
     const engineMap = readEventsEngineMap_();
 
     //======================================
@@ -66,6 +76,13 @@ function buildEventsOPS() {
     //======================================
 
     writeEventsOPS_(result.rows);
+
+    // 백업 실패가 이미 끝난 build를 실패로 만들면 안 됨 — 가드는 이전 백업 기준으로 계속 동작
+    try {
+      backupEventsManualFromBuildRows_(result.rows);
+    } catch (backupError) {
+      Logger.log("backupEventsManualFromBuildRows_ 실패(무시): " + backupError);
+    }
 
     //======================================
     // Summary
