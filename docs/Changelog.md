@@ -1,5 +1,13 @@
 # Changelog — 2026-10-13
 
+## Target 재산출 검토 착수 — 이동평균 설계 여부 확인 (사용자 요청)
+
+- 요청: 10월 중순 시점에서 FY27 target이 현실을 반영하는지 재산출. 범위(사용자 선택): 목표 자체 재산출 + 총목표 3627의 현실성까지 검증.
+- 사용자: "처음 설계할 때 최근 12개월·3개월 moving average 둘 다 반영하려 했다 — 맞는지 확인". 확인 결과 **현재 설계·코드에는 둘 다 없음**: `docs/TargetReportDesign.md` §5~7은 딜 비중·P1당 가치·CPNP1 벤치마크 = FY26 단일 스냅샷(3FY median은 최근 연도와 괴리로 폐기), 시즌성 = FY24:25:26 가중 1:2:3, 총합 = 3627 오버라이드. 기록상 흔적은 (1) 09-17 #42 논의 "3개월 단위 moving average 적용 계획은 있으나 아직 미실현", (2) `analytics/docs/marketing2-framework.md` Segment Off 판단용 NLP1 3개월 이동평균(목적 다름), (3) 10-13 그로스미팅 "3개월 무빙에버리지로 타겟 점검" 발언. 12개월 이동평균은 어디에도 기록 없음. 적용 방식 사용자 확인 대기.
+- **용도 확정(사용자)**: 12개월 롤링(2025-10~2026-09) = 목표 구조(세그먼트 배분·CPNP1 벤치마크) 대체 후보, 3개월(2026-07~09) = 최근 속도로 3627 현실성 점검. 먼저 시뮬레이션만.
+- **코드 확인 중 발견**: FY27 입력(Pipeline 비중 0 + 총합 3627 오버라이드)에서는 세그먼트 목표 = 3627 × (그룹 New P1 ÷ 전체 New P1)로 수렴 — 딜 비중(R1_g/베이스) ÷ P1당 가치(R1_g/NewP1_g)에서 R1_g가 약분됨. 즉 딜트래커 매출은 "코호트1 매출이 0인 그룹은 목표 0"이라는 관문 역할만 하고, 배분은 사실상 기준 기간의 New P1 비중. (설계 문서 §6이 경고한 "New 트랙만 쓰면 퇴화" 현상이 오버라이드로 다시 나타난 것 — 시뮬레이션 결과와 함께 사용자에게 보고.)
+- 읽기 전용 `TEMPQA_072_TargetRecalcSimulation.js` v1.0.0(`runSimulateTargetRecalc()`) 신규 — 엔진 함수를 그대로 쓰고 기준 기간만 교체(딜 행 FY를 기간 기준 SENTINEL로 바꾼 사본 + `P1_VALUE_FY` 임시 교체, finally 원복). 출력: [1] FY26 재계산이 Block C 현재값과 일치하는지 검증, [2] 현재 vs 12개월 기준 세그먼트 목표, [3] YTD 페이스, [4] FY 끝 예상(시즌성 반영 / 3개월 속도), [5] CPNP1(현재 목표·FY26·12개월·3개월·YTD). `testTargetRecalcSimulationHelpers()` 로컬 node PASS, clasp push 완료 — 사용자 실행 대기.
+
 ## 오프라인 세미나 캠페인 spend가 Target_REP Seminar에 미반영 (사용자 보고, 조사 중)
 
 - 보고: `KR_core_2026-11-07_jeju-cao-other-cities-lplg_event-offline` 등 오프라인 캠페인이 집행 중인데 Target_REP Seminar spend에 안 잡힘.
