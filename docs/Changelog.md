@@ -1,10 +1,16 @@
 # Changelog — 2026-10-13
 
+## Events_OPS 하단 세미나 묶음 — 정렬 문제 아님 (사용자 질문)
+
+- 사용자: 하단에 2022~2025 오프라인 세미나(EV-)가 몰려 있어 누가 sort한 것 같다고 질문. 확인 결과 `compareByEventDateBlankLast_()`(빈 Event Date 최하단, 07-29 규칙)대로 정렬된 것 — 해당 74행(375 중 Event Date 301)은 Event Date가 비어 있음. 10-08 유실 이전에도 300건이라 이번 복원과 무관, 원래부터 미입력(10-02 이후 기존 행은 자동 추정 안 함).
+- 처리: 사용자가 날짜 직접 입력하기로 결정(이름 기반 월 1일 일괄 채움은 안 함). `; expo MTA` 2건 등 딜트래커 캠페인명 표기 차이로 갈라진 행은 별도.
+
 ## OPS 시트 Month 열 "Sep 26" / "September 26" 혼재 (사용자 보고, Events_OPS J열)
 
 - **원인(추정)**: `getMonthText()`는 "Sep 26" 같은 문자열을 만드는데, OPS writer가 서식 지정 없이 `setValues`로 써서 Sheets가 일부 값을 날짜로 자동 변환 → 변환된 칸은 "September 26"처럼 날짜 서식으로 표시. 어떤 값은 변환되고 어떤 값은 안 되는지는 확인 못 함. `sheet.clear()`가 매 build마다 서식까지 지우므로 텍스트 서식이 유지될 수도 없었음.
 - **수정**: 공용 `setTextFormatColumns_()`(`UTIL_003_SheetChunkIO.js` v1.1.0) 신규 — `clear()` 이후·`setValues` 이전에 `*.DERIVED_DATE_COLUMNS`(FY/Month) 데이터 행을 텍스트("@")로 고정. Events/BOFU/Content/Search 네 writer 모두 적용(`EVENTS_005` v1.3.0, `BOFU_005` v1.2.0, `CONTENT_005` v1.1.0, `SEARCH_005` v1.2.0) — 넷 다 같은 `getMonthText()`라 같은 위험. 코드에서 OPS 시트의 Month를 다시 읽는 곳은 없음(영향 범위 확인). `testSetTextFormatColumns()` 로컬 node PASS, pre-commit 4종 통과, clasp push 완료.
 - 기존 시트는 다음 build(Import tail·2시간 주기 Revenue 갱신)에서 다시 쓰일 때 정리됨. 바로 보려면 `buildEventsOPS()` 수동 실행.
+- **검증 (16:34, 사용자)**: `buildEventsOPS()` 수동 실행(375행, Manual 컬럼 감소 없음) 후 J열 전부 "Sep 26" 형식으로 표시 확인 — 해결. BOFU/Content/Search_OPS는 다음 build에서 같은 방식으로 정리됨.
 
 ## 10-07 복원 후 Master 재구축 실행 중 오류 (사용자 보고, 맥)
 
