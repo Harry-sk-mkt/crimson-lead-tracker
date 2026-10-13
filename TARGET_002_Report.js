@@ -19,9 +19,16 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.10.2
+ * v1.11.0
  *
  * Change Log
+ * v1.11.0 (2026-10-13)
+ * - `computeTargetActualCPNP1ByGroupWeek_()`: 그 주 세그먼트 Spend는 있는데 Actual P1이
+ *   0건이면, CPNP1(계산 불가) 칸을 공란 대신 **Spend 금액 그대로** 채움 — 돈은 썼는데
+ *   P1이 없는 가장 나쁜 주가 아무것도 안 쓴 주와 똑같이 공란으로 보이던 문제(2026-10-13
+ *   사용자 보고, 10/5 주 Seminar Spend 680.02 / P1 0). 빨간 배경은 TARGET_003 v1.10.0
+ *   조건부 서식. 테스트용 `spendMapOverride` 옵션 파라미터 추가(생략 시 기존과 동일),
+ *   `testComputeTargetActualCPNP1ByGroupWeek()` 신규.
  * v1.10.2 (2026-09-15)
  * - v1.10.1의 진단용 [TIMING] 로그 제거(원인 확정 완료, 코드 변경 없이 원복) —
  *   단독 실행 시 `generateTargetReport_()` 전체 39.79s(refreshTargetEngine_
@@ -375,17 +382,19 @@ function computeTargetActualP1ByWeek_(weekStarts){
  *
  * @param {Array<Date>} weekStarts     리포트에 나열된 모든 Week Start
  * @param {Object} actualP1ByWeek      computeTargetActualP1ByWeek_() 결과
- * @return {Object}  "group|weekStart(yyyy-MM-dd)" -> ratio (그 주 Actual P1이
- *   0이거나 Ad_Spend_Cache_Weekly에 그 주|세그먼트 키가 없으면 키 없음)
+ * @param {Object=} spendMapOverride 테스트 주입용, 생략 시 Ad_Spend_Cache_Weekly
+ * @return {Object}  "group|weekStart(yyyy-MM-dd)" -> ratio. Ad_Spend_Cache_Weekly에 그
+ *   주|세그먼트 키가 없으면 키 없음. Actual P1이 0건이면 Spend > 0일 때만 Spend 금액
+ *   자체를 값으로 넣음(2026-10-13, 빨간 배경으로 구분 — TARGET_003).
  * ==========================================================
  */
-function computeTargetActualCPNP1ByGroupWeek_(weekStarts, actualP1ByWeek){
+function computeTargetActualCPNP1ByGroupWeek_(weekStarts, actualP1ByWeek, spendMapOverride){
 
   const toKey = function(date){
     return Utilities.formatDate(date, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
   };
 
-  const spendMap = readAdSpendWeeklyCacheMap_();
+  const spendMap = spendMapOverride || readAdSpendWeeklyCacheMap_();
   const ratios = {};
 
   weekStarts.forEach(function(weekStart){
@@ -400,8 +409,16 @@ function computeTargetActualCPNP1ByGroupWeek_(weekStarts, actualP1ByWeek){
       const p1Count = counts[group] || 0;
       const spendKey = weekKey + "|" + group;
 
-      if(p1Count > 0 && spendMap.hasOwnProperty(spendKey)){
-        ratios[group + "|" + weekKey] = spendMap[spendKey] / p1Count;
+      if(!spendMap.hasOwnProperty(spendKey)) return;
+
+      const spend = spendMap[spendKey];
+
+      if(p1Count > 0){
+        ratios[group + "|" + weekKey] = spend / p1Count;
+      } else if(spend > 0){
+        // P1 0건 — CPNP1은 계산 불가지만 공란으로 두면 "지출 없음"과 구분이 안 됨.
+        // 지출액을 그대로 표시하고 TARGET_003 조건부 서식(Actual P1 = 0)이 빨간 배경을 칠한다.
+        ratios[group + "|" + weekKey] = spend;
       }
 
     });
@@ -797,5 +814,32 @@ function runRefreshTargetActuals(){
 function runGenerateTargetReport(){
 
   generateTargetReport_();
+
+}
+
+
+function testComputeTargetActualCPNP1ByGroupWeek(){
+
+  const weekStart = new Date(2026, 9, 5);
+  const weekKey = Utilities.formatDate(weekStart, CONFIG.DATE.TIMEZONE, "yyyy-MM-dd");
+
+  const actualP1ByWeek = {};
+  actualP1ByWeek[weekKey] = { Seminar: 0, Webinar: 4 };
+
+  const spendMap = {};
+  spendMap[weekKey + "|Seminar"] = 680.02;  // P1 0건 → 지출액 그대로
+  spendMap[weekKey + "|Webinar"] = 800;     // P1 4건 → 200
+  spendMap[weekKey + "|Search"] = 0;        // 지출 0, P1 0 → 공란 유지
+
+  const result = computeTargetActualCPNP1ByGroupWeek_([weekStart], actualP1ByWeek, spendMap);
+
+  const pass =
+    result["Seminar|" + weekKey] === 680.02 &&
+    result["Webinar|" + weekKey] === 200 &&
+    !result.hasOwnProperty("Search|" + weekKey) &&
+    !result.hasOwnProperty("BOFU|" + weekKey);
+
+  Logger.log("testComputeTargetActualCPNP1ByGroupWeek: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(result));
+  return pass;
 
 }

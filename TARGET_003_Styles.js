@@ -12,9 +12,17 @@
  * docs/TargetReportDesign.md §9
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-10-13)
+ * - Actual CPNP1 칸에 빨간 배경 규칙 추가: Actual P1 = 0인데 CPNP1 칸에 값(=그 주 Spend,
+ *   TARGET_002 v1.11.0)이 있으면 `NO_P1_SPEND_COLOR`. 초록(달성) 규칙보다 먼저 등록하고,
+ *   초록 규칙에도 Actual P1 > 0 조건을 추가 — 지출액이 Target CPNP1보다 작아도 "달성"으로
+ *   칠해지지 않게(2026-10-13 사용자 요청: "금액 적고 빨간색으로 fill").
+ * - 이번 주 행의 Week Start/Week End/Month(고정 3컬럼)에 `CURRENT_WEEK_COLOR` 배경 —
+ *   `TODAY()` 기준 조건부 서식이라 Generate 없이도 주가 바뀌면 자동으로 옮겨감(2026-10-13
+ *   사용자 요청: "이번 주가 어디인지 한 번에 안 보인다").
  * v1.9.0 (2026-08-27)
  * - 세그먼트당 6컬럼 중 "Pipeline P1"/"P1(Target 합계)" 2컬럼 숨김(사용자 요청) —
  *   FY27부터 Pipeline Share Override=0(TARGET_001_Engine.js v1.28.0, 이번 FY는
@@ -321,8 +329,26 @@ function applyTargetReportAchievementHighlights_(sheet, rowCount){
   const groupColCount = CONFIG.TARGET.REPORT.GROUP_COLUMN_COUNT;
   const dataStartRow = rows.REPORT_DATA_START;
   const ACHIEVED_COLOR = "#01ef18";
+  const NO_P1_SPEND_COLOR = "#ff4d4d"; // P1 0건인데 지출 있음(칸 값 = 지출액), 2026-10-13
+
+  const CURRENT_WEEK_COLOR = "#ffe599"; // 이번 주 행 고정 컬럼, 2026-10-13
 
   const rules = [];
+
+  // 이번 주 행 표시 — Week Start(A) <= TODAY() <= Week End(B). 시트 타임존 기준 TODAY()라
+  // Generate를 다시 돌리지 않아도 매주 자동으로 다음 행으로 옮겨간다.
+  const weekStartA1 = sheet.getRange(dataStartRow, 1).getA1Notation().replace(/^([A-Z]+)/, "$$$1");
+  const weekEndA1 = sheet.getRange(dataStartRow, 2).getA1Notation().replace(/^([A-Z]+)/, "$$$1");
+
+  rules.push(
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(
+        "=AND(ISNUMBER(" + weekStartA1 + ")," + weekStartA1 + "<=TODAY()," + weekEndA1 + ">=TODAY())"
+      )
+      .setBackground(CURRENT_WEEK_COLOR)
+      .setRanges([sheet.getRange(dataStartRow, 1, rowCount, fixedColCount)])
+      .build()
+  );
 
   CONFIG.TARGET.GROUP_ORDER.forEach(function(group, i){
 
@@ -350,10 +376,21 @@ function applyTargetReportAchievementHighlights_(sheet, rowCount){
     const actualCPNP1A1 = sheet.getRange(dataStartRow, actualCPNP1Col).getA1Notation();
     const targetCPNP1A1 = sheet.getRange(dataStartRow, targetCPNP1Col).getA1Notation();
 
+    // 빨간 규칙을 먼저 등록 — 같은 칸에 여러 규칙이 맞으면 먼저 등록한 규칙이 적용된다.
     rules.push(
       SpreadsheetApp.newConditionalFormatRule()
         .whenFormulaSatisfied(
-          "=AND(" + targetCPNP1A1 + ">0,ISNUMBER(" + actualCPNP1A1 + ")," +
+          "=AND(ISNUMBER(" + actualCPNP1A1 + ")," + actualCPNP1A1 + ">0," + actualP1A1 + "=0)"
+        )
+        .setBackground(NO_P1_SPEND_COLOR)
+        .setRanges([actualCPNP1Range])
+        .build()
+    );
+
+    rules.push(
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied(
+          "=AND(" + targetCPNP1A1 + ">0," + actualP1A1 + ">0,ISNUMBER(" + actualCPNP1A1 + ")," +
             actualCPNP1A1 + "<=" + targetCPNP1A1 + ")"
         )
         .setBackground(ACHIEVED_COLOR)

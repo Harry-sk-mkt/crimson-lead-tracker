@@ -34,9 +34,13 @@
  * AD (신규 — 2026-07-30 네이밍 컨벤션. 기존 00~99는 당장 안 바꿈)
  *
  * Version
- * v1.18.0
+ * v1.19.0
  *
  * Change Log
+ * v1.19.0 (2026-10-13)
+ * - `runDebugTargetCampaignTrace()` 대상 키워드를 "jeju-cao-other-cities"로 교체 —
+ *   "KR_core_2026-11-07_jeju-cao-other-cities-lplg_event-offline" 등 오프라인 세미나
+ *   캠페인 spend가 Target_REP Seminar에 안 잡힌다는 사용자 보고 조사용(진단 전용, 로직 변경 없음).
  * v1.18.0 (2026-09-09)
  * - **버그 수정 — 같은 캠페인+같은 주를 커버하는 정밀 export 행이 2개 이상이면
  *   과다집계**: 사용자가 Meta 지출을 한 주를 여러 배치로 나눠 올리는 방식으로
@@ -1798,7 +1802,7 @@ function runDebugMetaRawLastRows(){
  */
 function runDebugTargetCampaignTrace(){
 
-  const keyword = "consolidated-retargeting-lplg";
+  const keyword = "jeju-cao-other-cities"; // 2026-10-13: 오프라인 세미나 캠페인 Seminar spend 미반영 조사 (이전: "consolidated-retargeting-lplg")
 
   const records = readMetaRawRows_().filter(function(r){
     return String(r.campaignName || "").toLowerCase().indexOf(keyword.toLowerCase()) !== -1;

@@ -1,5 +1,16 @@
 # Changelog — 2026-10-13
 
+## 오프라인 세미나 캠페인 spend가 Target_REP Seminar에 미반영 (사용자 보고, 조사 중)
+
+- 보고: `KR_core_2026-11-07_jeju-cao-other-cities-lplg_event-offline` 등 오프라인 캠페인이 집행 중인데 Target_REP Seminar spend에 안 잡힘.
+- 코드 확인: `getBusinessSegment()`는 campaign에 "event-offline"이 있으면 Seminar로 확정(`resolveDefiniteBusinessSegment_()`, 예외 테이블 다음 순위) → 분류 규칙상 문제 없음. Target_REP 주별 spend는 `Ad_Spend_Cache_Weekly`(`refreshAdSpendWeeklyCache_()` ← 외부 Master_DB의 Meta_Raw, 2시간 주기 갱신)에서 오고, Meta_Raw는 메인 파일 밖이라 10-07 복원과 무관. 남은 후보: (1) Meta_Raw에 이 캠페인 export가 아직 없음, (2) 주간 분배 0건(report 기간과 캠페인 활성 기간 불일치), (3) Cutover 이전 주, (4) 주간 캐시 미갱신.
+- 기존 진단 `runDebugTargetCampaignTrace()`(`AD_002_Meta.js` v1.19.0) 키워드를 "jeju-cao-other-cities"로 교체, clasp push 완료 — 사용자 실행 대기.
+- **진단 결과 (16:55)**: Meta_Raw에 1건 있음(Spent 333.5, report 10/01~10/11, 캠페인 10/08~11/06), Seminar 분류, 주간 분배 2026-10-05 주 333.50 전액, `Ad_Spend_Cache_Weekly[2026-10-05|Seminar]=680.02`(이 캠페인 포함). → 원본~캐시 구간은 정상. 마지막 Meta export가 10/11까지라 10/12 주 이후 지출은 아직 데이터 없음. Target_REP 화면에서 어느 주/칸을 봤는지 사용자 확인 대기.
+- **원인 확정**: 사용자가 본 칸은 10/5 주 Seminar Actual CPNP1. Target_REP에는 Spend 칸이 없고 CPNP1 = 주간 Spend ÷ Actual P1이라, 그 주 Seminar P1이 0건이면 계산을 건너뛰고 공란 — 지출이 있는데 P1이 0인 최악의 주가 "지출 없음"과 똑같이 보였음.
+- **수정 (사용자 요청 "금액 적고 빨간색 fill")**: `TARGET_002_Report.js` v1.11.0 — P1 0건·Spend > 0이면 CPNP1 칸에 Spend 금액 그대로(Generate·Actual 갱신 두 경로 모두 같은 함수라 함께 반영). `TARGET_003_Styles.js` v1.10.0 — Actual P1 = 0이고 CPNP1 칸에 값이 있으면 빨간 배경(`#ff4d4d`) 조건부 서식, 초록(달성) 규칙보다 먼저 등록 + 초록 규칙에 P1 > 0 조건 추가(지출액이 Target CPNP1보다 작아도 달성 처리 방지). `testComputeTargetActualCPNP1ByGroupWeek()` 로컬 node PASS.
+- **이번 주 표시 (사용자 추가 요청)**: Week Start/Week End/Month 3컬럼에 이번 주 행만 노란 배경(`#ffe599`) — `$A <= TODAY() <= $B` 조건부 서식이라 매주 자동 이동. 같은 v1.10.0.
+- pre-commit 4종 통과, clasp push 완료. 조건부 서식은 Generate 때 다시 깔리므로 `runGenerateTargetReport()` 1회 실행 필요.
+
 ## Events_OPS 하단 세미나 묶음 — 정렬 문제 아님 (사용자 질문)
 
 - 사용자: 하단에 2022~2025 오프라인 세미나(EV-)가 몰려 있어 누가 sort한 것 같다고 질문. 확인 결과 `compareByEventDateBlankLast_()`(빈 Event Date 최하단, 07-29 규칙)대로 정렬된 것 — 해당 74행(375 중 Event Date 301)은 Event Date가 비어 있음. 10-08 유실 이전에도 300건이라 이번 복원과 무관, 원래부터 미입력(10-02 이후 기존 행은 자동 추정 안 함).
