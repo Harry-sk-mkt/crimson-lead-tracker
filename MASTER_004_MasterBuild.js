@@ -10,9 +10,16 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.5.0
+ * v4.6.0
  *
  * Change Log
+ * v4.6.0 (2026-10-13)
+ * - rebuildLeadsMaster()/rebuildMTAMaster() 완료 알림을 블로킹 팝업
+ *   (`getUi().alert`, OK를 눌러야 실행 종료)에서 비블로킹 토스트
+ *   (`notifyRebuildComplete_()`)로 교체. 편집기에서 실행하면 시트를 열어
+ *   OK를 누르기 전까지 실행이 끝나지 않아(2026-10-13 rebuildMTAMaster
+ *   "Completed" 후 5분 42초 대기) 사용자 요청으로 변경. showAlert 파라미터·
+ *   시그니처는 그대로(false면 알림 생략). 테스트 `testNotifyRebuildCompleteNonBlocking()`.
  * v4.5.0 (2026-09-04)
  * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #1)**:
  *   `rebuildLeadsMaster()`/`rebuildMTAMaster()`의 `sortSheetByDate()` 호출 제거 —
@@ -131,16 +138,7 @@ function rebuildLeadsMaster(showAlert = true) {
 
   if (showAlert) {
 
-    SpreadsheetApp.getUi().alert(
-      "✅ Leads_Master Rebuild 완료",
-      [
-        "Full Rebuild Complete",
-        "",
-        "Raw : " + result.raw,
-        "Master : " + result.master
-      ].join("\n"),
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+    notifyRebuildComplete_("✅ Leads_Master Rebuild 완료", result);
 
   }
 
@@ -224,19 +222,59 @@ function rebuildMTAMaster(showAlert = true) {
 
   if (showAlert) {
 
-    SpreadsheetApp.getUi().alert(
-      "✅ MTA_Master Rebuild 완료",
-      [
-        "Full Rebuild Complete",
-        "",
-        "Raw : " + result.raw,
-        "Master : " + result.master
-      ].join("\n"),
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+    notifyRebuildComplete_("✅ MTA_Master Rebuild 완료", result);
 
   }
 
   return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * Notify Rebuild Complete (non-blocking)
+ * ==========================================================
+ *
+ * WHY
+ * getUi().alert()는 OK를 누를 때까지 실행을 붙잡아, 편집기에서 Rebuild를
+ * 돌리면 시트를 따로 열어 OK를 눌러야만 실행이 끝났다(2026-10-13). 토스트는
+ * 시트에 잠깐 표시만 하고 바로 반환하므로 실행이 즉시 종료된다.
+ *
+ * @param {string} title
+ * @param {{raw:number, master:number}} result
+ * @param {Spreadsheet=} ss  테스트 주입용, 생략 시 활성 스프레드시트
+ * @return {string} 표시한 메시지
+ *
+ * TEST
+ * testNotifyRebuildCompleteNonBlocking()
+ * ==========================================================
+ */
+function notifyRebuildComplete_(title, result, ss){
+
+  const message = "Raw : " + result.raw + " / Master : " + result.master;
+
+  (ss || SpreadsheetApp.getActiveSpreadsheet()).toast(message, title, 10);
+
+  return message;
+
+}
+
+
+function testNotifyRebuildCompleteNonBlocking(){
+
+  const calls = [];
+  const fakeSs = { toast: function(msg, title, sec){ calls.push([msg, title, sec]); } };
+
+  const message = notifyRebuildComplete_("✅ MTA_Master Rebuild 완료", { raw: 89828, master: 89828 }, fakeSs);
+
+  const pass =
+    message === "Raw : 89828 / Master : 89828" &&
+    calls.length === 1 &&
+    calls[0][1] === "✅ MTA_Master Rebuild 완료" &&
+    calls[0][2] === 10;
+
+  Logger.log("testNotifyRebuildCompleteNonBlocking: " + (pass ? "PASS" : "FAIL"));
+  return pass;
 
 }

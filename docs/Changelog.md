@@ -5,6 +5,18 @@
 - 사용자가 10-12 복구안 순서대로 실행: `rebuildLeadsMaster()` → `rebuildMTAMaster()` → `runLeadsPipelineTail()` → `runMTAPipelineTail()` → `runDiagnoseMasterRawGapAfterRestore()`. 그중 한 단계에서 `2:32:03 PM Error An unknown error has occurred, please try again later.`(Apps Script 서버 측 일반 오류, 코드 throw 아님 — 이 프로젝트 첫 기록).
 - **확인 대기(오피스에서 이어감)**: 몇 번째 단계였는지, 앞 단계 Completed 여부, 에러 직전 로그·Executions 상태/시간, 재실행 여부. rebuild 도중이면 Master 부분 쓰기 가능성 → 그 단계부터 재실행. tail 도중이면 PIPELINE_LOCK 잔존 확인(`runForceReleasePipelineLock()`). 10-12 `Service Spreadsheets timed out`과 같은 계열일 가능성(미검증).
 
+## 10-07 복원분 Master 복구 이어서 (오피스)
+
+- 사용자 질문 "mta·leads 다시 import하면 되나" → 아니오. Raw는 외부 파일이라 복원 영향 없고 체크포인트도 Raw 끝이라, 재import는 완전 중복 skip으로 0행 추가되고 증분 빌드도 건너뜀. 10-12 계획대로 Master 전체 재구축 + tail 2개 + `runDiagnoseMasterRawGapAfterRestore()` 순서로 진행.
+- 맥 2:32 PM `unknown error` 단계는 미확인. 15:17 Leads tail이 `61 new records read`로 Leads_Master 재구축은 반영된 것으로 보임 → 에러는 `rebuildMTAMaster()` 중이었을 가능성, MTA는 rebuild부터 다시 실행 권고(전체 재구축이라 재실행 안전).
+- 시작 전 README Pipeline Status: `FAILED · 2026-10-12 21:09:10 KST · RUNNING 30분 이상 지속, 자동 감지`. 10-12 저녁 실행 하나가 강제종료된 것. 락은 30분 초과 시 `acquirePipelineLock_()`가 죽은 락으로 보고 자동으로 잡으므로 강제 해제 불필요. 그 실행이 남긴 미완료 산출물은 이번 재구축+tail이 다시 씀.
+- **`runLeadsPipelineTail()` 결과 (15:17~15:27, Completed)**: Leads_Master 37,430행(37,369+61, 누락 61행 복구), Leads_OPS 신규 61 → 37,377건. SAL 백필 11건·IC 백필 3건(평소 수준). Events_OPS Manual 채움 감소 없음(Time 73→73). ACQ 273행·NewP1 99행 정상.
+  - S&M_REP Generate 실패(비필수): `Service Spreadsheets failed while accessing document 1uHCloUs_...` — 10-12 타임아웃과 같은 계열의 일시적 오류로 추정, MTA tail에서 다시 생성되는지 확인.
+  - 그림자 diff 확대: Target 72건(10-12 4건), FY_REP 677건(10-12 36건). 둘 다 full이 실제 출력 경로라 리포트 값은 full 기준. 가설(미검증): incremental 쪽 누적 상태가 10-07 복원 시점으로 돌아가 있음. MTA tail 후 재확인.
+- **진단(15:47) — Leads 복구 확정, MTA 미복구**: `runDiagnoseMasterRawGapAfterRestore()` → LEADS 누락 없음(Master 37,430). MTA는 Master 87,275행으로 10-12 진단과 동일, 누락 143행(Lead 122)도 그대로 → `rebuildMTAMaster()`가 실행되지 않았거나 맥 2:32 `unknown error`로 쓰기 전에 끝남(행 수가 그대로라 부분 쓰기 흔적은 없음). 다음: `rebuildMTAMaster()` → `runMTAPipelineTail()` → 진단 재실행.
+- **`rebuildMTAMaster()` 완료 (15:50~16:16, 26분 12초 — 30분 실행 한도 근접)**: Raw 89,828 → Master 쓰기 89,828(3분 50초) → 완전 중복 터치 2,148행 삭제(543개 구간 `deleteRows()`, **11분**) → Master 87,680행(10-12 진단 87,275 대비 +405) → 엔진 6종 갱신(약 4분 30초). "Completed" 로그(16:11) 이후 실행 종료(16:16)까지 5분 42초 공백 — `showAlert=true` 기본값이라 시트 UI 알림창 확인 대기로 추정(미검증).
+  - 7-25 실측(7분 58초, `docs/PerformanceBenchmark.md`) 대비 3배 이상. 주원인은 7-25 이후 Full Rebuild에 추가된 중복 삭제 단계(2026-08-20)가 시트 행을 직접 지우는 방식이라는 점. Raw가 더 늘면 30분 한도를 넘을 수 있음 → 개선안(미착수, 사용자 승인 필요): Master에 쓰기 전에 메모리에서 완전 중복을 걸러내 삭제 단계를 없애기.
+- **Rebuild 완료 팝업 → 토스트 (`MASTER_004_MasterBuild.js` v4.6.0, 사용자 요청)**: 위 5분 42초 공백은 `getUi().alert`가 OK 클릭까지 실행을 붙잡은 것(사용자 확인). 편집기에서 돌릴 때 시트를 열어 OK를 누르기 번거로워 `rebuildLeadsMaster()`/`rebuildMTAMaster()` 둘 다 비블로킹 `notifyRebuildComplete_()`(시트 토스트 10초)로 교체. `showAlert` 파라미터·시그니처 유지. `testNotifyRebuildCompleteNonBlocking()` 로컬 node PASS, pre-commit 검사 4종 통과, clasp push 완료. 다른 파일의 `getUi().alert`(증분 빌드·Raw 이관·재시도)는 이번 범위 밖.
 
 # Changelog — 2026-10-12
 
