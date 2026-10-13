@@ -25,9 +25,14 @@
  *   명시적 에러로 중단한다("No Assumptions").
  *
  * Version
- * v1.2.0
+ * v1.3.0
  *
  * Change Log
+ * v1.3.0 (2026-10-13)
+ * - 정보성 `getUi().alert()` 팝업을 비블로킹 `toastNotice_()`(MASTER_004)로 교체 —
+ *   OK를 눌러야 실행이 끝나 편집기에서 실행할 때 시트를 따로 열어야 했던 문제(사용자 요청).
+ *   메시지 내용은 그대로, 동작(반환값·흐름) 변경 없음.
+ *   `runDeleteLegacyMainRawBackups()`의 삭제 전 YES/NO 확인창은 안전장치라 그대로 둠.
  * v1.2.0 (2026-09-09)
  * - `runDeleteLegacyMainRawBackups()`/`computeLegacyRawBackupDeletionPlan_()`
  *   신규 — 이관 안정화 확인(6일간 실 Import 정상 동작) 후 메인 스프레드시트에
@@ -228,11 +233,7 @@ function runMigrateLeadsRawToExternal(){
     CONFIG.RAW_DATE_COLUMNS.LEADS
   );
 
-  SpreadsheetApp.getUi().alert(
-    result.ok ? "✅ Leads_Raw 이관 완료" : "⚠️ Leads_Raw 이관 건수 불일치",
-    "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건",
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  toastNotice_(result.ok ? "✅ Leads_Raw 이관 완료" : "⚠️ Leads_Raw 이관 건수 불일치", "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건");
 
 }
 
@@ -252,11 +253,7 @@ function runMigrateMTARawToExternal(){
     CONFIG.RAW_DATE_COLUMNS.MTA
   );
 
-  SpreadsheetApp.getUi().alert(
-    result.ok ? "✅ MTA_Raw 이관 완료" : "⚠️ MTA_Raw 이관 건수 불일치",
-    "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건",
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  toastNotice_(result.ok ? "✅ MTA_Raw 이관 완료" : "⚠️ MTA_Raw 이관 건수 불일치", "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건");
 
 }
 
@@ -276,11 +273,7 @@ function runMigrateICFunnelRawToExternal(){
     CONFIG.RAW_DATE_COLUMNS.IC_FUNNEL
   );
 
-  SpreadsheetApp.getUi().alert(
-    result.ok ? "✅ ICFunnel_Raw 이관 완료" : "⚠️ ICFunnel_Raw 이관 건수 불일치",
-    "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건",
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  toastNotice_(result.ok ? "✅ ICFunnel_Raw 이관 완료" : "⚠️ ICFunnel_Raw 이관 건수 불일치", "Source : " + result.sourceCount + "건\nWritten : " + result.writtenCount + "건");
 
 }
 
@@ -418,11 +411,7 @@ function runDeleteLegacyMainRawBackups(){
   const skipped = plan.filter(function(p){ return !p.safe; });
 
   if(toDelete.length === 0){
-    SpreadsheetApp.getUi().alert(
-      "삭제할 대상이 없습니다",
-      plan.map(function(p){ return p.label + " : " + (p.reason || "이미 없음"); }).join("\n"),
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+    toastNotice_("삭제할 대상이 없습니다", plan.map(function(p){ return p.label + " : " + (p.reason || "이미 없음"); }).join("\n"));
     return;
   }
 
@@ -462,11 +451,7 @@ function runDeleteLegacyMainRawBackups(){
 
   });
 
-  ui.alert(
-    "✅ 삭제 완료",
-    deleted.join(", ") + (skipped.length > 0 ? "\n\n건너뜀: " + skipped.map(function(p){ return p.label; }).join(", ") : ""),
-    ui.ButtonSet.OK
-  );
+  toastNotice_("✅ 삭제 완료", deleted.join(", ") + (skipped.length > 0 ? "\n\n건너뜀: " + skipped.map(function(p){ return p.label; }).join(", ") : ""));
 
 }
 
@@ -498,13 +483,9 @@ function runMigrateAllRawToExternal(){
 
   const allOk = results.every(function(r){ return r.ok; });
 
-  SpreadsheetApp.getUi().alert(
-    allOk ? "✅ Raw 전체 이관 완료" : "⚠️ 일부 이관 건수 불일치 — Log 확인 필요",
-    results.map(function(r){
+  toastNotice_(allOk ? "✅ Raw 전체 이관 완료" : "⚠️ 일부 이관 건수 불일치 — Log 확인 필요", results.map(function(r){
       return r.label + " : source=" + r.sourceCount + " / written=" + r.writtenCount +
         (r.ok ? "" : " ← MISMATCH");
-    }).join("\n"),
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+    }).join("\n"));
 
 }

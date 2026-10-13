@@ -10,9 +10,13 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-10-13)
+ * - 정보성 `getUi().alert()` 팝업을 비블로킹 `toastNotice_()`(MASTER_004)로 교체 —
+ *   OK를 눌러야 실행이 끝나 편집기에서 실행할 때 시트를 따로 열어야 했던 문제(사용자 요청).
+ *   메시지 내용은 그대로, 동작(반환값·흐름) 변경 없음.
  * v1.12.0 (2026-09-04)
  * - **성능 개선(docs/exec-plans/active/2026-09-03-performance-optimization.md #1)**:
  *   `appendNewLeads()`/`appendNewMTA()`의 `sortSheetByDate()` 호출 제거 — Master는
@@ -147,9 +151,7 @@ function appendNewLeads(silent){
     Logger.log("No new Lead records to append.");
 
     if(!silent){
-      SpreadsheetApp.getUi().alert(
-        "추가할 새 Lead 레코드가 없습니다."
-      );
+      toastNotice_("", "추가할 새 Lead 레코드가 없습니다.");
     }
 
     return { appended: 0 };
@@ -194,15 +196,11 @@ function appendNewLeads(silent){
     Logger.log("======================================");
 
     if(!silent){
-      SpreadsheetApp.getUi().alert(
-        "✅ Leads_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)",
-        "신규 반영 : " + newMaster.length + "건\n" +
+      toastNotice_("✅ Leads_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)", "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
         "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 먼저 " +
         "반영했습니다. Leads_OPS/Report 갱신은 그 작업이 끝나는 대로 자동으로 " +
-        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).",
-        SpreadsheetApp.getUi().ButtonSet.OK
-      );
+        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).");
     }
 
     return { appended: newMaster.length, backgroundSkipped: true };
@@ -223,14 +221,10 @@ function appendNewLeads(silent){
   Logger.log("======================================");
 
   if(!silent){
-    SpreadsheetApp.getUi().alert(
-      "✅ Leads_Master Append 완료 (백그라운드 처리 시작)",
-      "신규 반영 : " + newMaster.length + "건\n" +
+    toastNotice_("✅ Leads_Master Append 완료 (백그라운드 처리 시작)", "신규 반영 : " + newMaster.length + "건\n" +
       "소요 시간 : " + seconds + "s\n\n" +
       "Leads_OPS/Report 갱신은 백그라운드에서 진행됩니다 — README 탭에서 " +
-      "진행상태 확인 가능.",
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+      "진행상태 확인 가능.");
   }
 
   return { appended: newMaster.length, backgroundScheduled: true };
@@ -281,9 +275,7 @@ function appendNewMTA(silent){
     Logger.log("No new MTA records to append.");
 
     if(!silent){
-      SpreadsheetApp.getUi().alert(
-        "추가할 새 MTA 레코드가 없습니다."
-      );
+      toastNotice_("", "추가할 새 MTA 레코드가 없습니다.");
     }
 
     return { appended: 0 };
@@ -330,15 +322,11 @@ function appendNewMTA(silent){
     Logger.log("======================================");
 
     if(!silent){
-      SpreadsheetApp.getUi().alert(
-        "✅ MTA_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)",
-        "신규 반영 : " + newMaster.length + "건\n" +
+      toastNotice_("✅ MTA_Master Append 완료 (백그라운드 처리는 대기열에 등록됨)", "신규 반영 : " + newMaster.length + "건\n" +
         "소요 시간 : " + seconds + "s\n\n" +
         "다른 백그라운드 작업이 진행 중이라 이번 사이클은 Master append만 먼저 " +
         "반영했습니다. Leads_OPS/Report 갱신은 그 작업이 끝나는 대로 자동으로 " +
-        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).",
-        SpreadsheetApp.getUi().ButtonSet.OK
-      );
+        "이어서 실행됩니다 — 별도 조치 불필요(README 탭에서 진행상태 확인 가능).");
     }
 
     return { appended: newMaster.length, backgroundSkipped: true };
@@ -359,14 +347,10 @@ function appendNewMTA(silent){
   Logger.log("======================================");
 
   if(!silent){
-    SpreadsheetApp.getUi().alert(
-      "✅ MTA_Master Append 완료 (백그라운드 처리 시작)",
-      "신규 반영 : " + newMaster.length + "건\n" +
+    toastNotice_("✅ MTA_Master Append 완료 (백그라운드 처리 시작)", "신규 반영 : " + newMaster.length + "건\n" +
       "소요 시간 : " + seconds + "s\n\n" +
       "Leads_OPS/Report 갱신은 백그라운드에서 진행됩니다 — README 탭에서 " +
-      "진행상태 확인 가능.",
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+      "진행상태 확인 가능.");
   }
 
   return { appended: newMaster.length, backgroundScheduled: true };

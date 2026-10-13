@@ -10,9 +10,14 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.6.0
+ * v4.7.0
  *
  * Change Log
+ * v4.7.0 (2026-10-13)
+ * - 공용 비블로킹 알림 `toastNotice_(title, message, ss)` 신규 — 시트 토스트(10초)
+ *   + Logger 기록(편집기에서 실행하면 시트 대신 실행 로그에서 바로 보이도록).
+ *   MASTER_001/002/012의 정보성 `getUi().alert()`를 전부 이 함수로 교체(사용자 요청).
+ *   `notifyRebuildComplete_()`도 이 함수를 쓰도록 정리. 테스트 `testToastNoticeNonBlocking()`.
  * v4.6.0 (2026-10-13)
  * - rebuildLeadsMaster()/rebuildMTAMaster() 완료 알림을 블로킹 팝업
  *   (`getUi().alert`, OK를 눌러야 실행 종료)에서 비블로킹 토스트
@@ -252,11 +257,7 @@ function rebuildMTAMaster(showAlert = true) {
  */
 function notifyRebuildComplete_(title, result, ss){
 
-  const message = "Raw : " + result.raw + " / Master : " + result.master;
-
-  (ss || SpreadsheetApp.getActiveSpreadsheet()).toast(message, title, 10);
-
-  return message;
+  return toastNotice_(title, "Raw : " + result.raw + " / Master : " + result.master, ss);
 
 }
 
@@ -275,6 +276,58 @@ function testNotifyRebuildCompleteNonBlocking(){
     calls[0][2] === 10;
 
   Logger.log("testNotifyRebuildCompleteNonBlocking: " + (pass ? "PASS" : "FAIL"));
+  return pass;
+
+}
+
+
+/**
+ * ==========================================================
+ * Toast Notice (non-blocking, 공용)
+ * ==========================================================
+ *
+ * WHY
+ * getUi().alert()는 OK를 누를 때까지 실행을 붙잡는다 — 편집기에서 함수를
+ * 실행하면 시트를 따로 열어 OK를 눌러야 실행이 끝났다(2026-10-13 사용자 요청으로
+ * 정보성 팝업 전부 교체). 토스트는 즉시 반환하고, 같은 내용을 Logger에도 남겨
+ * 편집기 실행 로그에서도 보이게 한다. YES/NO 확인창(삭제 전 확인 등)은 대상 아님.
+ *
+ * @param {string} title    빈 문자열 가능
+ * @param {string} message
+ * @param {Spreadsheet=} ss 테스트 주입용, 생략 시 활성 스프레드시트
+ * @return {string} message
+ *
+ * TEST
+ * testToastNoticeNonBlocking()
+ * ==========================================================
+ */
+function toastNotice_(title, message, ss){
+
+  Logger.log((title ? title + " — " : "") + message);
+
+  (ss || SpreadsheetApp.getActiveSpreadsheet()).toast(message, title, 10);
+
+  return message;
+
+}
+
+
+function testToastNoticeNonBlocking(){
+
+  const calls = [];
+  const fakeSs = { toast: function(msg, title, sec){ calls.push([msg, title, sec]); } };
+
+  const returned = toastNotice_("", "추가할 새 MTA 레코드가 없습니다.", fakeSs);
+
+  const pass =
+    returned === "추가할 새 MTA 레코드가 없습니다." &&
+    calls.length === 1 &&
+    calls[0][0] === "추가할 새 MTA 레코드가 없습니다." &&
+    calls[0][1] === "" &&
+    calls[0][2] === 10 &&
+    testNotifyRebuildCompleteNonBlocking();
+
+  Logger.log("testToastNoticeNonBlocking: " + (pass ? "PASS" : "FAIL"));
   return pass;
 
 }

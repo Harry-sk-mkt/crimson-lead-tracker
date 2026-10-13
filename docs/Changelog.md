@@ -17,6 +17,7 @@
 - **`rebuildMTAMaster()` 완료 (15:50~16:16, 26분 12초 — 30분 실행 한도 근접)**: Raw 89,828 → Master 쓰기 89,828(3분 50초) → 완전 중복 터치 2,148행 삭제(543개 구간 `deleteRows()`, **11분**) → Master 87,680행(10-12 진단 87,275 대비 +405) → 엔진 6종 갱신(약 4분 30초). "Completed" 로그(16:11) 이후 실행 종료(16:16)까지 5분 42초 공백 — `showAlert=true` 기본값이라 시트 UI 알림창 확인 대기로 추정(미검증).
   - 7-25 실측(7분 58초, `docs/PerformanceBenchmark.md`) 대비 3배 이상. 주원인은 7-25 이후 Full Rebuild에 추가된 중복 삭제 단계(2026-08-20)가 시트 행을 직접 지우는 방식이라는 점. Raw가 더 늘면 30분 한도를 넘을 수 있음 → 개선안(미착수, 사용자 승인 필요): Master에 쓰기 전에 메모리에서 완전 중복을 걸러내 삭제 단계를 없애기.
 - **Rebuild 완료 팝업 → 토스트 (`MASTER_004_MasterBuild.js` v4.6.0, 사용자 요청)**: 위 5분 42초 공백은 `getUi().alert`가 OK 클릭까지 실행을 붙잡은 것(사용자 확인). 편집기에서 돌릴 때 시트를 열어 OK를 누르기 번거로워 `rebuildLeadsMaster()`/`rebuildMTAMaster()` 둘 다 비블로킹 `notifyRebuildComplete_()`(시트 토스트 10초)로 교체. `showAlert` 파라미터·시그니처 유지. `testNotifyRebuildCompleteNonBlocking()` 로컬 node PASS, pre-commit 검사 4종 통과, clasp push 완료. 다른 파일의 `getUi().alert`(증분 빌드·Raw 이관·재시도)는 이번 범위 밖.
+- **나머지 정보성 팝업도 전부 토스트로 (사용자 요청)**: 공용 `toastNotice_(title, message)`(`MASTER_004` v4.7.0, 시트 토스트 10초 + Logger 기록 — 편집기 실행 로그에서도 보임) 신규, `notifyRebuildComplete_()`도 이걸 사용. 교체: `MASTER_001` v1.13.0(appendNewLeads/MTA 안내 6건), `MASTER_002` v1.39.0(`runRetryPipelineTail()` 안내 2건), `MASTER_012` v1.3.0(Raw 이관·백업 삭제 결과 6건). `runDeleteLegacyMainRawBackups()`의 삭제 전 YES/NO 확인창은 안전장치라 유지 — 프로젝트에 남은 `alert`는 이것 하나. `testToastNoticeNonBlocking()` 로컬 node PASS, pre-commit 4종 통과, clasp push 완료.
 
 # Changelog — 2026-10-12
 

@@ -22,9 +22,14 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.38.0
+ * v1.39.0
  *
  * Change Log
+ * v1.39.0 (2026-10-13)
+ * - 정보성 `getUi().alert()` 팝업을 비블로킹 `toastNotice_()`(MASTER_004)로 교체 —
+ *   OK를 눌러야 실행이 끝나 편집기에서 실행할 때 시트를 따로 열어야 했던 문제(사용자 요청).
+ *   메시지 내용은 그대로, 동작(반환값·흐름) 변경 없음.
+ *   대상: `runRetryPipelineTail()` 안내 2건.
  * v1.38.0 (2026-10-12)
  * - **`writePipelineStatusToReadme_()`가 더 이상 예외를 던지지 않음** — 본문을
  *   `writePipelineStatusToReadmeCore_()`로 옮기고 원래 이름은 try/catch 래퍼로.
@@ -3055,14 +3060,12 @@ function runRetryPipelineTail(){
     .getProperty(CONFIG.PROPERTIES.PIPELINE_LAST_FAILED_TYPE);
 
   if(!failedType){
-    SpreadsheetApp.getUi().alert("재시도할 실패한 파이프라인이 없습니다.");
+    toastNotice_("", "재시도할 실패한 파이프라인이 없습니다.");
     return;
   }
 
   if(!acquirePipelineLock_(failedType)){
-    SpreadsheetApp.getUi().alert(
-      "다른 파이프라인이 이미 실행 중입니다. 완료 후 다시 시도하세요."
-    );
+    toastNotice_("", "다른 파이프라인이 이미 실행 중입니다. 완료 후 다시 시도하세요.");
     return;
   }
 
