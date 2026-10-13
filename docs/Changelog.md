@@ -1,3 +1,11 @@
+# Changelog — 2026-10-13
+
+## 10-07 복원 후 Master 재구축 실행 중 오류 (사용자 보고, 맥)
+
+- 사용자가 10-12 복구안 순서대로 실행: `rebuildLeadsMaster()` → `rebuildMTAMaster()` → `runLeadsPipelineTail()` → `runMTAPipelineTail()` → `runDiagnoseMasterRawGapAfterRestore()`. 그중 한 단계에서 `2:32:03 PM Error An unknown error has occurred, please try again later.`(Apps Script 서버 측 일반 오류, 코드 throw 아님 — 이 프로젝트 첫 기록).
+- **확인 대기(오피스에서 이어감)**: 몇 번째 단계였는지, 앞 단계 Completed 여부, 에러 직전 로그·Executions 상태/시간, 재실행 여부. rebuild 도중이면 Master 부분 쓰기 가능성 → 그 단계부터 재실행. tail 도중이면 PIPELINE_LOCK 잔존 확인(`runForceReleasePipelineLock()`). 10-12 `Service Spreadsheets timed out`과 같은 계열일 가능성(미검증).
+
+
 # Changelog — 2026-10-12
 
 ## Events_OPS 이벤트 시간 유실 재발 (사용자 보고, 이전 버전으로 복원함)
