@@ -8,7 +8,15 @@
  * data), mirrors 64_BOFU_Write.js / 74_Search_Write.js.
  *
  * Version
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-10-13)
+ * - setValues 전에 `CONTENT.DERIVED_DATE_COLUMNS`(FY/Month)를 텍스트 서식으로 고정
+ *   (`setTextFormatColumns_()`, UTIL_003) — Month "Sep 26"이 날짜로 자동 변환돼
+ *   "September 26"처럼 섞여 보이던 문제(2026-10-13 사용자 보고) 대응.
  * v1.0.1
+ * - (이전 변경 이력 기록 없음)
  * ==========================================================
  */
 
@@ -50,6 +58,8 @@ function writeContentOPS_(rows) {
   */
 
   if (rows && rows.length > 0) {
+
+    setTextFormatColumns_(sheet, CONTENT.HEADER, CONTENT.DERIVED_DATE_COLUMNS, CONTENT.ROWS.DATA_START, rows.length);
 
     sheet
       .getRange(CONTENT.ROWS.DATA_START, 1, rows.length, CONTENT.HEADER.length)

@@ -8,9 +8,13 @@
  * data), mirrors 54_Events_Write.js.
  *
  * Version
- * v1.1.1
+ * v1.2.0
  *
  * Change Log
+ * v1.2.0 (2026-10-13)
+ * - setValues 전에 `BOFU.DERIVED_DATE_COLUMNS`(FY/Month)를 텍스트 서식으로 고정
+ *   (`setTextFormatColumns_()`, UTIL_003) — Month "Sep 26"이 날짜로 자동 변환돼
+ *   "September 26"처럼 섞여 보이던 문제(2026-10-13 사용자 보고) 대응.
  * v1.1.1 (2026-08-09)
  * - 파일명 변경(신규 네이밍 컨벤션 적용) — 기존 `64_BOFU_Write.js` → 신규 `BOFU_005_Write.js`, 코드 내용 변경 없음.
  * v1.1.0 (2026-07-24)
@@ -60,6 +64,8 @@ function writeBOFUOPS_(rows) {
   */
 
   if (rows && rows.length > 0) {
+
+    setTextFormatColumns_(sheet, BOFU.HEADER, BOFU.DERIVED_DATE_COLUMNS, BOFU.ROWS.DATA_START, rows.length);
 
     sheet
       .getRange(BOFU.ROWS.DATA_START, 1, rows.length, BOFU.HEADER.length)

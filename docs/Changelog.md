@@ -1,5 +1,11 @@
 # Changelog — 2026-10-13
 
+## OPS 시트 Month 열 "Sep 26" / "September 26" 혼재 (사용자 보고, Events_OPS J열)
+
+- **원인(추정)**: `getMonthText()`는 "Sep 26" 같은 문자열을 만드는데, OPS writer가 서식 지정 없이 `setValues`로 써서 Sheets가 일부 값을 날짜로 자동 변환 → 변환된 칸은 "September 26"처럼 날짜 서식으로 표시. 어떤 값은 변환되고 어떤 값은 안 되는지는 확인 못 함. `sheet.clear()`가 매 build마다 서식까지 지우므로 텍스트 서식이 유지될 수도 없었음.
+- **수정**: 공용 `setTextFormatColumns_()`(`UTIL_003_SheetChunkIO.js` v1.1.0) 신규 — `clear()` 이후·`setValues` 이전에 `*.DERIVED_DATE_COLUMNS`(FY/Month) 데이터 행을 텍스트("@")로 고정. Events/BOFU/Content/Search 네 writer 모두 적용(`EVENTS_005` v1.3.0, `BOFU_005` v1.2.0, `CONTENT_005` v1.1.0, `SEARCH_005` v1.2.0) — 넷 다 같은 `getMonthText()`라 같은 위험. 코드에서 OPS 시트의 Month를 다시 읽는 곳은 없음(영향 범위 확인). `testSetTextFormatColumns()` 로컬 node PASS, pre-commit 4종 통과, clasp push 완료.
+- 기존 시트는 다음 build(Import tail·2시간 주기 Revenue 갱신)에서 다시 쓰일 때 정리됨. 바로 보려면 `buildEventsOPS()` 수동 실행.
+
 ## 10-07 복원 후 Master 재구축 실행 중 오류 (사용자 보고, 맥)
 
 - 사용자가 10-12 복구안 순서대로 실행: `rebuildLeadsMaster()` → `rebuildMTAMaster()` → `runLeadsPipelineTail()` → `runMTAPipelineTail()` → `runDiagnoseMasterRawGapAfterRestore()`. 그중 한 단계에서 `2:32:03 PM Error An unknown error has occurred, please try again later.`(Apps Script 서버 측 일반 오류, 코드 throw 아님 — 이 프로젝트 첫 기록).
@@ -18,6 +24,8 @@
   - 7-25 실측(7분 58초, `docs/PerformanceBenchmark.md`) 대비 3배 이상. 주원인은 7-25 이후 Full Rebuild에 추가된 중복 삭제 단계(2026-08-20)가 시트 행을 직접 지우는 방식이라는 점. Raw가 더 늘면 30분 한도를 넘을 수 있음 → 개선안(미착수, 사용자 승인 필요): Master에 쓰기 전에 메모리에서 완전 중복을 걸러내 삭제 단계를 없애기.
 - **Rebuild 완료 팝업 → 토스트 (`MASTER_004_MasterBuild.js` v4.6.0, 사용자 요청)**: 위 5분 42초 공백은 `getUi().alert`가 OK 클릭까지 실행을 붙잡은 것(사용자 확인). 편집기에서 돌릴 때 시트를 열어 OK를 누르기 번거로워 `rebuildLeadsMaster()`/`rebuildMTAMaster()` 둘 다 비블로킹 `notifyRebuildComplete_()`(시트 토스트 10초)로 교체. `showAlert` 파라미터·시그니처 유지. `testNotifyRebuildCompleteNonBlocking()` 로컬 node PASS, pre-commit 검사 4종 통과, clasp push 완료. 다른 파일의 `getUi().alert`(증분 빌드·Raw 이관·재시도)는 이번 범위 밖.
 - **나머지 정보성 팝업도 전부 토스트로 (사용자 요청)**: 공용 `toastNotice_(title, message)`(`MASTER_004` v4.7.0, 시트 토스트 10초 + Logger 기록 — 편집기 실행 로그에서도 보임) 신규, `notifyRebuildComplete_()`도 이걸 사용. 교체: `MASTER_001` v1.13.0(appendNewLeads/MTA 안내 6건), `MASTER_002` v1.39.0(`runRetryPipelineTail()` 안내 2건), `MASTER_012` v1.3.0(Raw 이관·백업 삭제 결과 6건). `runDeleteLegacyMainRawBackups()`의 삭제 전 YES/NO 확인창은 안전장치라 유지 — 프로젝트에 남은 `alert`는 이것 하나. `testToastNoticeNonBlocking()` 로컬 node PASS, pre-commit 4종 통과, clasp push 완료.
+- **`runMTAPipelineTail()` 결과 (16:17~16:24, Completed)**: 완전 중복 터치 0건(rebuild에서 이미 정리), MTA Funnel Sync Leads_OPS 36,844건 갱신(Not found 117). 복구된 터치가 반영돼 OPS 신규 행 — Events 1 / BOFU 8 / Search 3 / Content 23. Events_OPS Manual 감소 없음(Time 73→73). ACQ 273·NewP1 99행, **S&M_REP 이번엔 정상 생성**(Leads tail 때 실패분 해소). 그림자 diff는 Target 72·FY_REP 677로 Leads tail 때와 동일 — 실제 출력(full)엔 영향 없음, 복구 완료 후 별도 확인.
+- **✅ 10-07 복원분 복구 완료 (16:27 진단)**: LEADS Master 37,430 / MTA Master 87,680 — 둘 다 "Raw 마지막 6000행의 Lead ID가 전부 Master에 있음, 누락 없음". 남은 후속: (1) 그림자 diff 확대(Target 72·FY_REP 677) 원인 확인, (2) `rebuildMTAMaster()` 26분 → 중복 삭제 단계 메모리 처리로 단축(승인 필요).
 
 # Changelog — 2026-10-12
 

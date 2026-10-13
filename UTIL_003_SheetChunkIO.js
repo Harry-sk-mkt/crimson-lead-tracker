@@ -23,7 +23,16 @@
  * Shared Component (Master Build / OPS Build / Raw Migration 등에서 공용)
  *
  * Version
+ * v1.1.0
+ *
+ * Change Log
+ * v1.1.0 (2026-10-13)
+ * - `setTextFormatColumns_()` 신규 — 지정 컬럼의 데이터 행을 텍스트 서식("@")으로
+ *   고정. OPS 시트 Month("Sep 26")가 setValues 시 Sheets에 의해 날짜로 자동 변환돼
+ *   "September 26"처럼 섞여 보이던 문제(2026-10-13 사용자 보고, Events_OPS J열) 대응.
+ *   BOFU/Content/Search/Events OPS writer가 공용으로 사용. 테스트 `testSetTextFormatColumns()`.
  * v1.0.0
+ * - 최초 작성.
  * ==========================================================
  */
 
@@ -191,5 +200,73 @@ function setRangeValuesChunked_(sheet, startRow, startCol, rows, numCols, chunkS
     sheet.getRange(range.startRow, startCol, range.numRows, numCols).setValues(chunkRows);
 
   });
+
+}
+
+
+/**
+ * ==========================================================
+ * Set Text Format Columns
+ * ==========================================================
+ *
+ * WHY
+ * "Sep 26" 같은 문자열을 setValues로 쓰면 Sheets가 날짜로 자동 변환한다
+ * (2026-10-13 Events_OPS Month 열에 "Sep 26"/"September 26" 혼재). 쓰기 전에
+ * 해당 컬럼을 텍스트 서식으로 고정해 값이 문자열 그대로 남게 한다.
+ * sheet.clear()가 서식도 지우므로 반드시 clear() 이후, setValues 이전에 호출.
+ *
+ * @param {Sheet} sheet
+ * @param {string[]} header
+ * @param {string[]} columnNames  header에 없는 이름은 무시
+ * @param {number} startRow
+ * @param {number} numRows
+ * @return {number[]} 서식을 적용한 1-based 컬럼 번호
+ *
+ * TEST
+ * testSetTextFormatColumns()
+ * ==========================================================
+ */
+function setTextFormatColumns_(sheet, header, columnNames, startRow, numRows){
+
+  if(!numRows || numRows <= 0){
+    return [];
+  }
+
+  const applied = [];
+
+  columnNames.forEach(function(name){
+    const idx = header.indexOf(name);
+    if(idx < 0) return;
+    sheet.getRange(startRow, idx + 1, numRows, 1).setNumberFormat("@");
+    applied.push(idx + 1);
+  });
+
+  return applied;
+
+}
+
+
+function testSetTextFormatColumns(){
+
+  const calls = [];
+  const fakeSheet = {
+    getRange: function(r, c, nr, nc){
+      return { setNumberFormat: function(fmt){ calls.push([r, c, nr, nc, fmt]); } };
+    }
+  };
+
+  const header = ["Lead Source Detail", "FY", "Event Date", "Month"];
+  const applied = setTextFormatColumns_(fakeSheet, header, ["FY", "Month", "없는컬럼"], 3, 375);
+  const none = setTextFormatColumns_(fakeSheet, header, ["Month"], 3, 0);
+
+  const pass =
+    JSON.stringify(applied) === "[2,4]" &&
+    none.length === 0 &&
+    calls.length === 2 &&
+    JSON.stringify(calls[0]) === JSON.stringify([3, 2, 375, 1, "@"]) &&
+    JSON.stringify(calls[1]) === JSON.stringify([3, 4, 375, 1, "@"]);
+
+  Logger.log("testSetTextFormatColumns: " + (pass ? "PASS" : "FAIL"));
+  return pass;
 
 }
