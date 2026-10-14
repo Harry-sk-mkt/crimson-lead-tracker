@@ -8,9 +8,14 @@
  * data), mirrors 23_OPS_Write.js.
  *
  * Version
- * v1.3.0
+ * v1.4.0
  *
  * Change Log
+ * v1.4.0 (2026-10-14)
+ * - 쓰기 직후 검증 `verifyEventsOPSWrite_()` + 순수 함수 `countEventsWriteShortfall_()`
+ *   (`testCountEventsWriteShortfall()`) 신규 — setValues 후 flush·재읽기해
+ *   `EVENTS.WRITE_VERIFY_COLUMNS`(Event Date/Time) 칸 수가 쓴 값보다 적으면 그 컬럼만
+ *   1회 재쓰기, 결과를 로그로 남김. 10-13 23:11 쓰기 직후 유실(사용자 취침·다른 실행 없음) 대응.
  * v1.3.0 (2026-10-13)
  * - setValues 전에 `EVENTS.DERIVED_DATE_COLUMNS`(FY/Month)를 텍스트 서식으로 고정
  *   (`setTextFormatColumns_()`, UTIL_003) — Month "Sep 26"이 날짜로 자동 변환돼
@@ -81,6 +86,8 @@ function writeEventsOPS_(rows) {
       .getRange(EVENTS.ROWS.DATA_START, 1, rows.length, EVENTS.HEADER.length)
       .setValues(rows);
 
+    verifyEventsOPSWrite_(sheet, rows);
+
   }
 
   /*
@@ -129,6 +136,101 @@ function writeEventsOPS_(rows) {
   */
 
   applyEventsOPSStyle(sheet);
+
+}
+
+
+/**
+ * ==========================================================
+ * Count Write Shortfall (Pure)
+ *
+ * WHY (2026-10-14)
+ * 10-13 23:11 build는 메모리에 Event Date 374 / Time 73을 갖고 setValues 했는데,
+ * 다음 build(01:13)는 Event Date 31 / Time 0을 읽었고 그 사이 Events_OPS를 쓴
+ * 실행도 사람 편집도 없었다(버전 기록 23:13, 사용자 취침). 10-08·10-12(Leads_OPS
+ * Create Date)도 같은 모양 — "쓴 값이 시트에 안 남음"을 쓰기 직후에 직접 확인한다.
+ *
+ * @param {Array<Array>} written  setValues에 넘긴 행들
+ * @param {Array<Array>} readBack 같은 범위를 다시 읽은 값(열 하나씩이 아니라 전체 행)
+ * @param {Array<number>} colIdxs 검사할 0-based 컬럼 인덱스
+ * @return {Array<{col:number, written:number, read:number}>} 부족한 컬럼만
+ * ==========================================================
+ */
+function countEventsWriteShortfall_(written, readBack, colIdxs) {
+
+  const filled = function (v) { return v !== "" && v !== null && v !== undefined; };
+
+  return colIdxs.map(function (c) {
+    const w = written.filter(function (r) { return filled(r[c]); }).length;
+    const r = readBack.filter(function (row) { return filled(row[c]); }).length;
+    return { col: c, written: w, read: r };
+  }).filter(function (x) { return x.read < x.written; });
+
+}
+
+
+function testCountEventsWriteShortfall() {
+
+  const written = [[1, "a", new Date(2026, 0, 1)], [2, "", new Date(2026, 0, 2)], [3, "c", ""]];
+  const okRead = written.map(function (r) { return r.slice(); });
+  const badRead = [[1, "a", ""], [2, "", ""], [3, "c", ""]];
+
+  const none = countEventsWriteShortfall_(written, okRead, [1, 2]);
+  const lost = countEventsWriteShortfall_(written, badRead, [1, 2]);
+
+  const pass =
+    none.length === 0 &&
+    lost.length === 1 && lost[0].col === 2 && lost[0].written === 2 && lost[0].read === 0;
+
+  Logger.log("testCountEventsWriteShortfall: " + (pass ? "PASS" : "FAIL"));
+  return pass;
+
+}
+
+
+/**
+ * ==========================================================
+ * Verify Events_OPS Write (재읽기 + 부족 컬럼 1회 재쓰기)
+ *
+ * 로그만 남기고 build를 멈추지 않는다 — 재쓰기 후에도 부족하면 다음 build의
+ * Manual 가드가 잡는다(EVENTS_007_ManualBackup.js).
+ * ==========================================================
+ */
+function verifyEventsOPSWrite_(sheet, rows) {
+
+  const colIdxs = EVENTS.WRITE_VERIFY_COLUMNS
+    .map(function (name) { return EVENTS.HEADER.indexOf(name); })
+    .filter(function (i) { return i >= 0; });
+
+  const readRange = function () {
+    SpreadsheetApp.flush();
+    return sheet.getRange(EVENTS.ROWS.DATA_START, 1, rows.length, EVENTS.HEADER.length).getValues();
+  };
+
+  const label = function (list) {
+    return list.map(function (x) { return EVENTS.HEADER[x.col] + " " + x.read + "/" + x.written; }).join(" | ");
+  };
+
+  const shortfall = countEventsWriteShortfall_(rows, readRange(), colIdxs);
+
+  if (shortfall.length === 0) {
+    Logger.log("[Events_OPS 쓰기 검증] 정상 — " + EVENTS.WRITE_VERIFY_COLUMNS.join(", "));
+    return;
+  }
+
+  Logger.log("⚠️ [Events_OPS 쓰기 검증] 쓴 값이 시트에 덜 남음 — " + label(shortfall) + " → 해당 컬럼 재쓰기");
+
+  shortfall.forEach(function (x) {
+    sheet
+      .getRange(EVENTS.ROWS.DATA_START, x.col + 1, rows.length, 1)
+      .setValues(rows.map(function (r) { return [r[x.col]]; }));
+  });
+
+  const after = countEventsWriteShortfall_(rows, readRange(), colIdxs);
+
+  Logger.log(after.length === 0
+    ? "[Events_OPS 쓰기 검증] 재쓰기 후 정상"
+    : "⚠️ [Events_OPS 쓰기 검증] 재쓰기 후에도 부족 — " + label(after));
 
 }
 

@@ -26,9 +26,12 @@
  * TEST: testFindLostManualCells()
  *
  * Version
- * v1.0.0
+ * v1.1.0
  *
  * Change Log
+ * v1.1.0 (2026-10-14)
+ * - `runAuthorizeMailApp()` 신규 — 가드 메일이 "MailApp.sendEmail 권한 없음"으로
+ *   10-14 01:13~14:55 내내 발송 실패. 편집기에서 한 번 실행해 권한 승인 + 테스트 메일 1통.
  * v1.0.0 (2026-10-12)
  * - 최초 구현.
  * ==========================================================
@@ -341,5 +344,30 @@ function testFindLostManualCells() {
   Logger.log("testFindLostManualCells: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(r));
 
   return pass;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEMP — MailApp 권한 승인 (편집기에서 1회 수동 실행)
+ *
+ * WHY (2026-10-14)
+ * 트리거 실행은 새 권한(script.send_mail)을 스스로 승인받지 못해 가드 메일이
+ * 계속 실패했다. 편집기에서 이 함수를 실행하면 승인 창이 뜨고, 승인 후 실행 계정
+ * 주소로 테스트 메일 1통을 보낸다 — 이후 트리거의 가드 메일도 발송된다.
+ * ==========================================================
+ */
+function runAuthorizeMailApp() {
+
+  const to = Session.getEffectiveUser().getEmail();
+
+  MailApp.sendEmail(
+    to,
+    "[Lead Tracker] 메일 권한 승인 테스트",
+    "Events_OPS Manual 가드 알림 메일 권한이 승인됐습니다. 이 메일은 무시하셔도 됩니다."
+  );
+
+  Logger.log("✅ MailApp 권한 승인 완료 — 테스트 메일 발송: " + to);
 
 }

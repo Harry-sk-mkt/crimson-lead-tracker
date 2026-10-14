@@ -12,9 +12,12 @@
  * OPS.SHEET.OPS(Leads_OPS)를 그대로 참조 — 여기서 재정의하지 않는다.
  *
  * Version
- * v1.12.0
+ * v1.13.0
  *
  * Change Log
+ * v1.13.0 (2026-10-14)
+ * - `WRITE_VERIFY_COLUMNS`(["Event Date","Time"]) 신규 — `writeEventsOPS_()` 쓰기 직후
+ *   재읽기 검증 대상(`EVENTS_005_Write.js` v1.4.0). 10-13 23:11 쓰기 직후 유실 대응.
  * v1.12.0 (2026-10-12)
  * - `SHEET.MANUAL_BACKUP`, `MANUAL_GUARD` 신규 — Manual 컬럼 백업·유실 감지
  *   (`EVENTS_007_ManualBackup.js`). 10-08 Event Date·Time 유실(원인 미확정) 대응.
@@ -161,6 +164,10 @@ const EVENTS = {
     MAX_LOST_CELLS: 5
 
   },
+
+  // 2026-10-14 — writeEventsOPS_() 쓰기 직후 재읽기 검증 대상. 10-13 23:11 build가
+  // 메모리엔 Event Date 374 / Time 73을 갖고 썼는데 시트엔 빈칸으로 남은 사고 대응.
+  WRITE_VERIFY_COLUMNS: ["Event Date", "Time"],
 
   /*
   ==========================================================
