@@ -1,3 +1,19 @@
+# Changelog — 2026-10-14
+
+## Target 재산출 시뮬레이션 결과 (`runSimulateTargetRecalc()`, 사용자 실행)
+
+- **[1] 방법 검증 통과**: FY26 기간 재계산 = Target_Engine Block C 현재값(Seminar 879.7 / Webinar 1129.5 / BOFU 217.9 / Search 254.5 / Content 1145.4) 완전 일치 → 기간 교체 방식 신뢰 가능.
+- **[2] 12개월 기준 세그먼트 목표(총합 3627 유지)**: Seminar 880→742(-137), Content 1145→1304(+159), Search 255→236, BOFU 218→215, Webinar 1129 동일. 근거 New P1(FY26/12개월/3개월): Seminar 553/510/**11**, Webinar 710/776/276, BOFU 137/148/45, Search 160/162/49, Content 720/896/343.
+- **[3] YTD(08-03~10-11, 10주)**: 목표 663 vs 실제 580 = 87.5%. Seminar **6.3%**(176 vs 11), Webinar 104%, BOFU 99%, Search 65%, Content 150%.
+- **[4] FY27 끝 예상**: (a) 시즌성 반영 3324, (b) 3개월 속도 2894 — 둘 다 3627 미달. 부족분은 거의 Seminar(목표 880 vs 예상 46~55). Seminar 제외 4개 그룹은 목표 2747 vs (a) 3269 / (b) 2848로 목표 이상.
+- **[5] CPNP1(NZD) 현재목표 / FY26 / 12개월 / 3개월 / YTD**: Seminar 1013/120/123/553/615, Webinar 198/262/273/317/332, BOFU 680/494/467/462/702, Search 902/583/536/320/360, Content 557/446/360/258/244. 현재 목표(Block 0 수동 Spent 기반)와 Ad_Spend_Cache 기반 실측의 소스가 달라 직접 비교엔 한계 — 특히 Seminar 목표 1013 vs FY26 실측 120은 소스 차이로 보임.
+- 사용자 결정 대기: 구조 12개월 교체 여부, 3627 유지 여부, Seminar 급감이 실제(오프라인 이벤트 축소)인지 분류 문제인지 확인.
+- **사용자 답(같은 날)**: Seminar 급감은 실제(제주 세미나 성과 부진) — 분류 문제 아님. 올해 엑스포 2회(1월·7월)로 Seminar 목표는 메워질 것으로 판단 → Seminar 때문에 목표를 바꾸지 않음.
+- 사용자 질문 ① "3627 = 전년 New P1 기여 매출을 올해 New P1으로 치환한 것 — 이번 FY 타겟 매출이 previous/new로 나뉘어 있나?" → 확인: 엔진은 New/Pipeline 2트랙 구조지만 FY27은 Block 0 `PIPELINE_SHARE_OVERRIDE`=0으로 **매출 타겟 전액을 New 트랙에 배정**(설계 문서 §6, 2026-08-27). 즉 현재 FY27 타겟 매출은 previous/new로 나뉘어 있지 않음.
+- 사용자 질문 ② CPNP1 출처 → 확인: 현재 CPNP1 목표 = Block 0에 사용자가 7월에 직접 취합해 입력한 FY26 세그먼트별 월별 Spent ÷ FY26 New P1 × 개선계수(`computeCPNP1BenchmarkByGroup_()`, v1.19.0). 시뮬레이션의 FY26/12개월/3개월/YTD 값은 `Ad_Spend_Cache`(Meta·Naver Search·Kakao API 자동 수집 광고비) 기준. 둘의 Seminar·Webinar 차이가 커서 수동 취합에 광고비 외 비용(오프라인 행사비 등)이 포함됐는지 확인 필요.
+- 사용자 답: 3627은 "작년 New P1 수를 정확히 산출하기 어려워서" 전사 단일 $/New P1로 계산한 것, 계산식 기록 여부 문의 → 기록 있음(08-27 항목): **3627 = $12,792,304.48(FY27 Revenue 타겟 − Referral − Upsell) ÷ $3,527.16(FY26 전사 단일 $/New P1)**. 단 $3,527.16의 분자(FY26 매출 범위)·분모(FY26 New P1 수)는 기록 없음.
+- **CPNP1 분자 실제 광고비로 교체(사용자 확정 "실제 광고비로 사용하면 될 것 같아")**: `TARGET_001_Engine.js` v1.32.0 — `refreshTargetEngine_()`가 CPNP1 벤치마크(Block 0 15~19행 + Block A) 계산에 Block 0 섹션 4 수동 Spent 대신 `Ad_Spend_Cache` FY26 값을 사용. 신규 `buildMonthlySegmentSpentFromCacheMap_()` + `testBuildMonthlySegmentSpentFromCacheMap()`(로컬 node PASS). Block 0 섹션 4는 ACQ_REP Target Spent(`computeReportTargetLookupFromInputs_()`)가 계속 쓰므로 유지 — 같은 소스 통일 여부는 후속 확인.
+
 # Changelog — 2026-10-13
 
 ## Target 재산출 검토 착수 — 이동평균 설계 여부 확인 (사용자 요청)

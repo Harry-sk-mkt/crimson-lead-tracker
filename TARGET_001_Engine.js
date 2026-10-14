@@ -22,9 +22,15 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.31.0
+ * v1.32.0
  *
  * Change Log
+ * v1.32.0 (2026-10-14)
+ * - CPNP1 벤치마크(Block 0 CPNP1_BENCHMARK + Block A) 분자를 Block 0 수동 취합 Spent에서
+ *   `Ad_Spend_Cache`(실제 광고비)로 교체 — 신규 `buildMonthlySegmentSpentFromCacheMap_()`
+ *   + `testBuildMonthlySegmentSpentFromCacheMap()`. Target 재산출 시뮬레이션에서 두 소스가
+ *   세그먼트별로 크게 어긋나 사용자가 "실제 광고비로 사용" 확정. Block 0 섹션 4(수동 Spent)
+ *   는 ACQ_REP Target Spent(`computeReportTargetLookupFromInputs_()`)가 계속 사용.
  * v1.31.0 (2026-09-17)
  * - **`computeTargetLeadsOPSAggregates_()` 증분화 — 그림자 모드 도입
  *   (`docs/OpenItems.md` #42)** — `refreshTargetEngine_()`가 매번
@@ -1914,6 +1920,64 @@ function buildSpentByGroupFYMonthFromManualInput_(monthlySegmentSpent, fy){
   });
 
   return result;
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Monthly Segment Spent From Ad Spend Cache (CPNP1 벤치마크 분자 — 2026-10-14)
+ *
+ * WHY (2026-10-14, 사용자 확정 "실제 광고비로 사용")
+ * Target 재산출 시뮬레이션(TEMPQA_072)에서 CPNP1 목표의 분자인 Block 0 수동 취합
+ * Spent와 Ad_Spend_Cache(Meta·Naver Search·Kakao API 자동 수집 광고비) 기준 실측이
+ * 세그먼트마다 크게 어긋남(Seminar 목표 1013 vs 캐시 FY26 120, Webinar 198 vs 262)을
+ * 확인. Target_REP 실적 CPNP1과 ACQ_REP은 이미 캐시 기준이라 목표도 같은 소스로 통일한다.
+ * readTargetEngineInputs_().monthlySegmentSpent와 같은 group -> {month: spent} 형태로
+ * 돌려줘 computeCPNP1BenchmarkByGroup_()/buildSpentByGroupFYMonthFromManualInput_()를
+ * 그대로 재사용한다.
+ *
+ * @param {Object} spendMap       readAdSpendCacheMap_() 결과 ("FY|Month|Segment" -> spent)
+ * @param {number} fy             CONFIG.TARGET.P1_VALUE_FY
+ * @param {Array<string>} groups  CONFIG.TARGET.GROUP_ORDER
+ * @param {Array<string>} months  CONFIG.ACQ.FISCAL_MONTH_ORDER
+ * @return {Object}  group -> {month: spent} (캐시에 없는 달은 0)
+ * ==========================================================
+ */
+function buildMonthlySegmentSpentFromCacheMap_(spendMap, fy, groups, months){
+
+  const result = {};
+
+  groups.forEach(function(group){
+    result[group] = {};
+    months.forEach(function(month){
+      result[group][month] = Number(spendMap[fy + "|" + month + "|" + group]) || 0;
+    });
+  });
+
+  return result;
+
+}
+
+
+/**
+ * Test: buildMonthlySegmentSpentFromCacheMap_()
+ */
+function testBuildMonthlySegmentSpentFromCacheMap(){
+
+  const spendMap = { "26|AUG|Seminar": 100, "26|SEP|Seminar": 50, "27|AUG|Seminar": 999, "26|AUG|Webinar": "20" };
+
+  const result = buildMonthlySegmentSpentFromCacheMap_(spendMap, 26, ["Seminar", "Webinar"], ["AUG", "SEP"]);
+
+  const pass =
+    result.Seminar.AUG === 100 &&
+    result.Seminar.SEP === 50 &&        // 다른 FY(27) 값은 섞이지 않음
+    result.Webinar.AUG === 20 &&        // 문자열 숫자도 숫자로
+    result.Webinar.SEP === 0;           // 캐시에 없는 달은 0
+
+  Logger.log("Result: " + JSON.stringify(result));
+  Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+  return pass;
 
 }
 
@@ -4289,15 +4353,23 @@ function refreshTargetEngine_(){
     );
   }
 
+  // 2026-10-14 — CPNP1 벤치마크 분자를 Block 0 수동 취합 Spent에서 Ad_Spend_Cache(실제
+  // 광고비)로 교체(사용자 확정). Block 0 섹션 4(수동 Spent)는 ACQ_REP Target Spent가 아직
+  // 쓰므로 그대로 둔다.
+  const cacheSegmentSpent = buildMonthlySegmentSpentFromCacheMap_(
+    readAdSpendCacheMap_(), CONFIG.TARGET.P1_VALUE_FY,
+    CONFIG.TARGET.GROUP_ORDER, CONFIG.ACQ.FISCAL_MONTH_ORDER
+  );
+
   const spentByGroupFYMonth = buildSpentByGroupFYMonthFromManualInput_(
-    inputs.monthlySegmentSpent, CONFIG.TARGET.P1_VALUE_FY
+    cacheSegmentSpent, CONFIG.TARGET.P1_VALUE_FY
   );
 
   // Block 0의 "절대 안 덮어씀" 원칙의 유일한 예외 — CPNP1_BENCHMARK 섹션(rows 14~19)은
   // 2026-07-30부터 수동 입력이 아니라 "월별 Segment Spent 합 ÷ FY26 Segment New P1 합"
   // 계산 결과라 매 refresh마다 여기서 덮어쓴다(사용자 확정, 00_Config.js 주석 참고).
   const cpnp1BenchmarkByGroup = computeCPNP1BenchmarkByGroup_(
-    inputs.monthlySegmentSpent, leadsAgg.newP1CountByGroup, CONFIG.TARGET.GROUP_ORDER
+    cacheSegmentSpent, leadsAgg.newP1CountByGroup, CONFIG.TARGET.GROUP_ORDER
   );
   writeTargetEngineCPNP1BenchmarkValues_(sheet, cpnp1BenchmarkByGroup);
 
