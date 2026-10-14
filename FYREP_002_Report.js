@@ -32,9 +32,12 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v4.2.0
+ * v4.3.0
  *
  * Change Log
+ * v4.3.0 (2026-10-14)
+ * - `FY_REP_TOP_PERCENT_COLUMNS`/`FY_REP_TOP_PERCENT`(0.3)/`FY_REP_TOP_PERCENT_COLOR`(#01EF18)
+ *   신규 — 세그먼트 Revenue 상위 30% 강조 설정(`FYREP_003_Styles.js` v4.2.0).
  * v4.2.0 (2026-09-05)
  * - **`onFYReportEdit_()`에 `isPipelineTailRunning_()` 가드 추가**
  *   (`docs/OpenItems.md` #46) — installable onEdit이 파이프라인 tail 자신의
@@ -117,6 +120,13 @@ const FY_REP_SUBTOTAL_RANGE_ROW_COUNT = 100000;
 // FYREP_002_Report.js(v3.x, Sum 컬럼 하이라이트)가 쓰던 값 그대로 재사용
 // (ACQ_REP의 #C6E0B4와는 별개 — FY_REP 자체 관례 유지, 2026-08-20).
 const FY_REP_TARGET_ACHIEVED_COLOR = "#01EF18";
+
+// 세그먼트별 Revenue 컬럼 상위 30% 셀 강조(2026-10-14 사용자 요청, 색상 #01ef18 지정 —
+// 위 Target 달성 색과 같은 값). 컬럼마다, 화면에 쓴 전체 FY×Month 행 중 0보다 큰 값만
+// 모수로 삼는다(ACQ_REP 세그먼트 percentile 강조와 같은 관례).
+const FY_REP_TOP_PERCENT_COLUMNS = ["seminar", "webinar", "bofu", "search", "content", "referral"];
+const FY_REP_TOP_PERCENT = 0.3;
+const FY_REP_TOP_PERCENT_COLOR = "#01EF18";
 
 
 /**

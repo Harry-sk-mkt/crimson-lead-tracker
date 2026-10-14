@@ -1,5 +1,11 @@
 # Changelog — 2026-10-14
 
+## FY_REP 세그먼트 Revenue 상위 30% 강조 (사용자 요청)
+
+- 요청: FY_REP의 SeminarRev / WB Rev / BOFU Rev / SA Rev / Content Rev / Referral 컬럼에서 Top 30% 셀을 #01ef18로 색칠.
+- 구현: `FYREP_003_Styles.js` v4.2.0 `highlightFYRepTopPercentCells_()` — 컬럼마다 화면에 쓴 전체 FY×Month 행 중 0보다 큰 값의 PERCENTILE 0.7(Sheets PERCENTILE.INC와 같은 선형 보간) 이상 셀에 배경색. 순수 함수 `computeTopPercentThreshold_()` + `testComputeTopPercentThreshold()` 로컬 node PASS. 설정은 `FYREP_002_Report.js` v4.3.0 `FY_REP_TOP_PERCENT_COLUMNS`/`FY_REP_TOP_PERCENT`(0.3)/`FY_REP_TOP_PERCENT_COLOR`(#01EF18, 기존 Target 달성 색과 같은 값). Generate 시 데이터 영역 `clear()` 후 다시 칠하므로 이전 강조는 남지 않음.
+- 기준 선택(내 판단, 사용자 확인 대기): 모수 = Start~End FY 전체 월(FY별 따로 아님), 0원 달 제외.
+
 ## Target 재산출 시뮬레이션 결과 (`runSimulateTargetRecalc()`, 사용자 실행)
 
 - **[1] 방법 검증 통과**: FY26 기간 재계산 = Target_Engine Block C 현재값(Seminar 879.7 / Webinar 1129.5 / BOFU 217.9 / Search 254.5 / Content 1145.4) 완전 일치 → 기간 교체 방식 신뢰 가능.

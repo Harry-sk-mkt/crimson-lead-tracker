@@ -12,9 +12,13 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v4.1.0
+ * v4.2.0
  *
  * Change Log
+ * v4.2.0 (2026-10-14)
+ * - 세그먼트 Revenue 컬럼(SeminarRev/WB Rev/BOFU Rev/SA Rev/Content Rev/Referral) 상위 30%
+ *   셀 #01EF18 강조(사용자 요청) — `highlightFYRepTopPercentCells_()` + 순수
+ *   `computeTopPercentThreshold_()`(0 초과 값의 PERCENTILE 0.7, `testComputeTopPercentThreshold()`).
  * v4.1.0 (2026-08-20)
  * - 3행(SUBTOTAL)/4행(헤더 라벨) 분리에 맞춰 스타일 분리 적용 — 3행은
  *   굵게+기울임+숫자 서식(컬럼 format), 4행은 굵게만. 테두리 범위를
@@ -79,6 +83,7 @@ function applyFYReportStyles_(sheet, columns, orderedRows){
       .setBorder(true, true, true, true, true, true);
 
     highlightFYRepTargetAchievedRows_(sheet, columns, orderedRows, dataStartRow);
+    highlightFYRepTopPercentCells_(sheet, columns, orderedRows, dataStartRow);
 
   }
 
@@ -120,6 +125,85 @@ function highlightFYRepTargetAchievedRows_(sheet, columns, orderedRows, dataStar
 
     sheet.getRange(sheetRow, totalRevCol).setBackground(FY_REP_TARGET_ACHIEVED_COLOR);
     sheet.getRange(sheetRow, targetPctCol).setBackground(FY_REP_TARGET_ACHIEVED_COLOR);
+
+  });
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Top-Percent Threshold (순수 함수)
+ *
+ * WHY (2026-10-14, 사용자 요청 — 세그먼트 Revenue 컬럼 상위 30% 강조)
+ * 0보다 큰 값만 모아 Sheets PERCENTILE(=PERCENTILE.INC, 선형 보간)과 같은
+ * 방식으로 (1 - topPercent) 분위수를 구한다. 이 값 이상이면 "상위 topPercent".
+ * ACQ_REP의 buildSegmentPercentileHighlightFormula_()와 같은 정의(>0, PERCENTILE).
+ *
+ * @param {Array<*>} values
+ * @param {number} topPercent  0~1 (0.3 = 상위 30%)
+ * @return {number|null}  양수 값이 없으면 null
+ * ==========================================================
+ */
+function computeTopPercentThreshold_(values, topPercent){
+
+  const nums = values
+    .map(function(v){ return Number(v); })
+    .filter(function(v){ return isFinite(v) && v > 0; })
+    .sort(function(a, b){ return a - b; });
+
+  if(nums.length === 0) return null;
+
+  const pos = (1 - topPercent) * (nums.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+
+  return nums[lo] + (nums[hi] - nums[lo]) * (pos - lo);
+
+}
+
+
+function testComputeTopPercentThreshold(){
+
+  // PERCENTILE({10,20,...,100}, 0.7) = 73
+  const t = computeTopPercentThreshold_([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 0, ""], 0.3);
+  const single = computeTopPercentThreshold_([0, 500, ""], 0.3);
+  const none = computeTopPercentThreshold_([0, "", null], 0.3);
+
+  const pass = Math.abs(t - 73) < 1e-9 && single === 500 && none === null;
+
+  Logger.log("testComputeTopPercentThreshold: " + (pass ? "PASS" : "FAIL"));
+  return pass;
+
+}
+
+
+/**
+ * ==========================================================
+ * Highlight FY_REP Top-Percent Cells (IO 래퍼)
+ *
+ * FY_REP_TOP_PERCENT_COLUMNS 각 컬럼에서 임계값 이상인 셀만 배경색.
+ * Target 달성 강조와 같은 방식(Generate 때 직접 칠함, 재생성 시 시트가 다시 써짐).
+ * ==========================================================
+ */
+function highlightFYRepTopPercentCells_(sheet, columns, orderedRows, dataStartRow){
+
+  FY_REP_TOP_PERCENT_COLUMNS.forEach(function(key){
+
+    const colIdx = columns.findIndex(function(c){ return c.key === key; });
+    if(colIdx === -1) return;
+
+    const threshold = computeTopPercentThreshold_(
+      orderedRows.map(function(r){ return r[key]; }), FY_REP_TOP_PERCENT
+    );
+    if(threshold === null) return;
+
+    orderedRows.forEach(function(row, i){
+      const v = Number(row[key]);
+      if(isFinite(v) && v > 0 && v >= threshold){
+        sheet.getRange(dataStartRow + i, colIdx + 1).setBackground(FY_REP_TOP_PERCENT_COLOR);
+      }
+    });
 
   });
 
