@@ -13,6 +13,16 @@
 - 사용자 질문 ② CPNP1 출처 → 확인: 현재 CPNP1 목표 = Block 0에 사용자가 7월에 직접 취합해 입력한 FY26 세그먼트별 월별 Spent ÷ FY26 New P1 × 개선계수(`computeCPNP1BenchmarkByGroup_()`, v1.19.0). 시뮬레이션의 FY26/12개월/3개월/YTD 값은 `Ad_Spend_Cache`(Meta·Naver Search·Kakao API 자동 수집 광고비) 기준. 둘의 Seminar·Webinar 차이가 커서 수동 취합에 광고비 외 비용(오프라인 행사비 등)이 포함됐는지 확인 필요.
 - 사용자 답: 3627은 "작년 New P1 수를 정확히 산출하기 어려워서" 전사 단일 $/New P1로 계산한 것, 계산식 기록 여부 문의 → 기록 있음(08-27 항목): **3627 = $12,792,304.48(FY27 Revenue 타겟 − Referral − Upsell) ÷ $3,527.16(FY26 전사 단일 $/New P1)**. 단 $3,527.16의 분자(FY26 매출 범위)·분모(FY26 New P1 수)는 기록 없음.
 - **CPNP1 분자 실제 광고비로 교체(사용자 확정 "실제 광고비로 사용하면 될 것 같아")**: `TARGET_001_Engine.js` v1.32.0 — `refreshTargetEngine_()`가 CPNP1 벤치마크(Block 0 15~19행 + Block A) 계산에 Block 0 섹션 4 수동 Spent 대신 `Ad_Spend_Cache` FY26 값을 사용. 신규 `buildMonthlySegmentSpentFromCacheMap_()` + `testBuildMonthlySegmentSpentFromCacheMap()`(로컬 node PASS). Block 0 섹션 4는 ACQ_REP Target Spent(`computeReportTargetLookupFromInputs_()`)가 계속 쓰므로 유지 — 같은 소스 통일 여부는 후속 확인.
+  - 사용자 `runGenerateTargetReport()` 실행 (14:47, 34s, Completed). 그림자 diff 72건은 10-13과 동일(별도 TODO). Block 0 15~19행 새 값 확인 대기.
+- 월별 CPNP1 목표 편차(Seminar OCT $2,147 vs NOV $178 등) 설명 후 사용자 결정: **월별 방식 유지**(연간 평균 통일 안 함).
+- 사용자 공지: 계획에 없던 Seminar 11-28 개최, 캠페인 10-28 시작. Seminar 월별 배분은 Block 0 32행 체크박스(`SEMINAR_ACTIVE_MONTHS`, 코드 수정 불필요). 사용자가 붙여준 Target_REP 값(Seminar 주간 OCT 25 / NOV 31)이 880 ÷ 7개월 균등 배분(월 125.7 → 5주 25.1, 4주 31.4)과 일치 → NOV 체크가 이미 켜져 있는 것으로 보임, 시트 확인 요청.
+- README Pipeline Status 잔존 FAILED 2건(사용자 보고): (1) New Leads 행 S&M_REP FAILED = 10-13 Leads tail 때 일시 오류 — MTA tail에서 S&M_REP 정상 재생성됐으나 상태는 타입별 저장이라 다음 Leads 실행 때까지 남음. (2) `FAILED · 2026-10-12 21:09:10`(30분 자동 감지) = 10-13 시작 전부터 있던 것, Leads/MTA는 이후 DONE이라 IC Funnel/SAL/Revenue 행으로 추정 — 어느 행인지 사용자 확인 대기(Revenue면 2시간 주기 트리거 체인 중단 여부 확인 필요).
+  - 사용자 README 표: **SAL 행** — 10-12 21:09 강제종료, Content_OPS 단계가 RUNNING인 채로 멈춤(ACQ_REP 이후 단계 미실행). Revenue는 10-14 13:34 DONE이라 2시간 주기 정상. 이후 Leads(10-13)·MTA(10-13) tail이 OPS·리포트를 전부 다시 써서 산출물은 최신, 상태 표시만 잔존 → `runSALPipelineTail()` 재실행 요청(SAL 증분 sync가 10-12에 못 끝낸 행까지 처리 + 상태 DONE 갱신).
+  - **`runSALPipelineTail()` 결과 (14:55~14:57, Completed)**: SAL 신규 0건(8347 전부 처리됨 — 10-12 중단 시 sync는 이미 끝났던 것), BOFU/Search/Content OPS·ACQ/NewP1/Target/S&M/FY_REP 전부 정상 생성 → SAL 행 DONE. 그림자 diff Target 72·FY_REP 677 동일.
+  - **⚠️ Events_OPS Manual 가드 발동**: "Event Date 343칸, Time 73칸 유실 감지" → Events_OPS build 중단(덮어쓰기 안 함, 가드 정상 동작). 10-13 16:24 MTA tail 때는 Time 73→73 감소 없음이었으므로 그 이후 비워짐. 원인 미확인 — 사용자에게 10-13 이후 Events_OPS 직접 편집(하단 세미나 날짜 입력·정렬·열 이동·버전 복원) 여부 + `runPreviewRestoreEventsManualFromBackup()`(읽기 전용) 실행 요청. 가드 메일은 `MailApp.sendEmail` 권한 미승인으로 발송 실패(TODO 19번 항목에서 우려했던 그 권한).
+  - 원인 조사: 10-13 커밋 중 Events_OPS 쓰기 변경은 `setTextFormatColumns_()`(FY/Month 열만 "@" 서식) — Event Date/Time 미접촉, 10-08·09-17·09-29 사고는 그 이전이라 원인 아님. 유실 구간 = 10-13 16:24(MTA tail, Time 73→73) ~ 10-14 14:55(가드 첫 발동 확인 시점). 그 사이 Events_OPS를 쓰는 건 2시간 주기 Revenue tail.
+  - **복원 완료 (15:14)**: 미리보기 Event Date 343 / Time 73(다른 Manual 컬럼 0) → `runRestoreEventsManualFromBackup()` 416칸 복원. 확인 대기: 10-13 이후 사용자가 새로 입력한 하단 세미나 날짜(백업에 없으면 복원 안 됨), Executions에서 10-13 16:24 이후 Revenue 실행별 채움 건수/가드 첫 발동 시각.
+  - README 표 헤더 끝 `FY_REP`가 2번(14열) — `STATUS_COLUMNS`는 11개(13열)라 마지막 열은 예전 레이아웃 잔여로 보임(표시만, 미조치).
 
 # Changelog — 2026-10-13
 
