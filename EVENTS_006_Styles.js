@@ -8,9 +8,12 @@
  * SUBTOTAL 행(1행) 서식이 추가됨.
  *
  * Version
- * v1.7.0
+ * v1.8.0
  *
  * Change Log
+ * v1.8.0 (2026-10-15)
+ * - Results 컬럼 정수 서식("#,##0") 추가(사용자 요청) — 소수 2자리까지 보이던 것을
+ *   정수로만 표시. 저장값은 그대로(표시만 반올림).
  * v1.7.0 (2026-08-19)
  * - Spent(AE)/CPNP1(AH) 통화 서식을 "#,##0.00" → "$#,##0.00"로 변경(사용자
  *   요청, $ 기호 표시) — Revenue와 동일 그룹으로 이동. ROAS는 비율성 지표라
@@ -167,6 +170,24 @@ function applyEventsOPSStyle(sheet) {
       sheet
         .getRange(EVENTS.ROWS.DATA_START, map[name], dataRowCount, 1)
         .setNumberFormat("$#,##0.00");
+
+    }
+
+  });
+
+  /*
+  ==========================================================
+  Integer Columns — Meta Results는 배분 합산이라 소수가 섞임, 화면엔 정수만
+  ==========================================================
+  */
+
+  ["Results"].forEach(function (name) {
+
+    if (map[name]) {
+
+      sheet
+        .getRange(EVENTS.ROWS.DATA_START, map[name], dataRowCount, 1)
+        .setNumberFormat("#,##0");
 
     }
 

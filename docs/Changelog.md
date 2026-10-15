@@ -6,6 +6,22 @@
 - 결정: 세그먼트 배분을 최근 12개월 기준으로 바꾸지 않음(교체 효과가 Seminar -137 / Content +159뿐이고, 엑스포로 Seminar를 메우기로 한 10-14 결정과 반대). 총목표 3627 유지 — 2027-01 엑스포 후 같은 시뮬레이션으로 재점검(루트 TODO).
 - 코드 변경 없음.
 
+## ⚠️ Events_OPS Manual 가드 재발동 (4차 유실)
+
+- 가드 메일 수신(10-15 15:13 KST = 02:13 EDT): Event Date 371칸, Time 69칸 유실 → build 중단(덮어쓰기 안 함). 10-14 메일 권한 승인 후 첫 실제 가드 메일 발송 확인.
+- 규모: 10-14 17:44 기준 채움 Event Date 375 / Time 73 → 거의 전부 유실(10-08 300→4와 같은 "통째로 비워짐" 모양).
+- 판별 포인트: 10-14에 추가한 `verifyEventsOPSWrite_()` 로그. 첫 가드 발동 직전 build의 `[Events_OPS 쓰기 검증]`이 "정상"이면 쓰기 이후 외부 요인, ⚠️면 쓰기 자체 문제. 사용자에게 Executions 로그·버전 기록·미리보기 실행 요청.
+- **사용자 추가 보고: Success % / SP1% / SNP1% / CPNP1 / ROAS도 전부 빈칸.** 이 5개는 Manual이 아니라 build가 매번 쓰는 `RATIO_FORMULAS` 시트 수식(`applyRatioFormulas_()`)이라 가드·백업 대상이 아님 → 다음 정상 build 때 다시 써짐. 하지만 "날짜/시간 값만 사라진다"는 기존 가설과 맞지 않음 — 수식 셀까지 비었으므로 더 넓은 범위가 지워졌거나, 수식이 참조하는 칸이 비어 결과가 빈칸으로 보이는 것일 수 있음. 살아남은 컬럼(Key·Event Name·Reg.·Spent·Revenue 등) 확인 요청.
+- **사용자 확인: 남은 컬럼** = FY, EventType, PIC, Month, Marketo Campaign name, Speaker, SF Reg., Mkt Reg., SF NL, SF P1s, SF NLP1s, Success, SP1, SNPL1, EV IC REQ., IC REQ., IC Bked, IC Complete, #Deals, Revenue, Spent, Clicks, Results. → 비율 수식의 분자·분모는 살아 있는데 수식 칸만 빈칸 = **수식 자체가 지워진 것**(참조 칸 공백 때문 아님). 사라진 것 = Event Date(날짜), Time, 수식 컬럼 — 일반 숫자·텍스트는 그대로. "값 종류(날짜/시간/수식)에 따라 선택적으로 사라짐" 패턴.
+- **Results 정수 표시(사용자 요청)**: `EVENTS_006_Styles.js` v1.8.0 — Results에 "#,##0" 서식(저장값 그대로, 표시만). clasp push 완료. 서식은 build 때 적용되므로 가드 해제 후 다음 정상 build부터 반영. 서식 한 줄이라 별도 테스트 없음.
+- 미리보기(16:06): Event Date 371 / Time 69, 다른 Manual 컬럼 0 → 복원 실행 요청.
+- **복원 완료 (16:06:53)**: `runRestoreEventsManualFromBackup()` 440칸. 다음: `runRevenuePipelineTail()`로 수식 5종·Results 서식 재적용 + 쓰기 검증 로그 확인, 13:09 Revenue 쓰기 검증 줄·버전 기록 첫 유실 시각 확인 대기.
+- **`runRevenuePipelineTail()` (16:07~16:10, Completed)**: Events_OPS 채움 Event Date 375→375 / Time 73→73, `[Events_OPS 쓰기 검증] 정상`, 이후 BOFU/Search/Content OPS·리포트 5종 정상. 그림자 diff Target 72 동일, FY_REP 677→680(기존 별도 TODO). FY_REP 범위 FY25~FY27 36행으로 복귀 — 사용자 확인: 드롭다운을 직접 바꾼 것, FY25~FY27이 맞음(10-14 FY26~FY27 축소 건 종결). 원인 판별용 13:09 실행 로그·버전 기록은 여전히 대기.
+- 13:11 Revenue 실행 로그(사용자): **이미 가드 발동**(Event Date 371 / Time 69, 15:13과 같은 숫자) → 첫 발동은 그 이전. 10-14 17:44 쓰기 검증 정상 이후 ~ 10-15 13:11 사이 Revenue 실행(19:11·21:11·23:11·01:11·…·11:11) 중 첫 가드 발동 실행과 그 직전 실행의 쓰기 검증 줄 확인 요청.
+- 가드 메일 중 가장 이른 것 = 13:13(메일 권한은 10-14 15:51부터 정상) → **13:11 실행이 첫 발동**으로 추정. 유실 구간 = 11:11 실행 쓰기 ~ 13:13. 11:11 실행의 채움·쓰기 검증 줄 확인 요청.
+- **결정적 단서 — 11:11 실행 로그(사용자)**: 메모리 채움 Event Date 375 / Time 73 → `⚠️ 쓰기 검증: Event Date 4/375 | Time 4/73` → 컬럼 재쓰기 직후에도 4/375 · 4/73. **쓰기 직후 1초 안에 재현 = 외부 삭제가 아니라 시트가 setValues 값을 받지 않음**(쓰기 자체 문제로 확정). 10-08 "300→4"와 같은 숫자 4. 메모리 값은 `getValues()` 그대로(가공 없음)라 Date 객체 자체는 정상으로 보임. 같은 때 비율 수식(문자열 "=IFERROR(...)")도 비었고 일반 숫자·텍스트는 남음. 간헐적(10-14 17:09·17:44, 10-15 16:08은 정상).
+- **진단 로그 추가**: `EVENTS_005_Write.js` v1.5.0 `diagnoseEventsWriteLoss_()` — 부족 발생 시 사라진/남은 값 타입별 개수와 남은 행 샘플, 첫 유실 칸의 쓴 값·서식·데이터 확인 규칙, 비율 수식 잔존 수, 시트/스크립트 TZ 기록(동작 변경 없음, try/catch). 순수 `splitWriteLossByType_()` + `testSplitWriteLossByType()` 로컬 node PASS. clasp push 완료. 다음 발생 시 이 로그로 원인 판단.
+
 # Changelog — 2026-10-14
 
 ## FY_REP 세그먼트 Revenue 상위 30% 강조 (사용자 요청)

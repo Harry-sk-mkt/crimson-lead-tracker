@@ -8,9 +8,14 @@
  * data), mirrors 23_OPS_Write.js.
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-10-15)
+ * - `diagnoseEventsWriteLoss_()` + 순수 `splitWriteLossByType_()`(`testSplitWriteLossByType()`)
+ *   신규 — 쓰기 검증 부족 시 사라진/남은 값 타입, 첫 유실 칸 서식·데이터 확인 규칙,
+ *   비율 수식 잔존 수, 시트/스크립트 TZ를 로그로 남김. 10-15 11:11 "375 쓰고 4만 남음,
+ *   재쓰기도 4" 원인 판별용(로그 전용, 동작 변경 없음).
  * v1.4.0 (2026-10-14)
  * - 쓰기 직후 검증 `verifyEventsOPSWrite_()` + 순수 함수 `countEventsWriteShortfall_()`
  *   (`testCountEventsWriteShortfall()`) 신규 — setValues 후 flush·재읽기해
@@ -142,6 +147,114 @@ function writeEventsOPS_(rows) {
 
 /**
  * ==========================================================
+ * Diagnose Write Loss (로그 전용)
+ *
+ * WHY (2026-10-15)
+ * 10-15 11:11 build: Event Date 375 → 시트 4, 같은 컬럼 재쓰기 직후에도 4.
+ * 1초 안에 재현되므로 외부 삭제가 아니라 "시트가 그 값을 안 받음". 같은 때
+ * 비율 수식 컬럼도 비었고 일반 숫자/텍스트는 남음. 어떤 값이 살아남고 어떤
+ * 값이 사라지는지(타입), 그 칸의 서식·데이터 확인 규칙, 수식이 남았는지를
+ * 다음 발생 때 한 번에 남긴다.
+ * ==========================================================
+ */
+function diagnoseEventsWriteLoss_(sheet, rows, shortfall) {
+
+  const startRow = EVENTS.ROWS.DATA_START;
+  const readBack = sheet.getRange(startRow, 1, rows.length, EVENTS.HEADER.length).getValues();
+
+  Logger.log("[쓰기 진단] 시트 TZ=" + sheet.getParent().getSpreadsheetTimeZone() +
+    " / 스크립트 TZ=" + Session.getScriptTimeZone() +
+    " / maxRows=" + sheet.getMaxRows() + " maxCols=" + sheet.getMaxColumns());
+
+  shortfall.forEach(function (x) {
+
+    const name = EVENTS.HEADER[x.col];
+    const split = splitWriteLossByType_(rows, readBack, x.col);
+
+    Logger.log("[쓰기 진단] " + name + " — 사라진 값 타입 " + JSON.stringify(split.lostTypes) +
+      " / 남은 값 타입 " + JSON.stringify(split.keptTypes) +
+      " / 남은 행 " + JSON.stringify(split.keptSamples));
+
+    if (split.firstLostIndex >= 0) {
+      const cell = sheet.getRange(startRow + split.firstLostIndex, x.col + 1);
+      const rule = cell.getDataValidation();
+      Logger.log("[쓰기 진단] " + name + " 첫 유실 칸 " + cell.getA1Notation() +
+        " — 쓴 값 " + describeWriteValue_(rows[split.firstLostIndex][x.col]) +
+        " / 서식 " + cell.getNumberFormat() +
+        " / 데이터 확인 " + (rule ? rule.getCriteriaType() : "없음"));
+    }
+
+  });
+
+  EVENTS.RATIO_FORMULAS.forEach(function (spec) {
+    const c = EVENTS.HEADER.indexOf(spec.column);
+    if (c < 0) return;
+    const formulas = sheet.getRange(startRow, c + 1, rows.length, 1).getFormulas();
+    const kept = formulas.filter(function (f) { return f[0]; }).length;
+    Logger.log("[쓰기 진단] 수식 " + spec.column + " " + kept + "/" + rows.length);
+  });
+
+}
+
+
+function describeWriteValue_(v) {
+  if (v instanceof Date) return "Date(" + (isNaN(v.getTime()) ? "Invalid" : v.toISOString()) + ")";
+  return typeof v + "(" + String(v).slice(0, 40) + ")";
+}
+
+
+/**
+ * 쓴 값 중 시트에서 사라진 것 / 남은 것을 타입별로 센다 (Pure).
+ * 타입: "Date" | "InvalidDate" | typeof 결과.
+ */
+function splitWriteLossByType_(written, readBack, col) {
+
+  const filled = function (v) { return v !== "" && v !== null && v !== undefined; };
+  const typeOf = function (v) {
+    if (v instanceof Date) return isNaN(v.getTime()) ? "InvalidDate" : "Date";
+    return typeof v;
+  };
+
+  const out = { lostTypes: {}, keptTypes: {}, keptSamples: [], firstLostIndex: -1 };
+
+  written.forEach(function (row, i) {
+    const w = row[col];
+    if (!filled(w)) return;
+    const t = typeOf(w);
+    if (filled(readBack[i][col])) {
+      out.keptTypes[t] = (out.keptTypes[t] || 0) + 1;
+      if (out.keptSamples.length < 5) out.keptSamples.push({ row: i, value: describeWriteValue_(w) });
+    } else {
+      out.lostTypes[t] = (out.lostTypes[t] || 0) + 1;
+      if (out.firstLostIndex < 0) out.firstLostIndex = i;
+    }
+  });
+
+  return out;
+
+}
+
+
+function testSplitWriteLossByType() {
+
+  const written = [[new Date(2026, 0, 1)], ["2026-01-02"], [new Date(2026, 0, 3)], [""], [new Date("x")]];
+  const readBack = [[""], ["2026-01-02"], [new Date(2026, 0, 3)], [""], [""]];
+
+  const r = splitWriteLossByType_(written, readBack, 0);
+
+  const pass =
+    r.lostTypes.Date === 1 && r.lostTypes.InvalidDate === 1 &&
+    r.keptTypes.string === 1 && r.keptTypes.Date === 1 &&
+    r.keptSamples.length === 2 && r.firstLostIndex === 0;
+
+  Logger.log("testSplitWriteLossByType: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(r));
+  return pass;
+
+}
+
+
+/**
+ * ==========================================================
  * Count Write Shortfall (Pure)
  *
  * WHY (2026-10-14)
@@ -219,6 +332,13 @@ function verifyEventsOPSWrite_(sheet, rows) {
   }
 
   Logger.log("⚠️ [Events_OPS 쓰기 검증] 쓴 값이 시트에 덜 남음 — " + label(shortfall) + " → 해당 컬럼 재쓰기");
+
+  // 진단 실패가 build를 막으면 안 됨
+  try {
+    diagnoseEventsWriteLoss_(sheet, rows, shortfall);
+  } catch (diagError) {
+    Logger.log("diagnoseEventsWriteLoss_ 실패(무시): " + diagError);
+  }
 
   shortfall.forEach(function (x) {
     sheet
