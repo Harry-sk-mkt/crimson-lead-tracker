@@ -1,3 +1,11 @@
+# Changelog — 2026-10-15
+
+## Target 재산출 결정 — 현재 구조·3627 유지 (사용자 확정)
+
+- 사용자가 `runSimulateTargetRecalc()` 재실행(09:21) → 10-14 17:38 결과와 동일(CPNP1 교체 후 값 포함). `testTargetRecalcSimulationHelpers()` PASS.
+- 결정: 세그먼트 배분을 최근 12개월 기준으로 바꾸지 않음(교체 효과가 Seminar -137 / Content +159뿐이고, 엑스포로 Seminar를 메우기로 한 10-14 결정과 반대). 총목표 3627 유지 — 2027-01 엑스포 후 같은 시뮬레이션으로 재점검(루트 TODO).
+- 코드 변경 없음.
+
 # Changelog — 2026-10-14
 
 ## FY_REP 세그먼트 Revenue 상위 30% 강조 (사용자 요청)
