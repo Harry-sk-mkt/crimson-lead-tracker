@@ -1,3 +1,51 @@
+# Changelog — 2026-10-16
+
+## ⚠️ Events_OPS Event Date·Time 유실 5차 — 가드 메일 없음 (사용자 보고, 16:3x)
+
+- 사용자 보고: Event Date·Time이 또 비었는데 가드 메일이 오지 않음. 16:27 `TEMPQA_075` 덤프에서도 웨비나 298행 중 Event Date가 남은 행은 3개뿐 → 그 전에 이미 유실.
+- 메일이 안 온 경우의 수(코드 기준):
+  1. 쓰기 단계에서 사라졌고 다음 build가 아직 안 돌았음 — `verifyEventsOPSWrite_()`는 로그만 남기고 메일은 안 보냄. 메일은 다음 build의 가드에서만 나감.
+  2. build 안(merge)에서 값이 빠진 채 써졌음 — 그러면 쓰기 검증은 "정상"(쓴 값=읽은 값)이고 백업도 빈 값으로 갱신돼 가드가 영영 감지 못 함. `[Events_OPS Manual 채움 읽기→쓰기]` 줄에 ⚠️로 나타남.
+  3. 가드는 발동했지만 메일 발송 실패 — 로그에 "Manual 가드 메일 발송 실패".
+- 판별 요청: `runPreviewRestoreEventsManualFromBackup()`(읽기 전용) — 복원 대상이 수백 칸이면 백업 정상(1·3번), 0칸이면 백업까지 비워짐(2번). + 오늘 `periodicRefreshRevenue_` 실행 로그의 채움·쓰기 검증·쓰기 진단·가드 줄.
+- 미리보기(16:50): **Event Date 370 / Time 72**, 다른 Manual 0 → 백업 정상 → 2번(build 안 유실) 아님, 1번(쓰기 유실·다음 build 전) 또는 3번(메일 실패). Executions 로그로 판별 대기.
+- **Executions 로그(사용자)로 1번 확정**: 13:14 build 정상(채움 376→376, 쓰기 검증 정상) → **15:13 build 쓰기 직후 Event Date 6/376·Time 1/73, 재쓰기 후에도 동일**. 메일은 다음 build(17:1x) 가드에서 나갈 예정이었음.
+  - `[쓰기 진단]`: 사라진 값은 전부 Date 타입, 남은 것도 Date(행 33·110·111·137·268 등). 첫 유실 칸 H3 서식 yyyy-mm-dd·데이터 확인 없음, Time I4 서식 h:mm·데이터 확인 없음. 시트 TZ Asia/Seoul / 스크립트 TZ America/New_York. **비율 수식 7개도 전부 6/376** — 날짜·시간·수식이 같은 몇 행에서만 살아남음 → 값 타입·서식·데이터 확인 문제가 아니라 "대부분 행에서 날짜·수식 칸이 안 받아들여짐"(텍스트·숫자 칸은 남음, 10-15와 같음).
+  - 13:14~15:13 사이 시트 쪽 변화 확인 요청(버전 기록, 표(Table)·필터 보기·보호 범위 여부, 살아남은 행의 공통점).
+- **필터 가설(사용자 질문 "실무자들이 필터를 보고 있었던 게 영향?")**: `writeEventsOPS_()`는 `clear()` → `setValues()` → 검증 → 그 뒤에야 필터 제거·재생성. `clear()`는 필터를 안 지우므로 공유 일반 필터 조건이 쓰기 중에도 살아 있음 → 숨김 행에서만 날짜·수식이 빠졌을 가능성. 개인 "필터 보기"는 무관. 반대 근거: 10-14 01:13(야간)도 유실 — 단 조건은 아무도 안 봐도 남아 있음.
+- **수정(사용자 승인)**: `EVENTS_005_Write.js` v1.6.0 — 쓰기 전에 필터 제거 + 제거 전 조건을 `[Events_OPS 필터]` 로그로 남김(`readFilterCriteriaEntries_()` IO, 순수 `summarizeFilterCriteria_()`·`testSummarizeFilterCriteria()` 로컬 PASS). 쓰기 후 필터 재생성은 그대로라 결과물 동일. clasp push 완료. 다음 build부터 적용.
+  - 같은 패턴(쓰기 후에야 필터 제거)이 다른 OPS 쓰기에도 있는지는 미확인 — 10-12 Leads_OPS Create Date 유실도 같은 모양이었음.
+- **복원 완료**: 사용자 `runRestoreEventsManualFromBackup()` → `runRevenuePipelineTail()`(16:53~16:55) — 채움 Event Date 376→376 / Time 73→73, **쓰기 검증 정상**, 이후 OPS·리포트 단계 모두 정상.
+  - `[Events_OPS 필터]` 줄 없음 = 이 build 시작 시점에 필터 자체가 없었음. build가 매번 쓰기 후 필터를 새로 만들기 때문에 보통은 있어야 함 → 그 사이 누군가(또는 무언가) 필터를 지웠거나, 15:13 build가 필터 생성 전에 끝났을 수 있음. 필터 가설은 아직 미확정 — 다음 유실 때 `[Events_OPS 필터]` 줄로 판별.
+  - 같은 tail 로그: 그림자 diff Target 75건, FY_REP 691건(예: FY27 OCT Content newLeads full 111 / incremental 23) — 기존 TODO "그림자 diff 확대 원인 확인" 항목, 이번 건과 별개.
+- **즉시 메일(사용자 승인)**: `EVENTS_005_Write.js` v1.7.0 — `verifyEventsOPSWrite_()`가 재쓰기 후에도 부족하면 그 자리에서 메일(제목 "[Lead Tracker] Events_OPS 쓰기 직후 값 유실 — 복원 필요", 본문에 복원 3단계 + 로그 남길 줄). 본문은 순수 `buildEventsWriteLossMessage_()`(`testBuildEventsWriteLossMessage()` 로컬 PASS). 메일 실패는 로그만, build 계속. 다음 build 가드 메일도 그대로. clasp push 완료.
+
+## Events_OPS 웨비나 실적 덤프 (웨비나 캘린더 Revenue 출처)
+
+- 루트 작업(학년별 웨비나 캘린더 초안)의 Revenue를 Events_OPS(Deal Tracker 기준)로 채우기로 사용자 결정 — 기존 출처(12 Month Plan xlsx Var 탭)는 딜 있는 웨비나 165건 중 103건 Revenue 공백.
+- `TEMPQA_075_EventsOPSWebinarRevenueDump.js` `runDumpEventsOPSWebinarRevenue()` 추가(읽기 전용, 웨비나 행을 TSV로 로그 출력). Drive 파일 쓰기는 새 OAuth 범위 → 설치형 트리거 재인증 위험이라 쓰지 않음.
+
+## Content_OPS Meta 미매칭 6건 진단 (진행 중)
+
+- 사용자 보고: Content_OPS에 Marketo 프로그램은 있는데 UTM(Meta Campaign/Spent)이 비어 있는 6건(사용자가 각 Meta UTM명 제공, 전부 `_lead-fbiglg` 계열).
+- 매칭 경로: Meta_Raw 캠페인명 → `UTM_Program_Dictionary`(MTA `MKT UTM Campaign` 다수결 채굴, distinct=1만 사용) → strip 정규화 → Content 자격 판정.
+- `TEMPQA_073_ContentProgramUtmMissingTrace.js` `runTraceContentProgramUtmMissing()` 추가(읽기 전용) — 건별로 Meta_Raw 존재 여부/딕셔너리 원본(모호·제외)/slug 부분 일치/프로덕션 매칭 결과를 찍음.
+- **결과(15:01)**: 6건 모두 같은 원인 — Meta_Raw에 캠페인 존재(spent $3.6k~$20.6k), 딕셔너리에 UTM도 있고 winner도 정확한 Program인데 **distinct=2~3이라 `readUtmProgramDictionaryMap_()`의 `distinctProgramCount !== 1` 필터에 걸려 제외**. 다수결 비율은 94/97~633/636(96.9%~99.8%) — 엇나간 터치 1~3건이 매칭 전체를 막고 있음. 이름 불일치·사전 누락 아님.
+- 수정 방향(공통 로직이라 사용자 결정 대기): distinct===1 대신 다수결 비율 기준(예: ≥95%)으로 완화 vs 6건만 수동 override.
+- **사용자 결정: 다수결 비율 기준으로 완화.** 영향 미리보기 먼저:
+  - `CORE_001_Config.js` v1.74.0 `UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO = 0.95`
+  - `UTIL_002_UtmProgramDictionary.js` v1.14.0 `isUtmDictionaryRowConfident_()` + `testIsUtmDictionaryRowConfident()`(로컬 PASS) — `readUtmProgramDictionaryMap_()`에는 아직 미적용
+  - `TEMPQA_074_UtmDictMajorityRatioPreview.js` `runPreviewUtmDictMajorityRatio()` — 새로 매칭될 UTM 전체 + 90~95% 구간. 결과 확인 후 적용.
+- **미리보기 결과(15:11)**: 새로 매칭 139개(Meta Spend 있음 53개), 90~95% 구간은 계속 제외. Spend 0인 86개는 세그먼트 분류에만 영향.
+- **사용자 결정·적용**: 완화 기준은 **Meta Spend 매칭에만** 적용(세그먼트 분류·Kakao Moments는 distinct===1 유지 — P1·Target 숫자 불변). 주제가 어긋나 보이던 2건(dartmouth-revamped-eb → FAQ with FAO ebook, ea-ed-app-strat → DIS To Harvard and Stanford)은 데이터대로 매칭 유지.
+  - `UTIL_002` v1.14.0 `readUtmProgramDictionaryMapForMeta_()` 신규(별도 캐시)
+  - 호출부 교체: `CONTENT_002_Engine.js` v1.10.0, `BOFU_002_Engine.js` v1.9.0, `EVENTS_002_Engine.js` v1.23.0(`computeEventsMetaMetricsAggregates_()`, override 우선순위 그대로)
+  - clasp push 완료. Content_OPS 즉시 반영은 `runRefreshContentEngine()` → `buildContentOPS()`, 나머지는 다음 파이프라인 실행 때 반영.
+- **Stanford Essay 1 Pager만 반영 안 됨(사용자 확인)**: 딕셔너리 매칭은 통과하지만 Content 자격 판정에서 탈락. `Program_Segment_Dictionary`에 확정값이 없어(TEMPQA_074 "세그먼트 미확정") 키워드 폴백 `getBusinessSegment()`로 가는데, "1 Pager"는 키워드 규칙에 없어 `Other`(로컬 확인 — Harvard Essay 1 Pager도 키워드로는 Other지만 딕셔너리에 Content가 있어 통과). 대응: `Program_Segment_Override` 시트에 `WF-2026-02-KOR-MOFU-Core Stanford Essay 1 Pager` → `Content` 추가(사람 확정 override, 코드 변경 없음) 후 재실행.
+- 재실행 후에도 비어 있음 → `runTraceStanfordEssayContentOPS()`(TEMPQA_073 v1.1.0) 결과: override 시트(37키)에 해당 행 없음, 자격 false, Meta 딕셔너리 값은 정상. 즉 override가 시트에 안 들어간 상태(평소 숨김·Marketo_QA 동기화 시트라 수동 입력이 안 먹었을 가능성). TEMPQA_054 방식으로 `runAddStanfordEssayContentOverride()`(TEMPQA_073 v1.2.0) 추가.
+- 사용자 실행(15:31~15:33): override 37→38, `runRefreshContentEngine()` 183 rows, `buildContentOPS()` Updated 184 — 정상 완료. 사용자가 Content_OPS에서 Stanford Campaign/Spent 채워진 것 확인 — **6건 모두 해결**.
+- 남은 선택지(미착수): `getBusinessSegment()` 키워드에 "1 Pager"/"One Pager" → Content 추가(세그먼트 분류 변경이라 승인 필요). 지금은 override로만 처리.
+
 # Changelog — 2026-10-15
 
 ## Target 재산출 결정 — 현재 구조·3627 유지 (사용자 확정)

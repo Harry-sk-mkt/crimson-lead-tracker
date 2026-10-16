@@ -53,9 +53,16 @@
  *   이 신규 딕셔너리와 별개로 계속 동작.
  *
  * Version
- * v1.13.0
+ * v1.14.0
  *
  * Change Log
+ * v1.14.0 (2026-10-16)
+ * - `isUtmDictionaryRowConfident_()` 신규(순수) + `testIsUtmDictionaryRowConfident()` —
+ *   distinct>1이어도 다수결 비율 ≥ `CONFIG.UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO`면
+ *   확실한 매칭으로 인정(사용자 결정, Content 6건 Meta 미매칭).
+ * - `readUtmProgramDictionaryMapForMeta_()` 신규 — 위 기준을 Meta Spend 매칭
+ *   (Events/BOFU/Content)에만 적용(사용자 결정, TEMPQA_074 미리보기 후).
+ *   `readUtmProgramDictionaryMap_()`(세그먼트 분류·Kakao Moments)는 변경 없음.
  * v1.13.0 (2026-09-18)
  * - **버그 수정 — `aggregateUtmProgramCounts_()`가 등록폼 접미사("ㅣRegistered
  *   for Webinar from FB LG Form"/"...from Website Form")를 안 뗀 원본
@@ -1191,6 +1198,53 @@ function testIsUtmProgramDictionaryKeyExcluded(){
 }
 
 
+/**
+ * ==========================================================
+ * Is UTM Dictionary Row Confident (순수 함수)
+ *
+ * WHY (2026-10-16, 사용자 결정)
+ * `distinctProgramCount === 1`만 확실한 매칭으로 보던 기준이 너무 엄격 —
+ * Content 6건(예: Personal Essay 7 Samples, 633/636)이 엇나간 터치 1~3건
+ * 때문에 Meta 매칭에서 통째로 빠져 Spent 약 $66k가 누락됨
+ * (`TEMPQA_073_ContentProgramUtmMissingTrace.js`). distinct>1이어도 다수결
+ * Program 비율이 `CONFIG.UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO` 이상이면
+ * 확실한 매칭으로 인정한다. Consolidated처럼 진짜 1:N인 UTM은 비율이 낮아
+ * 계속 제외된다.
+ *
+ * TEST
+ * testIsUtmDictionaryRowConfident() 참고
+ * ==========================================================
+ */
+function isUtmDictionaryRowConfident_(matchCount, totalCount, distinctProgramCount, minRatio){
+
+  if(distinctProgramCount === 1) return true;
+  if(!(totalCount > 0)) return false;
+
+  return matchCount / totalCount >= minRatio;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — isUtmDictionaryRowConfident_()
+ * ==========================================================
+ */
+function testIsUtmDictionaryRowConfident(){
+
+  const pass =
+    isUtmDictionaryRowConfident_(2, 2, 1, 0.95) === true &&      // 기존 기준 그대로 통과
+    isUtmDictionaryRowConfident_(94, 97, 2, 0.95) === true &&    // 96.9% — Rising 8~9 Roadmap
+    isUtmDictionaryRowConfident_(633, 636, 3, 0.95) === true &&  // 99.5% — Personal Essay 7 Samples
+    isUtmDictionaryRowConfident_(89, 100, 2, 0.95) === false &&  // 89% — 기존 Events override 케이스는 그대로 제외
+    isUtmDictionaryRowConfident_(30, 100, 8, 0.95) === false &&  // Consolidated류 1:N
+    isUtmDictionaryRowConfident_(0, 0, 2, 0.95) === false;
+
+  Logger.log("testIsUtmDictionaryRowConfident: " + (pass ? "PASS" : "FAIL"));
+
+}
+
+
 function readUtmProgramDictionaryMap_(){
 
   if(_utmProgramDictCache) return _utmProgramDictCache;
@@ -1222,6 +1276,51 @@ function readUtmProgramDictionaryMap_(){
   }
 
   _utmProgramDictCache = map;
+
+  return map;
+
+}
+
+
+/**
+ * ==========================================================
+ * Read UTM Program Dictionary Map For Meta (Meta Spend 매칭 전용)
+ *
+ * WHY (2026-10-16, 사용자 결정)
+ * Meta Spend 매칭(Events/BOFU/Content)에만 완화 기준
+ * (`isUtmDictionaryRowConfident_()`, 다수결 비율 ≥ MIN_MAJORITY_RATIO)을 쓴다.
+ * `readUtmProgramDictionaryMap_()`(distinct===1)는 Business Segment 분류와
+ * Kakao Moments 자동 채움이 그대로 쓴다 — 세그먼트(P1·Target)가 움직이지
+ * 않게 범위를 Meta 매칭으로 한정(TEMPQA_074 미리보기: 새로 매칭 139개 중
+ * Meta Spend 있는 53개만 이 경로에 의미 있음).
+ * ==========================================================
+ */
+let _utmProgramDictMetaCache = null;
+
+function readUtmProgramDictionaryMapForMeta_(){
+
+  if(_utmProgramDictMetaCache) return _utmProgramDictMetaCache;
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.UTM_PROGRAM_DICT.SHEET);
+  const values = sheet ? sheet.getDataRange().getValues() : [];
+  const map = {};
+
+  for(let i = 1; i < values.length; i++){
+
+    if(!isUtmDictionaryRowConfident_(
+      Number(values[i][2]), Number(values[i][3]), Number(values[i][4]),
+      CONFIG.UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO
+    )) continue;
+
+    const utmKeyLower = String(values[i][0] || "").trim().toLowerCase();
+
+    if(isUtmProgramDictionaryKeyExcluded_(utmKeyLower)) continue; // 수동 확인된 오채굴 제외
+
+    map[utmKeyLower] = values[i][1];
+
+  }
+
+  _utmProgramDictMetaCache = map;
 
   return map;
 

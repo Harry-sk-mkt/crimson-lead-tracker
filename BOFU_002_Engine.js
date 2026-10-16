@@ -32,9 +32,12 @@
  * 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.8.0
+ * v1.9.0
  *
  * Change Log
+ * v1.9.0 (2026-10-16)
+ * - Meta 매칭 딕셔너리를 `readUtmProgramDictionaryMapForMeta_()`(다수결 비율
+ *   ≥95% 인정, UTIL_002 v1.14.0)로 교체 — 소수 터치 때문에 빠지던 UTM 복구.
  * v1.8.0 (2026-09-05)
  * - **버그 수정 — `isEligibleBOFUProgram_()`가 Program_Segment_Dictionary
  *   대신 `getBusinessSegment(programName, programName)` 재분류에만 의존해
@@ -371,7 +374,7 @@ function computeBOFUMetaCampaignDataAggregates_() {
   if (_bofuMetaCampaignDataAggCache) return _bofuMetaCampaignDataAggCache;
 
   _bofuMetaCampaignDataAggCache = aggregateMetaCampaignDataByProgram_(
-    readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleBOFUProgram_
+    readMetaRawRows_(), readUtmProgramDictionaryMapForMeta_(), isEligibleBOFUProgram_
   );
 
   return _bofuMetaCampaignDataAggCache;

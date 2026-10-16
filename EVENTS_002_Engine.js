@@ -15,9 +15,14 @@
  * (refreshACQSummary_()와 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.22.0
+ * v1.23.0
  *
  * Change Log
+ * v1.23.0 (2026-10-16)
+ * - `computeEventsMetaMetricsAggregates_()`의 딕셔너리를
+ *   `readUtmProgramDictionaryMapForMeta_()`(다수결 비율 ≥95% 인정, UTIL_002
+ *   v1.14.0)로 교체. override(`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`)
+ *   우선순위는 그대로.
  * v1.22.0 (2026-09-18)
  * - **`META_CAMPAIGN_NAME_TO_EVENTS_KEY_OVERRIDE`에 2건 추가** —
  *   `TEMPQA_063_EventsMetaSpendMissingDiagnostic.js` 조사(사용자 보고,
@@ -1073,7 +1078,7 @@ function testAggregateMetaMetricsByEventsProgram() {
  */
 function computeEventsMetaMetricsAggregates_() {
 
-  return aggregateMetaMetricsByEventsProgram_(readMetaRawRows_(), readUtmProgramDictionaryMap_());
+  return aggregateMetaMetricsByEventsProgram_(readMetaRawRows_(), readUtmProgramDictionaryMapForMeta_());
 
 }
 

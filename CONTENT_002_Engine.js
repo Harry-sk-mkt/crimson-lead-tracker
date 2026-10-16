@@ -21,9 +21,13 @@
  * (다른 Engine들과 동일한 4개 지점, 07/09/10 파일에 나란히 배선)
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-10-16)
+ * - Meta 매칭 딕셔너리를 `readUtmProgramDictionaryMapForMeta_()`(다수결 비율
+ *   ≥95% 인정, UTIL_002 v1.14.0)로 교체 — Content 6건(Personal Essay 7
+ *   Samples 등, 94/97~633/636) Spent 약 $66k 누락 해결(TEMPQA_073/074).
  * v1.9.0 (2026-09-05)
  * - **버그 수정 — `isEligibleContentProgram_()`가 Program_Segment_Dictionary
  *   대신 `getBusinessSegment(programName, programName)` 재분류에만 의존해
@@ -304,7 +308,7 @@ function computeContentMetaCampaignDataAggregates_() {
   if (_contentMetaCampaignDataAggCache) return _contentMetaCampaignDataAggCache;
 
   _contentMetaCampaignDataAggCache = aggregateMetaCampaignDataByProgram_(
-    readMetaRawRows_(), readUtmProgramDictionaryMap_(), isEligibleContentProgram_
+    readMetaRawRows_(), readUtmProgramDictionaryMapForMeta_(), isEligibleContentProgram_
   );
 
   return _contentMetaCampaignDataAggCache;

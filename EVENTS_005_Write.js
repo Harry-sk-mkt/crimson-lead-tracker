@@ -8,9 +8,22 @@
  * data), mirrors 23_OPS_Write.js.
  *
  * Version
- * v1.5.0
+ * v1.7.0
  *
  * Change Log
+ * v1.7.0 (2026-10-16)
+ * - `verifyEventsOPSWrite_()`: 재쓰기 후에도 부족하면 그 자리에서 메일 발송(사용자 요청) —
+ *   예전엔 다음 build 가드(최대 2시간 뒤)에서만 메일이 나가 10-16 15:13 유실을 사용자가
+ *   먼저 발견. 본문은 순수 `buildEventsWriteLossMessage_()`(`testBuildEventsWriteLossMessage()`).
+ *   메일 실패는 로그만 남기고 build 계속(가드와 같은 방식).
+ * v1.6.0 (2026-10-16)
+ * - `writeEventsOPS_()`가 `clear()`·`setValues()` **전에** 기존 필터를 제거하도록 변경
+ *   (사용자 승인). `clear()`는 필터를 지우지 않아 실무자가 걸어둔 일반 필터 조건이
+ *   쓰기 중에도 살아 있었음 — 10-16 15:13 build에서 날짜·시간·비율 수식이 몇 행에서만
+ *   살아남은 유실의 원인 후보. 쓰기 후 필터를 새로 만드는 기존 동작은 그대로라 최종
+ *   결과물은 같음. 제거 전 조건을 `[Events_OPS 필터]` 로그로 남김 —
+ *   `readFilterCriteriaEntries_()`(IO) + 순수 `summarizeFilterCriteria_()`
+ *   (`testSummarizeFilterCriteria()`).
  * v1.5.0 (2026-10-15)
  * - `diagnoseEventsWriteLoss_()` + 순수 `splitWriteLossByType_()`(`testSplitWriteLossByType()`)
  *   신규 — 쓰기 검증 부족 시 사라진/남은 값 타입, 첫 유실 칸 서식·데이터 확인 규칙,
@@ -63,6 +76,18 @@ function writeEventsOPS_(rows) {
 
   if (!sheet) {
     sheet = ss.insertSheet(EVENTS.SHEET.OPS);
+  }
+
+  // 2026-10-16: clear()는 필터를 지우지 않아 사람이 걸어둔 필터 조건이 쓰기 중에도 살아 있었음 —
+  // 쓰기 전에 조건을 로그로 남기고 제거(쓰기 후 아래에서 새로 만드는 동작은 그대로).
+  const preFilter = sheet.getFilter();
+  if (preFilter) {
+    try {
+      Logger.log("[Events_OPS 필터] 쓰기 전 필터 있음 — " + summarizeFilterCriteria_(readFilterCriteriaEntries_(preFilter, EVENTS.HEADER)));
+    } catch (filterLogError) {
+      Logger.log("[Events_OPS 필터] 조건 읽기 실패(무시): " + filterLogError);
+    }
+    preFilter.remove();
   }
 
   sheet.clear();
@@ -282,6 +307,75 @@ function countEventsWriteShortfall_(written, readBack, colIdxs) {
 }
 
 
+/**
+ * ==========================================================
+ * Read Filter Criteria Entries (IO)
+ *
+ * WHY (2026-10-16)
+ * 15:13 build에서 날짜·시간·비율 수식이 몇 행에서만 살아남음 — 실무자가 걸어둔
+ * 일반 필터(행 숨김) 조건이 쓰기 중에 살아 있었던 게 원인인지 판별하려고,
+ * 쓰기 직전 필터 조건을 컬럼별로 읽는다.
+ *
+ * @return {Array<{column:string, type:string, values:Array, hidden:Array}>} 조건 있는 컬럼만
+ * ==========================================================
+ */
+function readFilterCriteriaEntries_(filter, header) {
+
+  const range = filter.getRange();
+  const entries = [];
+
+  for (let c = range.getColumn(); c <= range.getLastColumn(); c++) {
+    const criteria = filter.getColumnFilterCriteria(c);
+    if (!criteria) continue;
+    entries.push({
+      column: header[c - 1] || ("col " + c),
+      type: criteria.getCriteriaType() ? String(criteria.getCriteriaType()) : "",
+      values: criteria.getCriteriaValues() || [],
+      hidden: criteria.getHiddenValues() || []
+    });
+  }
+
+  return entries;
+
+}
+
+
+/**
+ * ==========================================================
+ * Summarize Filter Criteria (Pure)
+ *
+ * 로그 한 줄용 — 조건 없으면 "조건 없음". 숨김 값은 너무 길어지지 않게 개수와 앞 3개만.
+ * ==========================================================
+ */
+function summarizeFilterCriteria_(entries) {
+
+  if (!entries || entries.length === 0) return "조건 없음";
+
+  return entries.map(function (e) {
+    const parts = [];
+    if (e.type) parts.push(e.type + (e.values.length ? " " + JSON.stringify(e.values) : ""));
+    if (e.hidden.length) parts.push("숨김 " + e.hidden.length + "개 " + JSON.stringify(e.hidden.slice(0, 3)));
+    return e.column + ": " + (parts.join(", ") || "조건 객체만 있음");
+  }).join(" | ");
+
+}
+
+
+function testSummarizeFilterCriteria() {
+
+  const pass =
+    summarizeFilterCriteria_([]) === "조건 없음" &&
+    summarizeFilterCriteria_([
+      { column: "EventType", type: "", values: [], hidden: ["Webinar", "Seminar", "Expo", "Other"] },
+      { column: "Event Date", type: "DATE_AFTER", values: ["2026-01-01"], hidden: [] }
+    ]) === 'EventType: 숨김 4개 ["Webinar","Seminar","Expo"] | Event Date: DATE_AFTER ["2026-01-01"]';
+
+  Logger.log("testSummarizeFilterCriteria: " + (pass ? "PASS" : "FAIL"));
+  return pass;
+
+}
+
+
 function testCountEventsWriteShortfall() {
 
   const written = [[1, "a", new Date(2026, 0, 1)], [2, "", new Date(2026, 0, 2)], [3, "c", ""]];
@@ -305,8 +399,8 @@ function testCountEventsWriteShortfall() {
  * ==========================================================
  * Verify Events_OPS Write (재읽기 + 부족 컬럼 1회 재쓰기)
  *
- * 로그만 남기고 build를 멈추지 않는다 — 재쓰기 후에도 부족하면 다음 build의
- * Manual 가드가 잡는다(EVENTS_007_ManualBackup.js).
+ * build를 멈추지 않는다 — 재쓰기 후에도 부족하면 바로 메일을 보내고(v1.7.0),
+ * 다음 build의 Manual 가드도 계속 잡는다(EVENTS_007_ManualBackup.js).
  * ==========================================================
  */
 function verifyEventsOPSWrite_(sheet, rows) {
@@ -348,9 +442,62 @@ function verifyEventsOPSWrite_(sheet, rows) {
 
   const after = countEventsWriteShortfall_(rows, readRange(), colIdxs);
 
-  Logger.log(after.length === 0
-    ? "[Events_OPS 쓰기 검증] 재쓰기 후 정상"
-    : "⚠️ [Events_OPS 쓰기 검증] 재쓰기 후에도 부족 — " + label(after));
+  if (after.length === 0) {
+    Logger.log("[Events_OPS 쓰기 검증] 재쓰기 후 정상");
+    return;
+  }
+
+  Logger.log("⚠️ [Events_OPS 쓰기 검증] 재쓰기 후에도 부족 — " + label(after));
+
+  // 2026-10-16: 예전엔 다음 build(최대 2시간 뒤)의 Manual 가드에서야 메일이 나갔음 — 그 자리에서 바로 알림.
+  try {
+    MailApp.sendEmail(
+      Session.getEffectiveUser().getEmail(),
+      "[Lead Tracker] Events_OPS 쓰기 직후 값 유실 — 복원 필요",
+      buildEventsWriteLossMessage_(label(after), new Date())
+    );
+  } catch (mailError) {
+    Logger.log("쓰기 유실 메일 발송 실패(무시): " + mailError);
+  }
+
+}
+
+
+/**
+ * ==========================================================
+ * Build Write Loss Mail Message (Pure)
+ *
+ * WHY (2026-10-16, 사용자 요청)
+ * 10-16 15:13 build에서 쓰기 직후 Event Date 6/376으로 유실됐는데 메일은 다음
+ * build 가드에서야 나갈 예정이라 사용자가 먼저 발견함. 재쓰기까지 실패하면
+ * 바로 보내는 메일 본문 — 이번 build의 백업은 쓰기 전 값(result.rows)이라 바로 복원 가능.
+ * ==========================================================
+ */
+function buildEventsWriteLossMessage_(shortfallLabel, when) {
+
+  return "Events_OPS build가 값을 쓴 직후 다시 읽어보니 덜 남아 있습니다(재쓰기 후에도 같음) — " + shortfallLabel + ".\n\n" +
+    "백업에는 쓰기 전 값이 있어 바로 복원할 수 있습니다. Apps Script 편집기에서 순서대로:\n" +
+    "1. EVENTS_007_ManualBackup.js의 runPreviewRestoreEventsManualFromBackup() — 복원 대상 확인\n" +
+    "2. EVENTS_007_ManualBackup.js의 runRestoreEventsManualFromBackup()\n" +
+    "3. MASTER_002_PipelineAsync.js의 runRevenuePipelineTail()\n\n" +
+    "원인 판별용: 이 실행 로그의 [Events_OPS 필터] / [쓰기 진단] 줄을 남겨주세요.\n\n" +
+    "감지 시각: " + when;
+
+}
+
+
+function testBuildEventsWriteLossMessage() {
+
+  const msg = buildEventsWriteLossMessage_("Event Date 6/376 | Time 1/73", "T");
+
+  const pass =
+    msg.indexOf("Event Date 6/376 | Time 1/73") !== -1 &&
+    msg.indexOf("runRestoreEventsManualFromBackup()") !== -1 &&
+    msg.indexOf("runRevenuePipelineTail()") !== -1 &&
+    /감지 시각: T$/.test(msg);
+
+  Logger.log("testBuildEventsWriteLossMessage: " + (pass ? "PASS" : "FAIL"));
+  return pass;
 
 }
 

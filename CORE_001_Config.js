@@ -9,9 +9,12 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.73.0
+ * v1.74.0
  *
  * Change Log
+ * v1.74.0 (2026-10-16)
+ * - `UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO`(0.95) 신규 — UTIL_002 v1.14.0
+ *   `isUtmDictionaryRowConfident_()` 참고.
  * v1.73.0 (2026-09-28)
  * - `SAL.GAP_WARNING_DAYS` 신규 — SAL Import 시 SAL_Raw 마지막 SAL 날짜와
  *   새 파일 첫 SAL 날짜 사이가 이 일수보다 벌어지면 경고(9/17~23 SAL이
@@ -573,7 +576,11 @@ const CONFIG = {
      * 자동으로 찾을 때 이 캐시를 읽는다(Simple Trigger 안전, 같은 스프레드시트).
      */
   UTM_PROGRAM_DICT: {
-    SHEET: "UTM_Program_Dictionary"
+    SHEET: "UTM_Program_Dictionary",
+    // 2026-10-16 — distinct>1이어도 다수결 Program 비율이 이 값 이상이면 확실한 매칭으로 인정
+    // (Content 6건이 94/97~633/636인데 소수 터치 1~3건 때문에 통째로 빠지던 문제).
+    // Consolidated처럼 진짜 1:N인 UTM은 비율이 낮아 계속 제외됨.
+    MIN_MAJORITY_RATIO: 0.95
   },
 
   /**
