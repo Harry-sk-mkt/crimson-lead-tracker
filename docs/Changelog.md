@@ -1,3 +1,13 @@
+# Changelog — 2026-10-19
+
+## Revenue 2시간 주기 → Deal Tracker 값이 바뀐 때만 실행 (사용자 요청)
+
+- 배경: `periodicRefreshRevenue_()`가 Deal Tracker(사용자 직접 입력) 변경과 무관하게 2시간마다 Leads_OPS 쓰기·리포트 재생성을 반복.
+- 변경(MASTER_002 v1.40.0, CORE_001 v1.75.0): 재예약 직후 `readRevenueInputFingerprint_()`(Deal Tracker 전체 값 MD5)를 `REVENUE_SYNCED_INPUT_FINGERPRINT`와 비교 → 같으면 건너뜀. 다르면 PENDING에 저장하고 실행, tail DONE 시 `promoteRevenueFingerprint_()`가 SYNCED로 승격(대기열 경로 포함). 지문을 못 읽으면 예전처럼 실행(fail-open). 실행 중 Deal Tracker가 또 바뀌면 다음 회차에 다시 돎.
+- 결정: 지문은 Deal Tracker만 — Leads_OPS 행 수를 넣으려다 사용자 지적으로 제거(2026-09-03 Revenue 분리 결정 재확인).
+- 대안 비교: Drive 수정시각은 DriveApp 새 OAuth 범위가 필요해 기존 설치형 트리거가 재승인 전까지 실패 → 값 해시 채택. onChange 트리거는 연속 편집 다중 발동 처리가 필요해 제외.
+- 테스트: `testComputeRevenueRefreshDecision()` 신규, `testPeriodicRefreshReschedulesBeforeWork()`에 지문 stub 추가. push 완료. 편집기 실행(9:07) 두 테스트 모두 PASS. 다음 회차 첫 실행은 SYNCED 지문이 비어 있어 한 번 RUN, 이후부터 SKIP 동작 — 실제 SKIP 로그는 그다음 회차에서 확인.
+
 # Changelog — 2026-10-16
 
 ## ⚠️ Events_OPS Event Date·Time 유실 5차 — 가드 메일 없음 (사용자 보고, 16:3x)

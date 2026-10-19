@@ -9,9 +9,13 @@
  * Business logic MUST NOT exist here.
  *
  * Version
- * v1.74.0
+ * v1.75.0
  *
  * Change Log
+ * v1.75.0 (2026-10-19)
+ * - `PROPERTIES.REVENUE_SYNCED_FINGERPRINT`/`REVENUE_PENDING_FINGERPRINT` 신규 —
+ *   Revenue 2시간 주기를 Deal Tracker 값이 바뀐 때만 실행
+ *   (MASTER_002 v1.40.0 참고, 사용자 요청).
  * v1.74.0 (2026-10-16)
  * - `UTM_PROGRAM_DICT.MIN_MAJORITY_RATIO`(0.95) 신규 — UTIL_002 v1.14.0
  *   `isUtmDictionaryRowConfident_()` 참고.
@@ -859,6 +863,13 @@ const CONFIG = {
     // (appendNewDealTrackerRows_(), 90_TargetEngine.js). LEADS_LAST_ROW/
     // MTA_LAST_ROW와 동일 관례: 이미 처리한 "데이터 행 개수"(헤더 제외, 0-based).
     DEAL_TRACKER_LAST_ROW: "DEAL_TRACKER_LAST_PROCESSED_ROW",
+
+    // 2026-10-19 추가 — periodicRefreshRevenue_()가 "새 값이 들어왔을 때만" 돌도록
+    // (사용자 요청). SYNCED = 마지막으로 성공한 Revenue tail이 본 입력 지문,
+    // PENDING = 이번에 실행을 결정한 지문(tail 성공 시 SYNCED로 승격).
+    // 지문 = Deal Tracker 전체 값 MD5(MASTER_002 readRevenueInputFingerprint_()).
+    REVENUE_SYNCED_FINGERPRINT: "REVENUE_SYNCED_INPUT_FINGERPRINT",
+    REVENUE_PENDING_FINGERPRINT: "REVENUE_PENDING_INPUT_FINGERPRINT",
 
     // 2026-09-04 추가(docs/exec-plans/active/2026-09-03-performance-optimization.md #3) —
     // syncICFunnelToOPS_()/syncSALToOPS_()를 "매번 Raw 전체 재스캔"에서 "이번에

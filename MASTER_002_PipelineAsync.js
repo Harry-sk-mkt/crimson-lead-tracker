@@ -22,9 +22,18 @@
  * 10 Master Build (Incremental)
  *
  * Version
- * v1.39.0
+ * v1.40.0
  *
  * Change Log
+ * v1.40.0 (2026-10-19)
+ * - **Revenue 2시간 주기를 Deal Tracker 값이 바뀐 때만 실행(사용자 요청)** —
+ *   `periodicRefreshRevenue_()`가 재예약 직후 `readRevenueInputFingerprint_()`(Deal
+ *   Tracker 전체 값 MD5)를 마지막 성공 실행 지문과 비교해 같으면 건너뜀.
+ *   `computeRevenueRefreshDecision_()`(순수 함수, 지문 못 읽으면 RUN)·
+ *   `testComputeRevenueRefreshDecision()`·`promoteRevenueFingerprint_()`(tail 성공 시
+ *   PENDING → SYNCED) 신규. 지문은 Deal Tracker만 — Revenue는 2026-09-03 결정대로
+ *   다른 파이프라인과 분리(사용자 재확인). DriveApp 수정시각은 새 OAuth 범위가
+ *   필요해 쓰지 않음. `testPeriodicRefreshReschedulesBeforeWork()`에 지문 stub 추가.
  * v1.39.0 (2026-10-13)
  * - 정보성 `getUi().alert()` 팝업을 비블로킹 `toastNotice_()`(MASTER_004)로 교체 —
  *   OK를 눌러야 실행이 끝나 편집기에서 실행할 때 시트를 따로 열어야 했던 문제(사용자 요청).
@@ -2251,6 +2260,21 @@ function periodicRefreshRevenue_(){
 
   try{
 
+    // 2026-10-19 — 입력이 지난 성공 실행 이후 그대로면 건너뜀(사용자 요청:
+    // "시트에 새 값이 들어올 때만"). 지문을 못 읽으면 예전처럼 실행(fail-open).
+    const props = PropertiesService.getScriptProperties();
+    const fingerprint = readRevenueInputFingerprint_();
+    const decision = computeRevenueRefreshDecision_(
+      fingerprint, props.getProperty(CONFIG.PROPERTIES.REVENUE_SYNCED_FINGERPRINT)
+    );
+
+    if(decision === "SKIP"){
+      Logger.log(CONFIG.LOG.PREFIX + " Revenue 주기적 Refresh — Deal Tracker 변경 없음, 건너뜀.");
+      return;
+    }
+
+    if(fingerprint) props.setProperty(CONFIG.PROPERTIES.REVENUE_PENDING_FINGERPRINT, fingerprint);
+
     if(acquirePipelineLock_(CONFIG.PIPELINE.TYPES.REVENUE)){
 
       runRevenuePipelineTail();
@@ -2293,6 +2317,101 @@ function periodicRefreshRevenue_(){
 function runInstallRevenuePeriodicRefreshTrigger(){
 
   scheduleNextRevenuePeriodicRefresh_();
+
+}
+
+
+/**
+ * ==========================================================
+ * Compute Revenue Refresh Decision (순수 함수)
+ *
+ * WHY (2026-10-19, 사용자 요청)
+ * Revenue는 Deal Tracker(사용자 직접 입력)가 바뀌지 않아도 2시간마다
+ * Leads_OPS 쓰기·리포트 재생성을 반복했다. 입력 지문이 마지막 성공 실행과
+ * 같으면 건너뛴다. 지문이 비어 있으면(읽기 실패) 예전 동작대로 실행 —
+ * 건너뛰다 실제 변경을 놓치는 쪽이 더 위험하다.
+ *
+ * INPUT  currentFp : string  이번 지문 ("" = 읽기 실패)
+ *        syncedFp  : string|null  마지막 성공 실행의 지문
+ * OUTPUT "RUN" | "SKIP"
+ *
+ * TEST   testComputeRevenueRefreshDecision() 참고
+ * ==========================================================
+ */
+function computeRevenueRefreshDecision_(currentFp, syncedFp){
+
+  if(!currentFp) return "RUN";
+
+  return currentFp === syncedFp ? "SKIP" : "RUN";
+
+}
+
+
+function testComputeRevenueRefreshDecision(){
+
+  const cases = [
+    { cur: "abc", synced: "abc", want: "SKIP" },   // Deal Tracker 변경 없음
+    { cur: "abd", synced: "abc", want: "RUN" },    // Deal Tracker 수정
+    { cur: "abc", synced: null,  want: "RUN" },    // 최초 실행
+    { cur: "",    synced: "abc", want: "RUN" }     // 지문 읽기 실패 → fail-open
+  ];
+
+  const results = cases.map(function(c){ return computeRevenueRefreshDecision_(c.cur, c.synced); });
+  const pass = results.every(function(r, i){ return r === cases[i].want; });
+
+  Logger.log("testComputeRevenueRefreshDecision: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(results));
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Revenue Input Fingerprint (Deal Tracker 값 해시)
+ *
+ * WHY
+ * Revenue는 2026-09-03 결정대로 Leads/MTA/IC Funnel/SAL과 분리돼 Deal Tracker
+ * (사용자 직접 입력)만을 기준으로 돈다 — 그래서 지문도 Deal Tracker만 본다
+ * (Leads_OPS 행 수를 넣지 않음, 2026-10-19 사용자 재확인).
+ * Drive 수정시각 대신 값 해시를 쓴 이유: DriveApp은 새 OAuth 범위가 필요해
+ * 기존 설치형 트리거가 재승인 전까지 실패하고, 값 해시는 서식만 바뀐 편집엔
+ * 반응하지 않아 더 정확하다. 실패 시 "" 반환(→ computeRevenueRefreshDecision_가 RUN).
+ * ==========================================================
+ */
+function readRevenueInputFingerprint_(){
+
+  try{
+
+    const config = CONFIG.TARGET.EXTERNAL.DEAL_TRACKER;
+    const sheet = findSheetByGid_(SpreadsheetApp.openById(config.SPREADSHEET_ID), config.SHEET_GID);
+    if(!sheet) return "";
+
+    const digest = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.MD5, JSON.stringify(sheet.getDataRange().getValues())
+    );
+
+    return Utilities.base64Encode(digest);
+
+  } catch(err){
+
+    Logger.log(CONFIG.LOG.PREFIX + " Revenue 입력 지문 읽기 실패(실행은 계속) — " + (err && err.message ? err.message : err));
+    return "";
+
+  }
+
+}
+
+
+// Revenue tail 성공 시 호출 — 실행을 결정했던 지문을 "마지막 성공"으로 승격.
+// tail을 편집기에서 직접 돌린 경우엔 PENDING이 없어 아무 것도 안 함.
+function promoteRevenueFingerprint_(){
+
+  const props = PropertiesService.getScriptProperties();
+  const pending = props.getProperty(CONFIG.PROPERTIES.REVENUE_PENDING_FINGERPRINT);
+
+  if(!pending) return;
+
+  props.setProperty(CONFIG.PROPERTIES.REVENUE_SYNCED_FINGERPRINT, pending);
+  props.deleteProperty(CONFIG.PROPERTIES.REVENUE_PENDING_FINGERPRINT);
 
 }
 
@@ -3008,6 +3127,8 @@ function runRevenuePipelineTail(){
     writePipelineStatusState_(type, state);
     writePipelineStatusToReadme_();
 
+    promoteRevenueFingerprint_();
+
   } catch(err){
 
     state.status = "FAILED";
@@ -3361,6 +3482,11 @@ function testPeriodicRefreshReschedulesBeforeWork(){
     g[n] = function(){ calls.push(n); return true; };
   });
 
+  // 2026-10-19 — Deal Tracker 지문 읽기도 stub("" = 읽기 실패 → RUN). 실제 외부 시트를
+  // 읽거나 "변경 없음"으로 SKIP돼 run 호출이 안 잡히는 일을 막고, PENDING 속성도 안 씀.
+  const originalFingerprint = g.readRevenueInputFingerprint_;
+  g.readRevenueInputFingerprint_ = function(){ return ""; };
+
   try{
 
     periodicRefreshRevenue_();
@@ -3385,6 +3511,7 @@ function testPeriodicRefreshReschedulesBeforeWork(){
   } finally {
 
     names.forEach(function(n){ g[n] = originals[n]; });
+    g.readRevenueInputFingerprint_ = originalFingerprint;
 
   }
 
