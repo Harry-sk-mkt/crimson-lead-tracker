@@ -7,6 +7,8 @@
 - 검증: `testDedupeExactDuplicateTouchRecords()` + `TEMPQA_078_MTARebuildDedupeEquivalence.js` `runCheckMTARebuildDedupeEquivalence()`(Raw→변환→메모리 제거 결과 vs 현재 MTA_Master 키 다중집합, 읽기 전용). push 완료, 사용자 실행 대기 → 동치 확인 후 실제 rebuild로 시간 실측.
 - 검증 결과(11:54~11:56): 테스트 PASS. TEMPQA_078 — Raw 90,221 → 메모리 경로 88,050(중복 2,171 제거) = 현재 MTA_Master 88,050, **키 불일치 0(동치)**. 시트 자동 형변환 영향 없음 확인. 다음: 실제 `rebuildMTAMaster()` 실행으로 시간 실측.
 - **실측(11:56:28~12:02:32): 6분 4초** (10-13 26분 12초 → 약 77% 단축). 읽기·변환·메모리 중복 제거 15초, Master 88,050행 쓰기 2분 22초, 엔진 6종 갱신 약 3분 20초. 결과 Master 88,050(= 사전 검증값).
+- 후속 `runMTAPipelineTail()`(12:52~13:04, 11분 52초) 정상 완료 — 첫 단계 `runAutoDeleteExactDuplicateTouchRows()` "삭제할 완전 동일 중복 행 없음"으로 메모리 제거가 시트 경로와 같은 결과임을 재확인. 그림자 diff(Target 72·FY_REP 701)는 기존 미해결 건으로 이번 변경과 무관(값 동일).
+- 참고(미착수): 이 tail에서 `syncMTAFunnelToOPS_()` 안의 엔진 6종 갱신이 약 6분 — rebuild 직후엔 엔진이 rebuild·tail에서 두 번 돌아 중복. 다음 단축 후보.
 
 ## TEMPQA_076 Events_OPS SAT 웨비나 덤프 (그로스미팅 SAT WB 실험 결과용)
 
