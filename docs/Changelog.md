@@ -1,3 +1,10 @@
+# Changelog — 2026-10-20
+
+## TEMPQA_076 Events_OPS SAT 웨비나 덤프 (그로스미팅 SAT WB 실험 결과용)
+
+- 배경: 10-20 그로스미팅 Ideation "SAT WB"(가설: 웨비나 New P1 Lead% 50% 이상) 결과 정리. Drive 커넥터로는 시트 값을 못 읽어(구조만 반환) 읽기 전용 덤프로 대체.
+- `TEMPQA_076_EventsOPSSATWebinarDump.js` `runDumpEventsOPSSATWebinar()` 신규 — 프로그램명에 SAT 포함 행의 Mkt Reg./SF Reg./SF NL/SF P1s/SF NLP1s/Spent/CPNP1 + NLP1 비율 두 가지(분모 SF Reg., SF NL — 사용자 확인 전). 쓰기 없음. push 완료.
+
 # Changelog — 2026-10-19
 
 ## Revenue 2시간 주기 → Deal Tracker 값이 바뀐 때만 실행 (사용자 요청)
