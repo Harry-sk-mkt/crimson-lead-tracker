@@ -5,6 +5,8 @@
 - 배경: 10-13 실측 26분 12초(30분 한도 근접) 중 완전 중복 터치 2,148행 `deleteRows()` 543구간이 약 11분. 쓰고 → 다시 읽고 → 행 삭제하는 구조.
 - 변경: `OPS_006_QA.js` v1.10.0 `dedupeExactDuplicateTouchRecords_()`(순수, 기존 `findExactDuplicateTouchRowsToDelete_()` 재사용 — 판정 기준·동점 타이브레이크 무변경, rowIndex = i + 2) 신규. `MASTER_004_MasterBuild.js` v4.8.0 `rebuildMTAMaster()`가 `transformMTARecords()` 결과에 적용 후 한 번만 쓰기, `runAutoDeleteExactDuplicateTouchRows()` 호출 제거(증분 `runMTAPipelineTail()` 쪽은 그대로). `refreshTargetActuals_()`는 유지 — rebuild 뒤 같은 실행 안에 Target_REP 재생성이 없어 #18 근거가 적용 안 됨.
 - 검증: `testDedupeExactDuplicateTouchRecords()` + `TEMPQA_078_MTARebuildDedupeEquivalence.js` `runCheckMTARebuildDedupeEquivalence()`(Raw→변환→메모리 제거 결과 vs 현재 MTA_Master 키 다중집합, 읽기 전용). push 완료, 사용자 실행 대기 → 동치 확인 후 실제 rebuild로 시간 실측.
+- 검증 결과(11:54~11:56): 테스트 PASS. TEMPQA_078 — Raw 90,221 → 메모리 경로 88,050(중복 2,171 제거) = 현재 MTA_Master 88,050, **키 불일치 0(동치)**. 시트 자동 형변환 영향 없음 확인. 다음: 실제 `rebuildMTAMaster()` 실행으로 시간 실측.
+- **실측(11:56:28~12:02:32): 6분 4초** (10-13 26분 12초 → 약 77% 단축). 읽기·변환·메모리 중복 제거 15초, Master 88,050행 쓰기 2분 22초, 엔진 6종 갱신 약 3분 20초. 결과 Master 88,050(= 사전 검증값).
 
 ## TEMPQA_076 Events_OPS SAT 웨비나 덤프 (그로스미팅 SAT WB 실험 결과용)
 

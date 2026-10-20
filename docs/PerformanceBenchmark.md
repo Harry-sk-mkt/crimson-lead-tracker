@@ -39,6 +39,23 @@ Content 필드 커버리지 보강) 반영을 위한 전체 재구축. `docs/Bus
 | Content Engine Refresh (135 rows) | 40.04s |
 | **전체 (Started → Completed)** | **7m 58s** (478s) |
 
+#### 2026-10-20 재측정 — 메모리 중복 제거(MASTER_004 v4.8.0) 적용 후
+데이터 규모: MTA_Raw 90,221 → MTA_Master 88,050 (완전 중복 터치 2,171행 쓰기 전 제거)
+
+| 단계 | 소요 시간 |
+| --- | --- |
+| Raw 읽기 + Transform + 메모리 중복 제거 | ~15s |
+| Master 쓰기(overwrite) | ~142s (2m 22s) |
+| ACQ Summary Refresh (673 rows) | 19.82s |
+| NewP1 Engine Refresh (404 rows) | 7.65s |
+| Events Engine Refresh (372 rows) | 42.41s |
+| BOFU Engine Refresh (154 rows) | 38.60s |
+| Search Engine Refresh (113 rows) | 29.97s |
+| Content Engine Refresh (183 rows) | 44.31s |
+| **전체 (Started → Completed)** | **6m 4s** (364s) |
+
+비교: 2026-10-13 적용 전 26m 12s(중복 2,148행 `deleteRows()` 543구간만 약 11분 + 재읽기).
+
 ### 3. `buildLeadsOPS()` (`21_OPS_Build.js`)
 데이터 규모: Master 35,529 / OPS 35,482 (Merged 35,482, New 0, Updated 35,482, Duplicate 47, Skipped 0)
 
