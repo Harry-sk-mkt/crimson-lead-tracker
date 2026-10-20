@@ -41,9 +41,13 @@
  *   오래 안 닫히는 문제 방지)
  *
  * Version
- * v1.4.0
+ * v1.5.0
  *
  * Change Log
+ * v1.5.0 (2026-10-20)
+ * - **병합된 Salesforce 리드 조인 보정** — `syncSALToOPS_()`/
+ *   `backfillSALForBlankOPSRows_()`에 `foldAliasLatestRecords_(…, readAliasLeadIdMap_())`
+ *   (OPS_004_Merge.js v3.5.0) 적용. TEMPQA_077 실측 SAL 누락 14건 대상. 나머지 로직 무변경.
  * v1.4.0 (2026-09-28)
  * - **`backfillSALForBlankOPSRows_()` 신규** — sync 시점에 Leads_OPS에 없던
  *   리드가 체크포인트 전진으로 영구 누락되던 구조 결함 보완(S&M_REP 09-21 주
@@ -351,7 +355,8 @@ function syncSALToOPS_(){
 
   }
 
-  const latestByLeadId = pickLatestSALRecords_(newRaw);
+  // 2026-10-20 — 병합된 SF 리드의 새 Lead ID 기록을 OPS 채택 Lead ID로 합침(v1.5.0)
+  const latestByLeadId = foldAliasLatestRecords_(pickLatestSALRecords_(newRaw), readAliasLeadIdMap_());
 
   const salByLeadId = computeSALByLeadId_(latestByLeadId);
 
@@ -660,7 +665,9 @@ function testComputeSALDeltaLeads(){
 function backfillSALForBlankOPSRows_(dryRun){
 
   const raw = readRawSheetFrom_(CONFIG.SAL.SHEET, 0, openSALExternalSpreadsheet_());
-  const salByLeadId = computeSALByLeadId_(pickLatestSALRecords_(raw));
+  const salByLeadId = computeSALByLeadId_(
+    foldAliasLatestRecords_(pickLatestSALRecords_(raw), readAliasLeadIdMap_())
+  );
 
   const opsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPS.SHEET.OPS);
   const headerMap = getHeaderMap(opsSheet);

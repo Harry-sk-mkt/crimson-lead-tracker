@@ -7,9 +7,16 @@
  * Merge Leads_Master + Existing Leads_OPS (Email 기준)
  *
  * Version
- * v3.4.1
+ * v3.5.0
  *
  * Change Log
+ * v3.5.0 (2026-10-20)
+ * - **병합된 Salesforce 리드의 IC/SAL 조인 보정용 공용 함수 신규** —
+ *   `buildAliasLeadIdMap_()`(순수)/`readAliasLeadIdMap_()`(IO)/
+ *   `foldAliasLatestRecords_()`(순수). `mergeOPS()`/
+ *   `resolveEmailGroupEarliestWins_()` 무변경(New 판정 = 최초 Create Date 유지,
+ *   사용자 확정 A안). 호출부: MASTER_009 v1.12.0, MASTER_010 v1.5.0.
+ *   테스트: `testBuildAliasLeadIdMap()`/`testFoldAliasLatestRecords()`.
  * v3.4.1 (2026-09-17)
  * - 주석만 갱신 — `OPS_006_QA.js`의 `runOPSQA_()`가 `executeOPSQAChecks_()`로
  *   개명됨(pre-commit naming 훅 회피, docs/OpenItems.md #25 참고). 코드 변경 없음.
@@ -1110,5 +1117,186 @@ function getHeaderMap(sheet) {
   });
 
   return map;
+
+}
+
+/**
+ * ==========================================================
+ * Build Alias Lead ID Map (2026-10-20)
+ *
+ * WHY
+ * Salesforce에서 리드가 병합되면 옛 레코드는 삭제되고 새 레코드만 남는데,
+ * Leads_Raw는 Append-only라 옛 행이 남아 `resolveEmailGroupEarliestWins_()`가
+ * 옛 Lead ID를 Leads_OPS에 채택한다(New 판정 = 최초 Create Date, 사용자
+ * 확정 A안 — 유지). 그런데 IC Funnel·SAL은 Lead ID로 Leads_OPS에 붙어서,
+ * 살아 있는 새 Lead ID의 IC/SAL 기록이 누락됐다(TEMPQA_077 실측: IC 10건,
+ * SAL 14건). Leads_OPS에 없는 Master Lead ID를 같은 이메일의 OPS Lead ID로
+ * 연결하는 별칭 맵을 만든다.
+ *
+ * INPUT
+ * masterPairs : { leadId, email }[]  (Leads_Master)
+ * opsPairs    : { leadId, email }[]  (Leads_OPS, email은 소문자·trim)
+ *
+ * OUTPUT
+ * Object  { [aliasLeadId]: opsLeadId }
+ *
+ * TEST
+ * testBuildAliasLeadIdMap()
+ * ==========================================================
+ */
+function buildAliasLeadIdMap_(masterPairs, opsPairs){
+
+  const opsIdByEmail = {};
+  const opsIds = {};
+
+  opsPairs.forEach(function(p){
+    if(!p.leadId) return;
+    opsIds[p.leadId] = true;
+    if(p.email) opsIdByEmail[p.email] = p.leadId;
+  });
+
+  const alias = {};
+
+  masterPairs.forEach(function(p){
+    if(!p.leadId || opsIds[p.leadId] || !p.email) return;
+    const keptId = opsIdByEmail[p.email];
+    if(keptId) alias[p.leadId] = keptId;
+  });
+
+  return alias;
+
+}
+
+
+/**
+ * ==========================================================
+ * Read Alias Lead ID Map (IO 래퍼, 2026-10-20)
+ *
+ * WHY
+ * `buildAliasLeadIdMap_()` 입력을 Leads_Master/Leads_OPS의 "Lead ID"·Email
+ * 2개 컬럼만 targeted read로 만든다(전체 행 객체화 회피).
+ * ==========================================================
+ */
+function readAliasLeadIdMap_(){
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  function readPairs(sheetName){
+    const sheet = ss.getSheetByName(sheetName);
+    if(!sheet) throw new Error(sheetName + " sheet not found");
+    const headerMap = getHeaderMap(sheet);
+    const numRows = sheet.getLastRow() - OPS.ROWS.DATA_START + 1;
+    if(numRows <= 0) return [];
+    const ids = sheet.getRange(OPS.ROWS.DATA_START, headerMap["Lead ID"] + 1, numRows, 1).getValues();
+    const emails = sheet.getRange(OPS.ROWS.DATA_START, headerMap[OPS.KEY] + 1, numRows, 1).getValues();
+    return ids.map(function(row, i){
+      return {
+        leadId: String(row[0] || "").trim(),
+        email: String(emails[i][0] || "").trim().toLowerCase()
+      };
+    });
+  }
+
+  return buildAliasLeadIdMap_(readPairs(OPS.SHEET.MASTER), readPairs(OPS.SHEET.OPS));
+
+}
+
+
+/**
+ * ==========================================================
+ * Fold Alias Latest Records (2026-10-20)
+ *
+ * WHY
+ * IC Funnel/SAL의 Lead ID별 최신 레코드(pickLatest*Records_() 출력)에서
+ * 별칭 Lead ID 레코드를 Leads_OPS가 채택한 Lead ID로 합친다 — 그래야
+ * 기존 sync/backfill 경로(Lead ID → OPS 행)가 그대로 동작한다. 필드별로
+ * 비어 있지 않은 값을 채택하고, 둘 다 있으면 별칭(=Salesforce에 살아 있는
+ * 새 레코드) 값이 이긴다.
+ *
+ * INPUT
+ * latestById  : Object  { [leadId]: record }
+ * aliasToKept : Object  { [aliasLeadId]: keptLeadId }
+ *
+ * OUTPUT
+ * Object  { [leadId]: record }  (입력 객체는 변경하지 않음)
+ *
+ * TEST
+ * testFoldAliasLatestRecords()
+ * ==========================================================
+ */
+function foldAliasLatestRecords_(latestById, aliasToKept){
+
+  const out = {};
+
+  Object.keys(latestById).forEach(function(id){
+    if(!aliasToKept[id]) out[id] = latestById[id];
+  });
+
+  Object.keys(latestById).forEach(function(id){
+    const keptId = aliasToKept[id];
+    if(!keptId) return;
+    const merged = Object.assign({}, out[keptId] || {});
+    const aliasRecord = latestById[id];
+    Object.keys(aliasRecord).forEach(function(key){
+      const value = aliasRecord[key];
+      if(value !== "" && value !== null && value !== undefined) merged[key] = value;
+    });
+    out[keptId] = merged;
+  });
+
+  return out;
+
+}
+
+
+/**
+ * ==========================================================
+ * TEST — buildAliasLeadIdMap_() / foldAliasLatestRecords_()
+ * ==========================================================
+ */
+function testBuildAliasLeadIdMap(){
+
+  const alias = buildAliasLeadIdMap_(
+    [
+      { leadId: "OLD", email: "a@x.com" },   // OPS 채택 ID
+      { leadId: "NEW", email: "a@x.com" },   // 병합 후 살아 있는 ID → 별칭
+      { leadId: "SOLO", email: "b@x.com" },  // 단독 — 별칭 아님
+      { leadId: "ORPHAN", email: "c@x.com" } // OPS에 이메일 없음 — 별칭 아님
+    ],
+    [
+      { leadId: "OLD", email: "a@x.com" },
+      { leadId: "SOLO", email: "b@x.com" }
+    ]
+  );
+
+  const pass =
+    Object.keys(alias).length === 1 &&
+    alias["NEW"] === "OLD";
+
+  Logger.log("testBuildAliasLeadIdMap: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(alias));
+
+}
+
+
+function testFoldAliasLatestRecords(){
+
+  const latest = {
+    OLD: { ic: "2024-01-01", sal: "" },
+    NEW: { ic: "2025-05-05", sal: "2025-05-06" },
+    LONE: { ic: "", sal: "2025-01-01" },
+    NEW2: { ic: "2026-10-01", sal: "" }      // 채택 ID(OLD2)는 이번 배치에 없음
+  };
+
+  const out = foldAliasLatestRecords_(latest, { NEW: "OLD", NEW2: "OLD2" });
+
+  const pass =
+    Object.keys(out).sort().join(",") === "LONE,OLD,OLD2" &&
+    out.OLD.ic === "2025-05-05" &&           // 둘 다 있으면 별칭(새 레코드) 우선
+    out.OLD.sal === "2025-05-06" &&          // 채택 쪽 빈 값은 별칭 값으로 채움
+    out.OLD2.ic === "2026-10-01" &&
+    out.LONE.sal === "2025-01-01" &&
+    latest.OLD.ic === "2024-01-01";          // 입력 불변
+
+  Logger.log("testFoldAliasLatestRecords: " + (pass ? "PASS" : "FAIL") + " " + JSON.stringify(out));
 
 }

@@ -9,7 +9,9 @@
 
 - 현상: 지난주 Salesforce 리포트 New Lead 4건이 Leads_OPS에선 New가 아님. 사용자 확인 결과 Salesforce엔 이메일당 리드 1개, **Leads_OPS의 Lead ID와 다름** → SF에서 병합되며 2022 레코드 삭제·최근 레코드만 남았는데, Raw(Append-only)엔 2022 행이 남아 `resolveEmailGroupEarliestWins_()`가 옛 Lead ID를 채택.
 - 영향: New Lead/New P1이 SF 리포트보다 적게 잡힘 + IC Funnel·SAL sync가 Lead ID 조인이라 새 Lead ID의 IC/SAL 날짜가 Leads_OPS에 안 붙을 수 있음. ACQ_REP SAL(MTA_Master 기준)은 영향 없음.
-- `TEMPQA_077_DuplicateEmailLeadIdJoinGap.js` `runCheckDuplicateEmailLeadIdJoinGap()` 신규(읽기 전용, 이메일 미출력) — Lead ID 2개 이상 이메일 그룹 수, 최근 14일 내 새 레코드, 탈락 Lead ID에 IC/SAL 기록이 있는 그룹 수 + 예시 30건. push 완료, 사용자 실행 대기. 처리 방식(A: 최초 Create Date 유지 / B: SF 생존 레코드 기준)은 결과 보고 결정. — 프로그램명에 SAT 포함 행의 Mkt Reg./SF Reg./SF NL/SF P1s/SF NLP1s/Spent/CPNP1 + NLP1 비율 두 가지(분모 SF Reg., SF NL — 사용자 확인 전). 쓰기 없음. push 완료.
+- `TEMPQA_077_DuplicateEmailLeadIdJoinGap.js` `runCheckDuplicateEmailLeadIdJoinGap()` 신규(읽기 전용, 이메일 미출력) — Lead ID 2개 이상 이메일 그룹 수, 최근 14일 내 새 레코드, 탈락 Lead ID에 IC/SAL 기록이 있는 그룹 수 + 예시 30건. push 완료, 사용자 실행 대기. 처리 방식(A: 최초 Create Date 유지 / B: SF 생존 레코드 기준)은 결과 보고 결정.
+- TEMPQA_077 결과: Lead ID 2개 이상 이메일 65그룹, 최근 14일 새 레코드 12, **탈락 Lead ID에 IC 10 / SAL 14** (재유입 리드는 거의 새 레코드에서 상담 발생). 그로스미팅에서도 "퍼스트 터치 기준 유지"(타겟이 3개년 P1 기준이라 흔들면 안 됨) 확인.
+- **결정(사용자): A + 조인 보정.** New 판정(`resolveEmailGroupEarliestWins_()`)은 무변경. `OPS_004_Merge.js` v3.5.0에 `buildAliasLeadIdMap_()`(순수)/`readAliasLeadIdMap_()`(Leads_Master·Leads_OPS의 Lead ID·Email 2열 targeted read)/`foldAliasLatestRecords_()`(순수 — 별칭 Lead ID의 최신 레코드를 OPS 채택 Lead ID로 합침, 필드별 비어 있지 않은 값, 둘 다 있으면 별칭=SF 생존 레코드 우선) 신규. `MASTER_009` v1.12.0 / `MASTER_010` v1.5.0의 sync·backfill 4곳에서 `pickLatest*Records_()` 직후 적용. 테스트 `testBuildAliasLeadIdMap()`/`testFoldAliasLatestRecords()`. push 완료, 테스트·`runPreviewFunnelBackfill()` 실행 대기 → 이후 `runLeadsPipelineTail()`로 실제 보충. — 프로그램명에 SAT 포함 행의 Mkt Reg./SF Reg./SF NL/SF P1s/SF NLP1s/Spent/CPNP1 + NLP1 비율 두 가지(분모 SF Reg., SF NL — 사용자 확인 전). 쓰기 없음. push 완료.
 
 # Changelog — 2026-10-19
 

@@ -46,9 +46,15 @@
  *   실행할 것(아래 v1.1.0 참고)
  *
  * Version
- * v1.11.0
+ * v1.12.0
  *
  * Change Log
+ * v1.12.0 (2026-10-20)
+ * - **병합된 Salesforce 리드 조인 보정** — `syncICFunnelToOPS_()`/
+ *   `backfillICFunnelForBlankOPSRows_()`가 Lead ID별 최신 레코드를 뽑은 직후
+ *   `foldAliasLatestRecords_(…, readAliasLeadIdMap_())`(OPS_004_Merge.js v3.5.0)로
+ *   같은 이메일의 새 Lead ID 기록을 Leads_OPS 채택 Lead ID로 합침. TEMPQA_077
+ *   실측 IC 누락 10건 대상. 나머지 로직 무변경.
  * v1.11.0 (2026-09-28)
  * - **`backfillICFunnelForBlankOPSRows_()` 신규** — SAL과 동일한 "sync 시점
  *   OPS 미존재 리드 영구 누락" 결함 보완. `runLeadsPipelineTail()`의
@@ -435,7 +441,8 @@ function syncICFunnelToOPS_(){
 
   }
 
-  const latestByLeadId = pickLatestICFunnelRecords_(newRaw);
+  // 2026-10-20 — 병합된 SF 리드의 새 Lead ID 기록을 OPS 채택 Lead ID로 합침(v1.12.0)
+  const latestByLeadId = foldAliasLatestRecords_(pickLatestICFunnelRecords_(newRaw), readAliasLeadIdMap_());
 
   const funnelByLeadId = computeICFunnelByLeadId_(latestByLeadId);
 
@@ -619,7 +626,9 @@ function syncICFunnelToOPS_(){
 function backfillICFunnelForBlankOPSRows_(dryRun){
 
   const raw = readRawSheetFrom_(CONFIG.IC_FUNNEL.SHEET, 0, openICFunnelRawExternalSpreadsheet_());
-  const funnelByLeadId = computeICFunnelByLeadId_(pickLatestICFunnelRecords_(raw));
+  const funnelByLeadId = computeICFunnelByLeadId_(
+    foldAliasLatestRecords_(pickLatestICFunnelRecords_(raw), readAliasLeadIdMap_())
+  );
 
   const opsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OPS.SHEET.OPS);
   const headerMap = getHeaderMap(opsSheet);
