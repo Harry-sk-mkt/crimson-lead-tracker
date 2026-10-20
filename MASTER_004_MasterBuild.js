@@ -10,9 +10,16 @@
  * 10 Master Build (Full Rebuild)
  *
  * Version
- * v4.7.0
+ * v4.8.0
  *
  * Change Log
+ * v4.8.0 (2026-10-20)
+ * - **`rebuildMTAMaster()` 단축**: 완전 중복 터치를 시트에 쓴 뒤 다시 읽어
+ *   `deleteRows()`(543구간, 약 11분)로 지우던 것을, 쓰기 전 메모리에서
+ *   `dedupeExactDuplicateTouchRecords_()`(OPS_006_QA.js v1.10.0, 판정 기준 무변경)로
+ *   걸러 한 번만 쓰도록 변경. `runAutoDeleteExactDuplicateTouchRows()` 호출 제거
+ *   (증분 경로 `runMTAPipelineTail()`의 호출은 그대로). 반환값·시그니처·
+ *   MTA_LAST_ROW(= Raw 길이) 무변경. 동치 검증: TEMPQA_078.
  * v4.7.0 (2026-10-13)
  * - 공용 비블로킹 알림 `toastNotice_(title, message, ss)` 신규 — 시트 토스트(10초)
  *   + Logger 기록(편집기에서 실행하면 시트 대신 실행 로그에서 바로 보이도록).
@@ -172,27 +179,28 @@ function rebuildMTAMaster(showAlert = true) {
     raw.length
   );
 
-  const master =
-    transformMTARecords(raw);
+  // 2026-10-20 — 완전 중복 터치를 쓰기 전에 메모리에서 제거(v4.8.0).
+  // 예전엔 쓴 뒤 runAutoDeleteExactDuplicateTouchRows()로 시트 행 삭제(약 11분).
+  const deduped =
+    dedupeExactDuplicateTouchRecords_(transformMTARecords(raw));
+
+  const master = deduped.records;
 
   Logger.log(
     CONFIG.LOG.PREFIX +
     " Master MTA : " +
-    master.length
+    master.length +
+    " (완전 중복 터치 " + deduped.removed + "행 메모리에서 제거)"
   );
 
   writeMTAMaster(master);
 
   //----------------------------------------------------------
-  // Raw는 1:1로 그대로 옮기므로(중복 제거 없음), Raw에 쌓인 완전 동일
-  // 중복 터치 행이 그대로 부활함 — runMTAPipelineTail()(증분 파이프라인)
-  // 에만 배선돼 있던 정리 단계를 Full Rebuild에도 동일하게 적용
-  // (2026-08-20, S&M_REP All Leads 수치 오염 실측으로 발견 — Sales
-  // Accepted Date 타임존 버그 복구 후 rebuildMTAMaster() 재실행 시
-  // 이전에 정리했던 중복 터치 294건이 부활한 것을 사용자가 발견).
+  // Raw를 1:1로 옮기면 Raw에 쌓인 완전 동일 중복 터치가 부활하므로
+  // (2026-08-20, S&M_REP All Leads 수치 오염 실측으로 발견) 정리가 필요 —
+  // 2026-10-20부터는 위 dedupeExactDuplicateTouchRecords_()가 쓰기 전에
+  // 같은 기준으로 처리한다(예전엔 여기서 runAutoDeleteExactDuplicateTouchRows()).
   //----------------------------------------------------------
-
-  runAutoDeleteExactDuplicateTouchRows();
 
   PropertiesService
     .getScriptProperties()

@@ -14,9 +14,14 @@
  * - buildLeadsOPS() (SYNC_COLUMNS 보존 검증 포함)
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-10-20)
+ * - `dedupeExactDuplicateTouchRecords_()` 신규(순수) — `rebuildMTAMaster()`가 시트에
+ *   쓰기 전 메모리에서 완전 중복 터치를 제거하도록. 판정은 기존
+ *   `findExactDuplicateTouchRowsToDelete_()`를 그대로 재사용(기준 무변경).
+ *   테스트 `testDedupeExactDuplicateTouchRecords()`.
  * v1.9.0 (2026-09-17)
  * - **버그 수정 — Funnel Match/Revenue Existence 체크가 옛 아키텍처(MTA_Master)를
  *   "정답" 소스로 비교하고 있었음(`docs/OpenItems.md` #25 재조사로 발견)**.
@@ -1984,6 +1989,72 @@ function testFindExactDuplicateTouchRowsToDelete_() {
 
   Logger.log("Result: " + JSON.stringify(result) + " (expected [5])");
   Logger.log(pass ? "✅ PASS" : "❌ FAIL");
+
+}
+
+
+/**
+ * ==========================================================
+ * Dedupe Exact Duplicate Touch Records (순수 함수, 2026-10-20)
+ *
+ * WHY
+ * `rebuildMTAMaster()`는 Raw 전체를 Master에 쓴 뒤
+ * `runAutoDeleteExactDuplicateTouchRows()`로 시트를 다시 읽고 543개 구간을
+ * `deleteRows()`로 지워 26분 중 약 11분을 썼다(2026-10-13 실측). 쓰기 전
+ * 배열 단계에서 같은 판정으로 걸러 한 번만 쓰면 재읽기·행 삭제가 사라진다.
+ * 배열 순서 = 써질 시트 행 순서(rowIndex = i + 2)라 동점 타이브레이크
+ * ("시트상 더 나중 행 유지")도 시트 경로와 같다.
+ *
+ * @param {Object[]} records  transformMTARecords() 출력(쓰기 직전 순서)
+ * @return {{records: Object[], removed: number}}
+ *
+ * TEST
+ * testDedupeExactDuplicateTouchRecords()
+ * ==========================================================
+ */
+function dedupeExactDuplicateTouchRecords_(records) {
+
+  const rowsWithIndex = records.map(function (record, i) {
+    return { rowIndex: i + 2, record: record };
+  });
+
+  const drop = {};
+  findExactDuplicateTouchRowsToDelete_(rowsWithIndex).forEach(function (row) {
+    drop[row] = true;
+  });
+
+  const kept = records.filter(function (record, i) { return !drop[i + 2]; });
+
+  return { records: kept, removed: records.length - kept.length };
+
+}
+
+
+function testDedupeExactDuplicateTouchRecords() {
+
+  const d = new Date(2026, 0, 1);
+  function rec(id, campaign, extra) {
+    const r = { "Lead ID": id, "MTA Created Date": d, "MKT UTM Campaign": campaign,
+      "First Lead Source": "Web", "Lead Source Detail": "Form",
+      "IC Booked Date": null, "IC Completed Date": null, "Opportunity Won Date": null, "Revenue": 0 };
+    Object.keys(extra || {}).forEach(function (k) { r[k] = extra[k]; });
+    return r;
+  }
+
+  const input = [
+    rec("L1", "A", { tag: "booked", "IC Booked Date": new Date(2026, 0, 2) }),
+    rec("L1", "A", { tag: "complete", "IC Completed Date": new Date(2026, 0, 5) }), // 더 진행됨 → 유지
+    rec("L2", "B", { tag: "solo" }),                                                // 단독 → 유지
+    rec("L3", "C", { tag: "tie-first" }),
+    rec("L3", "C", { tag: "tie-last" })                                             // 동점 → 나중 행 유지
+  ];
+
+  const out = dedupeExactDuplicateTouchRecords_(input);
+  const tags = out.records.map(function (r) { return r.tag; }).join(",");
+
+  const pass = out.removed === 2 && tags === "complete,solo,tie-last";
+
+  Logger.log("testDedupeExactDuplicateTouchRecords: " + (pass ? "PASS" : "FAIL") + " removed=" + out.removed + " kept=" + tags);
 
 }
 
