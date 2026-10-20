@@ -3,7 +3,13 @@
 ## TEMPQA_076 Events_OPS SAT 웨비나 덤프 (그로스미팅 SAT WB 실험 결과용)
 
 - 배경: 10-20 그로스미팅 Ideation "SAT WB"(가설: 웨비나 New P1 Lead% 50% 이상) 결과 정리. Drive 커넥터로는 시트 값을 못 읽어(구조만 반환) 읽기 전용 덤프로 대체.
-- `TEMPQA_076_EventsOPSSATWebinarDump.js` `runDumpEventsOPSSATWebinar()` 신규 — 프로그램명에 SAT 포함 행의 Mkt Reg./SF Reg./SF NL/SF P1s/SF NLP1s/Spent/CPNP1 + NLP1 비율 두 가지(분모 SF Reg., SF NL — 사용자 확인 전). 쓰기 없음. push 완료.
+- `TEMPQA_076_EventsOPSSATWebinarDump.js` `runDumpEventsOPSSATWebinar()` 신규 (결과: SAT WB NP1% = SF NLP1s ÷ SF NL 59.3%로 그로스미팅 채택)
+
+## 병합된 Salesforce 리드의 옛 Lead ID 채택 문제 확인 + TEMPQA_077 (사용자 보고)
+
+- 현상: 지난주 Salesforce 리포트 New Lead 4건이 Leads_OPS에선 New가 아님. 사용자 확인 결과 Salesforce엔 이메일당 리드 1개, **Leads_OPS의 Lead ID와 다름** → SF에서 병합되며 2022 레코드 삭제·최근 레코드만 남았는데, Raw(Append-only)엔 2022 행이 남아 `resolveEmailGroupEarliestWins_()`가 옛 Lead ID를 채택.
+- 영향: New Lead/New P1이 SF 리포트보다 적게 잡힘 + IC Funnel·SAL sync가 Lead ID 조인이라 새 Lead ID의 IC/SAL 날짜가 Leads_OPS에 안 붙을 수 있음. ACQ_REP SAL(MTA_Master 기준)은 영향 없음.
+- `TEMPQA_077_DuplicateEmailLeadIdJoinGap.js` `runCheckDuplicateEmailLeadIdJoinGap()` 신규(읽기 전용, 이메일 미출력) — Lead ID 2개 이상 이메일 그룹 수, 최근 14일 내 새 레코드, 탈락 Lead ID에 IC/SAL 기록이 있는 그룹 수 + 예시 30건. push 완료, 사용자 실행 대기. 처리 방식(A: 최초 Create Date 유지 / B: SF 생존 레코드 기준)은 결과 보고 결정. — 프로그램명에 SAT 포함 행의 Mkt Reg./SF Reg./SF NL/SF P1s/SF NLP1s/Spent/CPNP1 + NLP1 비율 두 가지(분모 SF Reg., SF NL — 사용자 확인 전). 쓰기 없음. push 완료.
 
 # Changelog — 2026-10-19
 
