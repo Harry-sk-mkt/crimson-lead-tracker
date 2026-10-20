@@ -40,9 +40,16 @@
  * FYREP (2026-08-08 신규 컨벤션 — `FYREP_NNN_Name.js`, 사용자 확정)
  *
  * Version
- * v1.9.0
+ * v1.10.0
  *
  * Change Log
+ * v1.10.0 (2026-10-20)
+ * - **증분 그림자 검증 종결(`docs/OpenItems.md` #42, 사용자 승인)** — `computeFYRepFlatRows_()`에서
+ *   `verifyFYRepLeadsOPSAggregatesShadowDiff_()` 호출 제거. 원인은 TARGET_001_Engine.js v1.33.0과
+ *   동일(Leads_OPS 매 빌드 재정렬 + 기존 행 sync 변경 → 행 기반 증분 불성립, 그림자 diff 9월 74건 →
+ *   10-20 701건). 실제 출력은 원래부터 전체 재스캔이라 값 변화 없음.
+ *   `computeFYRepLeadsOPSAggregatesIncremental_()`/`computeFYRepLeadsOPSAggregatesDiff_()`/
+ *   `verifyFYRepLeadsOPSAggregatesShadowDiff_()`는 이제 호출처 없음(미사용).
  * v1.9.0 (2026-09-17)
  * - **`aggregateFYRepLeadsOPSFromRecords_()` 증분화 — 그림자 모드 도입
  *   (`docs/OpenItems.md` #42)** — `computeFYRepFlatRows_()`가 매번 Leads_OPS
@@ -1834,17 +1841,8 @@ function computeFYRepFlatRows_(){
 
   const leadsOPSAggregateRows = computeFYRepLeadsOPSAggregates_();
 
-  // 2026-09-17 추가(docs/OpenItems.md #42) — 증분화 그림자 검증. 실제 계산은
-  // 위 leadsOPSAggregateRows(전체 재스캔)가 그대로 담당, 이 호출은 Logger
-  // 로그만 남기고 결과에는 아무 영향 없음 — 독립 try/catch로 격리.
-  try {
-    verifyFYRepLeadsOPSAggregatesShadowDiff_(leadsOPSAggregateRows);
-  } catch(shadowErr){
-    Logger.log(
-      CONFIG.LOG.PREFIX + " computeFYRepFlatRows_ 증분 집계 그림자 diff 실패(비필수, 무시) — " +
-      (shadowErr && shadowErr.message ? shadowErr.message : shadowErr)
-    );
-  }
+  // 2026-10-20 — 증분 그림자 검증(#42) 호출 제거: Leads_OPS가 정렬·수정되는
+  // 테이블이라 행 기반 증분이 성립하지 않음(v1.10.0 참고).
 
   const leadsOPSTotals = sumFYRepRowsByFYMonth_(
     leadsOPSAggregateRows, ["newP1", "icBooked", "icComplete"]

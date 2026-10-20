@@ -1,5 +1,10 @@
 # Changelog — 2026-10-20
 
+## Target_REP/FY_REP 그림자 diff 원인 확인 + 증분 그림자 검증 종결 (사용자 승인)
+
+- 원인: Leads_OPS는 매 빌드 Create Date 내림차순 재정렬(`compareByCreateDateBlankLastOPS_`) + sync로 기존 행 변경 → "체크포인트 행 이후만 읽어 캐시에 더하는" 증분 경로가 새 리드(맨 위)를 놓치고 옛 행을 다시 더함. 그래서 Import마다 diff 누적(Target 72, FY_REP 701). 데이터 오류 아님 — 실제 출력은 전체 재스캔 경로.
+- 변경: `TARGET_001_Engine.js` v1.33.0 / `FYREP_001_Engine.js` v1.10.0 — 그림자 검증 호출 2곳 제거(리포트 값 무변경). 증분 함수는 미사용으로 남김. `docs/OpenItems.md` #42에 종결 기록.
+
 ## `rebuildMTAMaster()` 단축 — 중복 터치를 쓰기 전 메모리에서 제거 (사용자 승인)
 
 - 배경: 10-13 실측 26분 12초(30분 한도 근접) 중 완전 중복 터치 2,148행 `deleteRows()` 543구간이 약 11분. 쓰고 → 다시 읽고 → 행 삭제하는 구조.

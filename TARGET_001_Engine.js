@@ -22,9 +22,18 @@
  * 90 Reporting (Target)
  *
  * Version
- * v1.32.0
+ * v1.33.0
  *
  * Change Log
+ * v1.33.0 (2026-10-20)
+ * - **증분 그림자 검증 종결(`docs/OpenItems.md` #42, 사용자 승인)** — `refreshTargetEngine_()`에서
+ *   `verifyTargetLeadsOPSAggregatesShadowDiff_()` 호출 제거. 그림자 diff가 Import마다 커진 원인
+ *   (9월 20건 → 10-20 72건): Leads_OPS는 `mergeOPS()`가 매번 Create Date 내림차순으로 다시 써서
+ *   새 리드가 맨 위에 들어가고, SAL·IC·Priority sync가 기존 행을 바꾸는데, 증분 경로는 "체크포인트
+ *   행 이후만 읽어 캐시에 더하기"라 새 리드는 빠지고 밀려난 옛 행이 다시 더해짐. 실제 출력은
+ *   원래부터 전체 재스캔 경로라 값 변화 없음. `computeTargetLeadsOPSAggregatesIncremental_()`/
+ *   `computeTargetLeadsOPSAggregatesDiff_()`/`verifyTargetLeadsOPSAggregatesShadowDiff_()`/
+ *   `readOPSRecordsFrom_()`는 이제 호출처 없음(미사용).
  * v1.32.0 (2026-10-14)
  * - CPNP1 벤치마크(Block 0 CPNP1_BENCHMARK + Block A) 분자를 Block 0 수동 취합 Spent에서
  *   `Ad_Spend_Cache`(실제 광고비)로 교체 — 신규 `buildMonthlySegmentSpentFromCacheMap_()`
@@ -4341,17 +4350,9 @@ function refreshTargetEngine_(){
 
   const leadsAgg = computeTargetLeadsOPSAggregates_();
 
-  // 2026-09-17 추가(docs/OpenItems.md #42) — 증분화 그림자 검증. 실제 계산은
-  // 위 leadsAgg(전체 재스캔)가 그대로 담당, 이 호출은 Logger 로그만 남기고
-  // 시트/leadsAgg에는 아무 영향 없음 — 독립 try/catch로 격리.
-  try {
-    verifyTargetLeadsOPSAggregatesShadowDiff_(leadsAgg);
-  } catch(shadowErr){
-    Logger.log(
-      CONFIG.LOG.PREFIX + " refreshTargetEngine_ 증분 집계 그림자 diff 실패(비필수, 무시) — " +
-      (shadowErr && shadowErr.message ? shadowErr.message : shadowErr)
-    );
-  }
+  // 2026-10-20 — 증분 그림자 검증(#42) 호출 제거: Leads_OPS는 매 빌드 Create Date
+  // 내림차순 재정렬 + sync로 기존 행이 바뀌는 테이블이라 "체크포인트 이후 행만
+  // 더하기"가 성립하지 않음(v1.33.0 참고).
 
   // 2026-10-14 — CPNP1 벤치마크 분자를 Block 0 수동 취합 Spent에서 Ad_Spend_Cache(실제
   // 광고비)로 교체(사용자 확정). Block 0 섹션 4(수동 Spent)는 ACQ_REP Target Spent가 아직

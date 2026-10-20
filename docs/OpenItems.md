@@ -748,6 +748,18 @@
     Engine 독립 트리거 분리는 여전히 설계 미확정(TODO)** — S&M_REP은 "확정된 과거 구간"
     경계 설계 자체가 필요 없는 다른 경로(ACQ Engine이 이미 하던 Leads_OPS 기반 스캔을
     공유)로 해소됨, 상세: `docs/exec-plans/active/2026-09-02-pipeline-refresh-time-redesign.md`.
+
+    **✅ 2026-10-20 — Target_REP/FY_REP 행 기반 증분화는 종결(불성립, 사용자 승인)**: 아래
+    그림자 모드 diff가 Import마다 커진 원인(Target 9월 20건 → 72건, FY_REP 74건 → 701건)을
+    확인 — Leads_OPS는 `mergeOPS()`가 매 빌드 Create Date 내림차순으로 전체를 다시 써서 새
+    리드가 맨 위에 들어가고, SAL·IC·Priority sync가 기존 행 값을 바꾼다. "체크포인트 행 이후만
+    읽어 캐시에 더하는" 증분 경로는 append-only 테이블에서만 맞는 방식이라, 새 리드는 빠지고
+    밀려난 옛 행이 다시 더해짐(예: FY27 OCT Content newLeads full 155 / incremental 23). 실제
+    출력은 처음부터 전체 재스캔 경로라 리포트 값은 정확했음. 그림자 검증 호출 제거
+    (`TARGET_001_Engine.js` v1.33.0, `FYREP_001_Engine.js` v1.10.0), 증분 함수·체크포인트
+    Script Property(`TARGET_LEADS_OPS_AGG_*`/`FYREP_LEADS_OPS_AGG_*`)는 미사용으로 남김.
+    full 경로가 각각 약 17초·22초라 재설계(Lead ID 단위 변경 추적)는 하지 않음. #50
+    (`buildLeadsOPS` 그림자 diff)은 append-only인 Leads_Master 기준이라 이 문제와 무관.
     Target_REP(`refreshTargetEngine_()` 매번 전체 재계산)/FY_REP(`CONFIG.FYREP.FYS` 전체
     순회)은 이 해법이 그대로 적용되지 않아(다른 계산 구조) 여전히 미해결 — 임의로 처리하지
     말 것. 아래는 2026-09-02 최초 검토 시점 원문(전제 정정 등은 여전히 유효).
