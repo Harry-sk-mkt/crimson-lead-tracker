@@ -1,3 +1,9 @@
+# Changelog — 2026-10-21
+
+## TEMPQA_079 ACQ_Summary FY26·FY27 덤프 (아이디에이션 문제 탐색)
+
+- `TEMPQA_079_ACQSummaryNewP1Dump.js` `runDumpACQSummaryNewP1()` 신규 — ACQ_Summary의 FY26·FY27 행을 탭 구분 로그로 출력(읽기 전용). Digital Weekly 10-14 "8월→9월 New P1 -119"를 세그먼트별로 쪼개기 위함. clasp push 완료.
+
 # Changelog — 2026-10-20
 
 ## Target_REP/FY_REP 그림자 diff 원인 확인 + 증분 그림자 검증 종결 (사용자 승인)
