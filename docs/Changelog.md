@@ -1,3 +1,11 @@
+# Changelog — 2026-10-22
+
+## Target_REP spending 미반영 — 수동 갱신 순서 확인 (코드 변경 없음)
+
+- 증상(사용자): `runRefreshAdSpendCache()` 실행 후에도 Target_REP에 spending이 안 보임.
+- 원인: 이 함수는 월별 `Ad_Spend_Cache`만 갱신. Target_REP 주별 Actual CPNP1은 `Ad_Spend_Cache_Weekly`를 읽고, 화면은 Generate를 다시 해야 바뀜.
+- 해결 순서: `AD_004_SpendCache.js` `runRefreshAdSpendWeeklyCache()` → `TARGET_002_Report.js` `runGenerateTargetReport()` — 반영 확인(사용자). Weekly 캐시 69행(Cutover 2026-08-03), 27초 소요(함수 주석의 "7~14분"보다 훨씬 짧음). Target Report 22초.
+
 # Changelog — 2026-10-21
 
 ## TEMPQA_079 ACQ_Summary FY26·FY27 덤프 (아이디에이션 문제 탐색)
